@@ -68,9 +68,9 @@ class SRRunner(object):
         parser.add_argument("--verb_mapping_file", help="verb_mapping_file", default=os.path.join(data_dir, 'ace/ace_sr_mapping.txt'))
         parser.add_argument("--add_object", help="add_object", action='store_true')
         parser.add_argument("--train_ace", help="train_ace", action='store_true')
-        parser.add_argument("--visualize_path", help="visualize_path", default='out_image_only_attention')
+        parser.add_argument("--visualize_path", help="visualize_path", default='out_image_only')
 
-        parser.add_argument("--batch", help="batch size", default=8, type=int)
+        parser.add_argument("--batch", help="batch size", default=16, type=int)
         parser.add_argument("--epochs", help="n of epochs", default=sys.maxsize, type=int)
 
         parser.add_argument("--seed", help="RNG seed", default=42, type=int)
@@ -79,7 +79,7 @@ class SRRunner(object):
         parser.add_argument("--l2decay", default=0, type=float)
         parser.add_argument("--maxnorm", default=3, type=float)
 
-        parser.add_argument("--out", help="output model path", default="out_image_only_attention")
+        parser.add_argument("--out", help="output model path", default="out_image_only")
         parser.add_argument("--finetune", help="pretrained model path")
         parser.add_argument("--earlystop", default=999999, type=int)
         parser.add_argument("--restart", default=999999, type=int)
@@ -93,6 +93,9 @@ class SRRunner(object):
         parser.add_argument("--filter_place", help="filter_place", action='store_true')
 
         self.a = parser.parse_args()
+        if self.a.add_object:
+          self.a.out = self.a.out + '_object'
+          self.a.visualize_path = self.a.visualize_path + '_object'
         print('self.a.vocab', self.a.vocab)
         self.vocab_noun = Vocab(os.path.join(self.a.vocab, 'vocab_situation_noun.pkl'), load=True)
         self.vocab_role = Vocab(os.path.join(self.a.vocab, 'vocab_situation_role.pkl'), load=True)

@@ -20,8 +20,8 @@ from src.util.vocab import Vocab
 from torchtext.vocab import Vectors
 from src.dataflow.numpy.data_loader_grounding import GroundingDataset
 from src.models.grounding import GroundingModel
-from src.eval.Groundingtesting import GroundingTester
-from src.engine.Groundingtraining import grounding_train
+from src.eval.Groundingtesting import GroundingTester # TODO
+from src.engine.Coreferencetraining import grounding_train
 from src.engine.SRrunner import load_sr_model
 from src.engine.EErunner import load_ee_model
 from src.util.util_model import log
@@ -34,9 +34,8 @@ class GroundingRunner(object):
         parser.add_argument("--train", help="training set", default=os.path.join(data_dir, 'grounding/grounding_train_10000.json'))
         parser.add_argument("--dev", help="development set", default=os.path.join(data_dir, 'grounding/grounding_valid_10000.json'))
         parser.add_argument("--webd", help="word embedding", default=os.path.join(glove_dir, 'glove.6B.300d.txt')) # XXX
-        parser.add_argument("--img_dir", help="Grounding images directory", default=os.path.join(data_dir, 'vocab/embedding_situation_verb.npy'))
+        parser.add_argument("--img_dir", help="Grounding images directory", default=os.path.join(data_dir, 'voa/rawdata/img'))
         parser.add_argument("--amr", help="use amr", action='store_true')
-
         # sr model parameter
         parser.add_argument("--wnebd", help="noun word embedding", default=os.path.join(data_dir, 'vocab/embedding_situation_noun.npy'))
         parser.add_argument("--wvebd", help="verb word embedding", default=os.path.join(data_dir, 'vocab/embedding_situation_verb.npy'))
@@ -48,11 +47,11 @@ class GroundingRunner(object):
                             required=False)
 
         parser.add_argument("--vocab", help="vocab_dir", default=os.path.join(data_dir, 'vocab'))
-        parser.add_argument("--sr_hps", help="sr model hyperparams", default="{'wemb_dim': 300, 'wemb_ft': True, 'wemb_dp': 0.0, 'iemb_backbone': 'vgg16', 'iemb_dim':4096, 'iemb_ft': False, 'iemb_dp': 0.0, 'posemb_dim': 512, 'fmap_dim': 512, 'fmap_size': 7, 'att_dim': 1024, 'loss_weight_verb': 1.0, 'loss_weight_noun': 0.1, 'loss_weight_role': 0.0}")
+        parser.add_argument("--sr_hps", help="sr model hyperparams", default="{'wemb_dim': 300, 'wemb_ft': False, 'wemb_dp': 0.0, 'iemb_backbone': 'vgg16', 'iemb_dim':4096, 'iemb_ft': False, 'iemb_dp': 0.0, 'posemb_dim': 512, 'fmap_dim': 512, 'fmap_size': 7, 'att_dim': 1024, 'loss_weight_verb': 1.0, 'loss_weight_noun': 0.1, 'loss_weight_role': 0.0, 'gcn_layers': 1, 'gcn_dp': False, 'gcn_use_bn': False, 'use_highway': False}")
         # ee model parameter
         parser.add_argument("--ee_hps", help="ee model hyperparams", default="{'wemb_dim': 300, 'wemb_ft': True, 'wemb_dp': 0.5, 'pemb_dim': 50, 'pemb_dp': 0.5, 'eemb_dim': 50, 'eemb_dp': 0.5, 'psemb_dim': 50, 'psemb_dp': 0.5, 'lstm_dim': 150, 'lstm_layers': 1, 'lstm_dp': 0, 'gcn_et': 3, 'gcn_use_bn': True, 'gcn_layers': 3, 'gcn_dp': 0.5, 'sa_dim': 300, 'use_highway': True, 'loss_alpha': 5}")
 
-        parser.add_argument("--batch", help="batch size", default=128, type=int)
+        parser.add_argument("--batch", help="batch size", default=16, type=int)
         parser.add_argument("--epochs", help="n of epochs", default=sys.maxsize, type=int)
 
         parser.add_argument("--seed", help="RNG seed", default=42, type=int)
@@ -73,7 +72,7 @@ class GroundingRunner(object):
         self.a = parser.parse_args()
 
     def set_device(self, device="cpu"):
-        # self.device = torch.device(device)
+		    # self.device = torch.device(device)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def get_device(self):
@@ -93,9 +92,8 @@ class GroundingRunner(object):
         return GroundingTester()
 
     def run(self):
-        print("Running on", self.a.device)
         self.set_device(self.a.device)
-
+        print("Running on", self.device)
         np.random.seed(self.a.seed)
         torch.manual_seed(self.a.seed)
         torch.backends.cudnn.benchmark = True
@@ -207,6 +205,8 @@ class GroundingRunner(object):
             self.a.sr_hps["wremb_size"] = len(vocab_role.id2word)
         if "wnemb_size" not in self.a.sr_hps:
             self.a.sr_hps["wnemb_size"] = len(vocab_noun.id2word)
+        if "oc" not in self.a.sr_hps:
+            self.a.sr_hps["oc"] = len(vocab_verb.id2word) # TODO Check this
         if "ae_oc" not in self.a.sr_hps:
             self.a.sr_hps["ae_oc"] = len(vocab_role.id2word)
 

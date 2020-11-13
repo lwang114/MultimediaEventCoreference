@@ -210,7 +210,7 @@ def main(grounding_dir, voa_caption_full, voa_object_detection, max_num, train_r
     for docid in voa_image_caption:
         if count >= max_num:
             break
-        
+        print(count, docid)
         for idx in voa_image_caption[docid]:
             suffix = voa_image_caption[docid][idx]['url'].split('.')[-1]
             imageID = '%s_%s.%s' % (docid, idx, suffix) #'VOA_EN_NW_2012.10.22.1531043_0.jpg'
@@ -257,9 +257,9 @@ if __name__ == "__main__":
     if not os.path.isdir(grounding_dir):
       os.mkdir(grounding_dir)
 
-    train_ratio = 0.6
-    valid_ratio = 0.2
-    test_ratio = 0.2
-    max_num = 10
-    download_images(img_dir, voa_caption_full, voa_object_detection, max_num)
+    train_ratio = 0.8
+    valid_ratio = 0.1
+    test_ratio = 0.1
+    max_num = 7164 # XXX 10000
+    # download_images(img_dir, voa_caption_full, voa_object_detection, max_num)
     main(grounding_dir, voa_caption_full, voa_object_detection, max_num, train_ratio, valid_ratio, test_ratio)

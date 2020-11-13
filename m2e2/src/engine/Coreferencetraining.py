@@ -53,17 +53,17 @@ def run_over_batch_grounding(batch, running_loss, cnt, all_captions, all_caption
                              object_results=None, object_label=None,
                              object_detection_threshold=.2, vocab_objlabel=None):
 
-    try:
-        # words, x_len, postags, entitylabels, adjm, image_id, image = unpack_grounding(batch, device, transform,
-        #                                                                           img_dir, ee_hyps)
-        batch_unpacked = unpack_grounding(batch, device, transform, img_dir, ee_hyps,
+    # XXX try:
+    #    # words, x_len, postags, entitylabels, adjm, image_id, image = unpack_grounding(batch, device, transform,
+    #    #                                                                           img_dir, ee_hyps)
+    batch_unpacked = unpack_grounding(batch, device, transform, img_dir, ee_hyps,
                                           load_object=add_object, object_results=object_results,
                                           object_label=object_label,
                                           object_detection_threshold=object_detection_threshold,
                                           vocab_objlabel=vocab_objlabel)
-    except:
-        # if the batch is a bad batch, Nothing changed, return directly
-        return running_loss, cnt, all_captions, all_captions_, all_images, all_images_
+    # XXX except:
+    #    # if the batch is a bad batch, Nothing changed, return directly
+    #    return running_loss, cnt, all_captions, all_captions_, all_images, all_images_
 
     if batch_unpacked is None:
         # if the batch is a bad batch, Nothing changed, return directly
