@@ -1,3 +1,4 @@
+#-*- encode:utf-8; tab-width:2 -*-
 import argparse
 import os
 import pickle
@@ -67,7 +68,7 @@ class SRRunner(object):
         parser.add_argument("--verb_mapping_file", help="verb_mapping_file", default=os.path.join(data_dir, 'ace/ace_sr_mapping.txt'))
         parser.add_argument("--add_object", help="add_object", action='store_true')
         parser.add_argument("--train_ace", help="train_ace", action='store_true')
-        parser.add_argument("--visualize_path", help="visualize_path", required=False)
+        parser.add_argument("--visualize_path", help="visualize_path", default='out_image_only_attention')
 
         parser.add_argument("--batch", help="batch size", default=8, type=int)
         parser.add_argument("--epochs", help="n of epochs", default=sys.maxsize, type=int)
