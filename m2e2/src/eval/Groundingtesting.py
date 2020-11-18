@@ -199,7 +199,10 @@ def batch_process_grounding(batch_unpacked, model, tester, device, add_object=Fa
     image_common, sent_common, word2noun_att_output, word_common, noun2word_att_output, noun_emb_common = \
         model.similarity(verb_emb_common, noun_emb_common, verb_emb, noun_emb, word_common, word_emb, word_mask)
     
-    return verb_emb_common, image_common, word_common, sent_common
+    image_info = {'image_id': image_id, 
+                  'bbox_entities_label': bbox_entities_label, 
+                  'bbox_entities_id': bbox_entities_id}
+    return verb_emb_common, image_common, word_common, sent_common, image_info, entitylabels
 
 def run_over_batch_grounding(batch, running_loss, cnt, all_captions, all_captions_, all_images, all_images_,
                              model, optimizer, MAX_STEP, need_backward, tester, ee_hyps, device, maxnorm,
@@ -221,21 +224,19 @@ def run_over_batch_grounding(batch, running_loss, cnt, all_captions, all_caption
 
     if batch_unpacked is None:
         # if the batch is a bad batch, Nothing changed, return directly
-        return running_loss, cnt, all_captions, all_captions_, all_images, all_images_
+        return emb_bbox, emb_image, emb_word, emb_sentence 
+
 
     if need_backward:
         optimizer.zero_grad()
 
-    emb_bbox, emb_image, emb_word, emb_sentence\
+    emb_bbox, emb_image, emb_word, emb_sentence, image_info, entitylabels\
         = batch_process_grounding(batch_unpacked, all_captions, all_captions_, all_images, all_images_,
                                 model, tester, device,
                                 add_object=add_object
                                   )
 
-    cnt += 1
-    other_information = ""
-
-    return emb_bbox, emb_image, emb_word, emb_sentence 
+    return emb_bbox, emb_image, emb_word, emb_sentence, image_info, entitylabels 
 
 
 def run_over_data_grounding(model, optimizer, data_iter, MAX_STEP, need_backward, tester, ee_hyps, device, maxnorm,
@@ -255,10 +256,12 @@ def run_over_data_grounding(model, optimizer, data_iter, MAX_STEP, need_backward
     image_embeddings = []
     word_embeddings = []
     sentence_embeddings = []
+		image_dicts = {'image_id': [], 'bbox_entities_label': [], 'bbox_entities_id': []}
+    entitylabels = [] 
 
     # print(data_iter)
     for batch in data_iter:
-      emb_bbox, emb_image, emb_word, emb_sentence\
+      emb_bbox, emb_image, emb_word, emb_sentence, image_info, entitylabels\
           = run_over_batch_grounding(batch, 
                                      model, optimizer, MAX_STEP, need_backward, tester, ee_hyps, device, maxnorm,
                                     img_dir, transform,
@@ -268,7 +271,10 @@ def run_over_data_grounding(model, optimizer, data_iter, MAX_STEP, need_backward
                                     object_detection_threshold=object_detection_threshold,
                                     vocab_objlabel=vocab_objlabel
                                     )
-
+      image_dicts['image_id'].extend(image_info['image_id'])
+      image_dicts['bbox_entities_label'].extend(image_info['bbox_entities_label'].data.cpu().numpy().tolist())
+      image_dicts['bbox_entities_id'].extend(image_info['bbox_entities_id'])
+      entitylabels.extend(entitylabels.data.cpu().numpy().tolist())
       bbox_embeddings.append(emb_bbox)
       image_embeddings.append(emb_image)
       word_embeddings.append(emb_word)
@@ -285,7 +291,15 @@ def run_over_data_grounding(model, optimizer, data_iter, MAX_STEP, need_backward
 
     # Save the similarity matrix
     np.save(os.path.join(parser.out, 'event_similarity_matrix.npy'), S_event.data.cpu().numpy())
-    json.dump(S_entity, open(os.path.join(parser.out, 'entity_similarity_matrix.json'), 'w'), indent=2, sort_keys=True) 
+		S_entity_dict = [{'image_id': img_id, 
+                      'bbox_entities_id': entity_id, 
+                      'bbox_entities_label': bbox_entity_label, 
+                      'entity_labels': entitylabel, 
+                      'scores': S_entity_i}\
+                      for img_id, entity_id, bbox_entity_label, entitylabel, S_entity_i in \
+                          zip(image_dicts['image_id'], image_dicts['bbox_entities_label'],\
+                              image_dicts['bbox_entities_id'], entitylabels, S_entity.data.cpu().numpy().tolist())]
+    json.dump(S_entity_dict, open(os.path.join(parser.out, 'entity_similarity_matrix.json'), 'w'), indent=2, sort_keys=True) 
 
 
 def grounding_test(model, test_set, 
