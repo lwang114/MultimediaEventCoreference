@@ -1,3 +1,4 @@
+#-*- encode:utf-8; tab-width:2 -*-
 import argparse
 import os
 import pickle
@@ -67,12 +68,12 @@ class GroundingRunner(object):
         parser.add_argument("--restart", default=999999, type=int)
         parser.add_argument("--shuffle", help="shuffle", action='store_true')
         parser.add_argument("--device", default="cpu")
-				parser.add_argument("--evaluate_only", action="store true")
+        parser.add_argument("--evaluate_only", action="store true")
 
         self.a = parser.parse_args()
 
     def set_device(self, device="cpu"):
-		    # self.device = torch.device(device)
+        # self.device = torch.device(device)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def get_device(self):
@@ -281,25 +282,33 @@ class GroundingRunner(object):
         writer = SummaryWriter(os.path.join(self.a.out, "exp"))
         self.a.writer = writer
 
-				if evaluate_only:
-					grounding_eval() # TODO
-				else:
+        if evaluate_only:
+          grounding_test(
+              model=model,
+              test_set=test_set,
+              tester=tester,
+              parser=self.a,
+              other_testsets={},
+              transform=transform,
+              vocab_objlabel=vocab_noun.word2id
+          ) # TODO
+        else:
           grounding_train(
-							model=model,
-							train_set=train_set,
-							dev_set=dev_set,
-							test_set=test_set,
-							optimizer_constructor=optimizer_constructor,
-							epochs=self.a.epochs,
-							tester=tester,
-							parser=self.a,
-							other_testsets={
-									# "dev 1/1": dev_set1,
-									# "test 1/1": test_set1,
-							},
-							transform=transform,
-							vocab_objlabel=vocab_noun.word2id
-					)
+              model=model,
+              train_set=train_set,
+              dev_set=dev_set,
+              test_set=test_set,
+              optimizer_constructor=optimizer_constructor,
+              epochs=self.a.epochs,
+              tester=tester,
+              parser=self.a,
+              other_testsets={
+                  # "dev 1/1": dev_set1,
+                  # "test 1/1": test_set1,
+              },
+              transform=transform,
+              vocab_objlabel=vocab_noun.word2id
+          )
         log('Done!')
 
 

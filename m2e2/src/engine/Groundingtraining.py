@@ -88,7 +88,7 @@ def run_over_batch_grounding(batch, running_loss, cnt, all_captions, all_caption
 
         optimizer.step()
         other_information = 'Grounding Iter[{}] loss: {:.6f} loss_terms: {} \n' \
-                            'capationP: {:.4f}% captionR: {:.4f}% captionF1: {:.4f}% \n' \
+                            'captionP: {:.4f}% captionR: {:.4f}% captionF1: {:.4f}% \n' \
                             'imageP: {:.4f}% imageR: {:.4f}% imageF1: {:.4f}%'.format(cnt, loss_grounding.item(),
                                                                                       loss_items,
                                                                                       bp_caption * 100.0,
