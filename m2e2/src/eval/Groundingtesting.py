@@ -181,8 +181,8 @@ def calculate_recall(S):
   I_r1 /= n
   I_r5 /= n
   I_r10 /= n
-  print('Caption Recall@1={:.3f}\tRecall@5={:.3f}\tRecall@10={:.3f}'.format(W_r1, W_r5, W_r10))
-  print('Image Recall@1={:.3f}\tRecall@5={:.3f}\tRecall@10={:.3f}'.format(I_r1, I_r5, I_r10))
+  print('Caption\tRecall@1={:.3f}\tRecall@5={:.3f}\tRecall@10={:.3f}'.format(W_r1, W_r5, W_r10))
+  print('Image\tRecall@1={:.3f}\tRecall@5={:.3f}\tRecall@10={:.3f}'.format(I_r1, I_r5, I_r10))
 
 def compute_similarity_matrix(bbox_embeddings, image_embeddings, word_embeddings, sentence_embeddings):
   # Compute the similarity matrix between each image region and caption word  
