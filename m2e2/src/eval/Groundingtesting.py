@@ -188,7 +188,7 @@ def compute_similarity_matrix(bbox_embeddings, image_embeddings, word_embeddings
   # Compute the similarity matrix between each image region and caption word  
   if bbox_embeddings.ndim == 2:
     bbox_embeddings = bbox_embeddings.unsqueeze(1) 
-  S_entity = torch.matmul(bbox_embeddings, word_embeddings.permute(0, 2, 1))
+  S_entity = [torch.matmul(bbox_embedding, word_embedding.permute(0, 2, 1)) for bbox_embedding, word_embedding in zip(bbox_embeddings, word_embeddings)]
 
   # Compute the similarity scores for the current batch
   S_event = torch.mm(image_embeddings, sentence_embeddings.t())
@@ -295,11 +295,12 @@ def run_over_data_grounding(model, data_iter, tester, ee_hyps,
     # Compute similarity matrix
     bbox_embeddings = torch.cat(bbox_embeddings)
     image_embeddings = torch.cat(image_embeddings)
-    word_embeddings = torch.cat(word_embeddings)
+    # word_embeddings = torch.cat(word_embeddings)
     sentence_embeddings = torch.cat(sentence_embeddings)
 
     S_entity, S_event = compute_similarity_matrix(bbox_embeddings, image_embeddings, word_embeddings, sentence_embeddings)
     calculate_recall(S_event)
+    S_entity_list = [S_e for S_e_batch in S_entity for S_e in S_e_batch.data.cpu().numpy().tolist()]
 
     # Save the similarity matrix
     np.save(os.path.join(out_dir, 'event_similarity_matrix.npy'), S_event.data.cpu().numpy())
@@ -310,7 +311,7 @@ def run_over_data_grounding(model, data_iter, tester, ee_hyps,
                       'scores': S_entity_i}\
                       for img_id, entity_id, bbox_entity_label, entitylabel, S_entity_i in \
                           zip(image_dicts['image_id'], image_dicts['bbox_entities_label'],\
-                              image_dicts['bbox_entities_id'], entitylabels, S_entity.data.cpu().numpy().tolist())]
+                              image_dicts['bbox_entities_id'], entitylabels, S_entity_list)]
     json.dump(S_entity_dict, open(os.path.join(out_dir, 'entity_similarity_matrix.json'), 'w'), indent=2, sort_keys=True) 
 
 
