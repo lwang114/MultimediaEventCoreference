@@ -1,3 +1,18 @@
+import os
+from math import ceil
+
+import torch
+from torchtext.data import BucketIterator
+from torch.nn import functional as F
+from PIL import Image
+import numpy as np
+import json
+
+import sys
+#sys.path.append('/dvmm-filer2/users/manling/mm-event-graph2')
+from src.util.util_model import progressbar
+from src.dataflow.numpy.data_loader_grounding import unpack_grounding
+
 
 class GroundingTester():
     def __init__(self):
@@ -146,66 +161,76 @@ def calculate_recall(S):
         I_foundind = ind
     
     if W_foundind == 0:
-      W_r1 += 1
+      W_r1 += 1.
     if I_foundind == 0:
-      I_r1 += 1    
+      I_r1 += 1.    
 
     if 0 <= W_foundind < 5:
-      W_r5 += 1
+      W_r5 += 1.
     if 0 <= I_foundind < 5:
-      I_r5 += 1    
+      I_r5 += 1.  
 
     if 0 <= W_foundind < 10:
-      W_r10 += 1
+      W_r10 += 1.
     if 0 <= I_foundind < 10:
-      I_r10 += 1
+      I_r10 += 1.
     
-  print('Caption Recall@1={:.2f}\tRecall@5={:.2f}\tRecall@10={:.2f}'.format(W_r1, W_r5, W_r10))
-  print('Image Recall@1={:.2f}\tRecall@5={:.2f}\tRecall@10={:.2f}'.format(I_r1, I_r5, I_r10))
+  W_r1 /= n
+  W_r5 /= n
+  W_r10 /= n
+  I_r1 /= n
+  I_r5 /= n
+  I_r10 /= n
+  print('Caption Recall@1={:.3f}\tRecall@5={:.3f}\tRecall@10={:.3f}'.format(W_r1, W_r5, W_r10))
+  print('Image Recall@1={:.3f}\tRecall@5={:.3f}\tRecall@10={:.3f}'.format(I_r1, I_r5, I_r10))
 
 def compute_similarity_matrix(bbox_embeddings, image_embeddings, word_embeddings, sentence_embeddings):
-  '''
-  :param emb_bbox:
-  :param emb_sentence:
-  :return S_entity:
-  :return S_event:
-  '''
   # Compute the similarity matrix between each image region and caption word  
-  S_entity = torch.mm(bbox_embeddings, word_embeddings.permute(0, 2, 1))
+  if bbox_embeddings.ndim == 2:
+    bbox_embeddings = bbox_embeddings.unsqueeze(1) 
+  S_entity = torch.matmul(bbox_embeddings, word_embeddings.permute(0, 2, 1))
 
-	# Compute the similarity scores for the current batch
-	S_event = torch.mm(image_embeddings, sentence_embeddings.t())
+  # Compute the similarity scores for the current batch
+  S_event = torch.mm(image_embeddings, sentence_embeddings.t())
   return S_entity, S_event
 
 
-def batch_process_grounding(batch_unpacked, model, tester, device, add_object=False):
+def batch_process_grounding(batch_unpacked, model, tester):
     words, x_len, postags, entitylabels, adjm, \
-        image_id, image, bbox_entities_id, bbox_entities_region, bbox_entities_label, object_num_batch, \
-        sent_id, entities = batch_unpacked
+    image_id, image, bbox_entities_id, bbox_entities_region, bbox_entities_label, object_num_batch, \
+    sent_id, entities = batch_unpacked
+    print('image.size(): {}'.format(image.size()))
 
-    BATCH_SIZE = image_batch.size(0)
-    if not add_object:
-      OBJECT_LEN = self.sr_model.get_role_num()
+    BATCH_SIZE = image.size(0)
+    
+    if bbox_entities_region is None:
+      OBJECT_LEN = model.sr_model.role_num
       SEQ_LEN = OBJECT_LEN + 1
-    else:
+    else:		
       OBJECT_LEN = bbox_entities_region.size()[-4]
       SEQ_LEN = OBJECT_LEN + 1 
 
-		# Compute the common embedding for each word and for each region
-    verb_emb_common, noun_emb_common, verb_emb, noun_emb, heatmap = model.sr_model.get_common_feature(image_id, image, bbox_entities_id, bbox_entities_region, bbox_entities_label, object_num_batch, BATCH_SIZE, OBJECT_LEN, SEQ_LEN) 
-    word_common, word_mask, word_emb = model.ed_model.get_common_feature(words, x_len, postags, entitylabels, adj)
+    # Compute the common embedding for each word and for each region
+    verb_emb_common, noun_emb_common, verb_emb, noun_emb, heatmap = \
+      model.sr_model.get_common_feature(image_id, image, bbox_entities_id, 
+                                        bbox_entities_region, bbox_entities_label, 
+                                        object_num_batch, BATCH_SIZE, OBJECT_LEN, SEQ_LEN) 
+    word_common, word_mask, word_emb = model.ed_model.get_common_feature(words, x_len, postags, entitylabels, adjm)
 
     # Compute the common space embeddings for the batch
     image_common, sent_common, word2noun_att_output, word_common, noun2word_att_output, noun_emb_common = \
         model.similarity(verb_emb_common, noun_emb_common, verb_emb, noun_emb, word_common, word_emb, word_mask)
+    print('image_common.size(): {}, sent_common.size(): {}'.format(image_common.size(), sent_common.size())) # XXX
     
     image_info = {'image_id': image_id, 
                   'bbox_entities_label': bbox_entities_label, 
                   'bbox_entities_id': bbox_entities_id}
+    print('bbox entities id: {}'.format(bbox_entities_id)) # XXX
+    print('bbox_entities label: {}'.format(bbox_entities_label))
     return verb_emb_common, image_common, word_common, sent_common, image_info, entitylabels
 
-def run_over_batch_grounding(batch, running_loss, cnt, all_captions, all_captions_, all_images, all_images_,
-                             model, optimizer, MAX_STEP, need_backward, tester, ee_hyps, device, maxnorm,
+
+def run_over_batch_grounding(batch, model, tester, ee_hyps,
                              img_dir, transform, add_object=False,
                              object_results=None, object_label=None,
                              object_detection_threshold=.2, vocab_objlabel=None):
@@ -214,10 +239,10 @@ def run_over_batch_grounding(batch, running_loss, cnt, all_captions, all_caption
     #    # words, x_len, postags, entitylabels, adjm, image_id, image = unpack_grounding(batch, device, transform,
     #    #                                                                           img_dir, ee_hyps)
     batch_unpacked = unpack_grounding(batch, 'cpu', transform, img_dir, ee_hyps,
-                                          load_object=add_object, object_results=object_results,
-                                          object_label=object_label,
-                                          object_detection_threshold=object_detection_threshold,
-                                          vocab_objlabel=vocab_objlabel)
+                                      load_object=add_object, object_results=object_results,
+                                      object_label=object_label,
+                                      object_detection_threshold=object_detection_threshold,
+                                      vocab_objlabel=vocab_objlabel)
     # XXX except:
     #    # if the batch is a bad batch, Nothing changed, return directly
     #    return running_loss, cnt, all_captions, all_captions_, all_images, all_images_
@@ -226,72 +251,59 @@ def run_over_batch_grounding(batch, running_loss, cnt, all_captions, all_caption
         # if the batch is a bad batch, Nothing changed, return directly
         return emb_bbox, emb_image, emb_word, emb_sentence 
 
-
-    if need_backward:
-        optimizer.zero_grad()
-
     emb_bbox, emb_image, emb_word, emb_sentence, image_info, entitylabels\
-        = batch_process_grounding(batch_unpacked, all_captions, all_captions_, all_images, all_images_,
-                                model, tester, device,
-                                add_object=add_object
-                                  )
+        = batch_process_grounding(batch_unpacked,
+                                  model, tester)
 
     return emb_bbox, emb_image, emb_word, emb_sentence, image_info, entitylabels 
 
 
-def run_over_data_grounding(model, optimizer, data_iter, MAX_STEP, need_backward, tester, ee_hyps, device, maxnorm,
+def run_over_data_grounding(model, data_iter, tester, ee_hyps,
                             img_dir, transform, add_object=False,
-                             object_results=None, object_label=None,
-                             object_detection_threshold=.2, vocab_objlabel=None):
-    if need_backward:
-        model.train()
-    else:
-        model.eval()
-
-    running_loss = 0.0
-
-    print()
-
+                            object_results=None, object_label=None,
+                            object_detection_threshold=.2, vocab_objlabel=None,
+                            out_dir='./'):
+    model.eval()
     bbox_embeddings = []
     image_embeddings = []
     word_embeddings = []
     sentence_embeddings = []
-		image_dicts = {'image_id': [], 'bbox_entities_label': [], 'bbox_entities_id': []}
+    image_dicts = {'image_id': [], 'bbox_entities_label': [], 'bbox_entities_id': []}
     entitylabels = [] 
 
     # print(data_iter)
     for batch in data_iter:
-      emb_bbox, emb_image, emb_word, emb_sentence, image_info, entitylabels\
+      emb_bbox, emb_image, emb_word, emb_sentence, image_info, ent_labels\
           = run_over_batch_grounding(batch, 
-                                     model, optimizer, MAX_STEP, need_backward, tester, ee_hyps, device, maxnorm,
-                                    img_dir, transform,
-                                    add_object=add_object,
-                                    object_results=object_results,
-                                    object_label=object_label,
-                                    object_detection_threshold=object_detection_threshold,
-                                    vocab_objlabel=vocab_objlabel
+                                     model, tester, ee_hyps,
+																		 img_dir, transform, add_object=add_object,
+                                     object_results=object_results,
+                                     object_label=object_label,
+                                     object_detection_threshold=object_detection_threshold,
+                                     vocab_objlabel=vocab_objlabel
                                     )
       image_dicts['image_id'].extend(image_info['image_id'])
-      image_dicts['bbox_entities_label'].extend(image_info['bbox_entities_label'].data.cpu().numpy().tolist())
-      image_dicts['bbox_entities_id'].extend(image_info['bbox_entities_id'])
-      entitylabels.extend(entitylabels.data.cpu().numpy().tolist())
+      if add_object:
+        image_dicts['bbox_entities_label'].extend(image_info['bbox_entities_label'].data.cpu().numpy().tolist())
+        image_dicts['bbox_entities_id'].extend(image_info['bbox_entities_id'])      
+      entitylabels.extend(ent_labels)
       bbox_embeddings.append(emb_bbox)
       image_embeddings.append(emb_image)
       word_embeddings.append(emb_word)
       sentence_embeddings.append(emb_sentence)
      
     # Compute similarity matrix
-    bbox_embeddings = torch.concatenate(bbox_embeddings)
-    image_embeddings = torch.concatenate(image_embeddings)
-    word_embeddings = torch.concatenate(word_embeddings)
-    sentence_embeddings = torch.concatenate(sentence_embeddings)
+    bbox_embeddings = torch.cat(bbox_embeddings)
+    image_embeddings = torch.cat(image_embeddings)
+    word_embeddings = torch.cat(word_embeddings)
+    sentence_embeddings = torch.cat(sentence_embeddings)
 
     S_entity, S_event = compute_similarity_matrix(bbox_embeddings, image_embeddings, word_embeddings, sentence_embeddings)
-		calculate_recall(S_event)
+    calculate_recall(S_event)
 
     # Save the similarity matrix
-    np.save(os.path.join(parser.out, 'event_similarity_matrix.npy'), S_event.data.cpu().numpy())
-		S_entity_dict = [{'image_id': img_id, 
+    np.save(os.path.join(out_dir, 'event_similarity_matrix.npy'), S_event.data.cpu().numpy())
+    S_entity_dict = [{'image_id': img_id, 
                       'bbox_entities_id': entity_id, 
                       'bbox_entities_label': bbox_entity_label, 
                       'entity_labels': entitylabel, 
@@ -299,32 +311,26 @@ def run_over_data_grounding(model, optimizer, data_iter, MAX_STEP, need_backward
                       for img_id, entity_id, bbox_entity_label, entitylabel, S_entity_i in \
                           zip(image_dicts['image_id'], image_dicts['bbox_entities_label'],\
                               image_dicts['bbox_entities_id'], entitylabels, S_entity.data.cpu().numpy().tolist())]
-    json.dump(S_entity_dict, open(os.path.join(parser.out, 'entity_similarity_matrix.json'), 'w'), indent=2, sort_keys=True) 
+    json.dump(S_entity_dict, open(os.path.join(out_dir, 'entity_similarity_matrix.json'), 'w'), indent=2, sort_keys=True) 
 
 
 def grounding_test(model, test_set, 
             tester, parser, other_testsets, transform, vocab_objlabel=None):
   test_iter = BucketIterator(test_set, batch_size=parser.batch,
-                              train=False, shuffle=False)
-  model.to('cpu')
-
-  lr = parser.lr
+                             train=False, shuffle=False, device=-1,
+                             sort_key=lambda x: len(x.POSTAGS))  
   object_results, object_label, object_detection_threshold = test_set.get_object_results()
   run_over_data_grounding(
       data_iter=test_iter,
-      optimizer=optimizer,
       model=model,
-      need_backward=False,
-      MAX_STEP=ceil(len(test_set) / parser.batch),
       tester=tester,
-      ee_hyps=parser.ee_hps,
-      device=model.device,
-      maxnorm=parser.maxnorm,
+			ee_hyps=parser.ee_hps,
       img_dir=parser.img_dir,
       transform=transform,
       add_object=parser.add_object,
       object_results=object_results,
       object_label=object_label,
       object_detection_threshold=object_detection_threshold,
-      vocab_objlabel=vocab_objlabel
-   ) 
+      vocab_objlabel=vocab_objlabel,
+      out_dir=parser.out
+	 ) 

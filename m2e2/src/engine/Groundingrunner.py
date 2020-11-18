@@ -21,7 +21,7 @@ from src.util.vocab import Vocab
 from torchtext.vocab import Vectors
 from src.dataflow.numpy.data_loader_grounding import GroundingDataset
 from src.models.grounding import GroundingModel
-from src.eval.Groundingtesting import GroundingTester # TODO
+from src.eval.Groundingtesting import GroundingTester, grounding_test
 from src.engine.Groundingtraining import grounding_train
 from src.engine.SRrunner import load_sr_model
 from src.engine.EErunner import load_ee_model
@@ -68,13 +68,16 @@ class GroundingRunner(object):
         parser.add_argument("--restart", default=999999, type=int)
         parser.add_argument("--shuffle", help="shuffle", action='store_true')
         parser.add_argument("--device", default="cpu")
-        parser.add_argument("--evaluate_only", action="store true")
+        parser.add_argument("--evaluate_only", action="store_true")
 
         self.a = parser.parse_args()
 
     def set_device(self, device="cpu"):
         # self.device = torch.device(device)
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if self.a.evaluate_only:
+          self.device = torch.device("cpu")
+        else:
+          self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def get_device(self):
         return self.device
@@ -282,7 +285,7 @@ class GroundingRunner(object):
         writer = SummaryWriter(os.path.join(self.a.out, "exp"))
         self.a.writer = writer
 
-        if evaluate_only:
+        if self.a.evaluate_only:
           grounding_test(
               model=model,
               test_set=test_set,
@@ -291,7 +294,7 @@ class GroundingRunner(object):
               other_testsets={},
               transform=transform,
               vocab_objlabel=vocab_noun.word2id
-          ) # TODO
+          )
         else:
           grounding_train(
               model=model,
