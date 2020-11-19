@@ -18,7 +18,7 @@ class CorefVisualizer:
                       stores the alignment score between i-th region 
                       and j-th word}
     :param event_score_npy: str, name of the npy file of event coref scores 
-    '''    
+    '''
     self.event_scores = np.load(event_score_npy)
     grounding_dicts = json.load(open(grounding_file))
     self.noun_id2s = json.load(open(noun_mapping_file)) # TODO
@@ -99,3 +99,13 @@ class CorefVisualizer:
 
         f_html.write('<img src=\"' + os.path.join(visual_path, 'img', ret_img_id) + '\"width=\"300\">\n<br>')
       f_html.write('\n<br>')
+
+if __name__ == '__main__':
+  exp_dir = 'out'
+  data_dir = ''
+  visualizer = CorefVisualizer(entity_score_json=os.path.join(exp_dir, 'entity_scores.json'),
+                               event_score_npy=os.path.join(exp_dir, 'event_scores.npy'),
+                               entity_mapping_file=, 
+                               noun_mapping_file=, 
+                               grounding_file=os.path.join(data_dir, 'grounding_train_10000.json'))
+  visualizer.visualize_html(visual_path, os.path.join(data_dir, )) # TODO
