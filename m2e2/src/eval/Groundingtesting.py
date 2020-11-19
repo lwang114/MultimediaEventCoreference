@@ -199,7 +199,6 @@ def batch_process_grounding(batch_unpacked, model, tester):
     words, x_len, postags, entitylabels, adjm, \
     image_id, image, bbox_entities_id, bbox_entities_region, bbox_entities_label, object_num_batch, \
     sent_id, entities = batch_unpacked
-    print('image.size(): {}'.format(image.size()))
 
     BATCH_SIZE = image.size(0)
     
@@ -225,8 +224,8 @@ def batch_process_grounding(batch_unpacked, model, tester):
     image_info = {'image_id': image_id, 
                   'bbox_entities_label': bbox_entities_label, 
                   'bbox_entities_id': bbox_entities_id}
-    print('bbox entities id: {}'.format(bbox_entities_id)) # XXX
-    print('bbox_entities label: {}'.format(bbox_entities_label))
+    # print('bbox entities id: {}'.format(bbox_entities_id)) # XXX
+    # print('bbox_entities label: {}'.format(bbox_entities_label))
     return verb_emb_common, image_common, word_common, sent_common, image_info, entitylabels
 
 
@@ -238,18 +237,17 @@ def run_over_batch_grounding(batch, model, tester, ee_hyps,
     # XXX try:
     #    # words, x_len, postags, entitylabels, adjm, image_id, image = unpack_grounding(batch, device, transform,
     #    #                                                                           img_dir, ee_hyps)
+    # XXX except:
+    #    # if the batch is a bad batch, Nothing changed, return directly
+    #    return running_loss, cnt, all_captions, all_captions_, all_images, all_images_
     batch_unpacked = unpack_grounding(batch, 'cpu', transform, img_dir, ee_hyps,
                                       load_object=add_object, object_results=object_results,
                                       object_label=object_label,
                                       object_detection_threshold=object_detection_threshold,
                                       vocab_objlabel=vocab_objlabel)
-    # XXX except:
-    #    # if the batch is a bad batch, Nothing changed, return directly
-    #    return running_loss, cnt, all_captions, all_captions_, all_images, all_images_
-
     if batch_unpacked is None:
         # if the batch is a bad batch, Nothing changed, return directly
-        return emb_bbox, emb_image, emb_word, emb_sentence 
+        return None, None, None, None, None, None 
 
     emb_bbox, emb_image, emb_word, emb_sentence, image_info, entitylabels\
         = batch_process_grounding(batch_unpacked,
@@ -282,10 +280,15 @@ def run_over_data_grounding(model, data_iter, tester, ee_hyps,
                                      object_detection_threshold=object_detection_threshold,
                                      vocab_objlabel=vocab_objlabel
                                     )
+      if emb_bbox is None: # Skip the batch if it is bad
+          continue
       image_dicts['image_id'].extend(image_info['image_id'])
       if add_object:
         image_dicts['bbox_entities_label'].extend(image_info['bbox_entities_label'].data.cpu().numpy().tolist())
-        image_dicts['bbox_entities_id'].extend(image_info['bbox_entities_id'])      
+        image_dicts['bbox_entities_id'].extend(image_info['bbox_entities_id'])
+      else:
+        image_dicts['bbox_entities_label'].extend([[] for _ in image_info['image_id']])
+        image_dicts['bbox_entities_id'].extend([[] for _ in image_info['image_id']])
       entitylabels.extend(ent_labels)
       bbox_embeddings.append(emb_bbox)
       image_embeddings.append(emb_image)
@@ -325,7 +328,7 @@ def grounding_test(model, test_set,
       data_iter=test_iter,
       model=model,
       tester=tester,
-			ee_hyps=parser.ee_hps,
+      ee_hyps=parser.ee_hps,
       img_dir=parser.img_dir,
       transform=transform,
       add_object=parser.add_object,
@@ -334,4 +337,4 @@ def grounding_test(model, test_set,
       object_detection_threshold=object_detection_threshold,
       vocab_objlabel=vocab_objlabel,
       out_dir=parser.out
-	 ) 
+  ) 
