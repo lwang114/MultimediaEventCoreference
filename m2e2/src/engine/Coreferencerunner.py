@@ -52,7 +52,7 @@ class GroundingRunner(object):
         parser.add_argument("--ee_hps", help="ee model hyperparams", default="{'wemb_dim': 300, 'wemb_ft': True, 'wemb_dp': 0.5, 'pemb_dim': 50, 'pemb_dp': 0.5, 'eemb_dim': 50, 'eemb_dp': 0.5, 'psemb_dim': 50, 'psemb_dp': 0.5, 'lstm_dim': 150, 'lstm_layers': 1, 'lstm_dp': 0, 'gcn_et': 3, 'gcn_use_bn': True, 'gcn_layers': 3, 'gcn_dp': 0.5, 'sa_dim': 300, 'use_highway': True, 'loss_alpha': 5}")
 
         parser.add_argument("--batch", help="batch size", default=16, type=int)
-        parser.add_argument("--epochs", help="n of epochs", default=sys.maxsize, type=int)
+        parser.add_argument("--epochs", help="n of epochs", default=300, type=int) # sys.maxsize,
 
         parser.add_argument("--seed", help="RNG seed", default=42, type=int)
         parser.add_argument("--optimizer", default="adam")

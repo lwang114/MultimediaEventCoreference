@@ -185,9 +185,9 @@ def calculate_recall(S):
   print('Image\tRecall@1={:.3f}\tRecall@5={:.3f}\tRecall@10={:.3f}'.format(I_r1, I_r5, I_r10))
 
 def compute_similarity_matrix(bbox_embeddings, image_embeddings, word_embeddings, sentence_embeddings):
-  # Compute the similarity matrix between each image region and caption word  
-  if bbox_embeddings.ndim == 2:
-    bbox_embeddings = bbox_embeddings.unsqueeze(1) 
+  # Compute the similarity matrix between each image region and caption word 
+  bbox_embeddings = [bbox_embedding.unsqueeze(1) if bbox_embedding.ndim == 2 else bbox_embedding for bbox_embedding in bbox_embeddings]
+  print('bbox_embedding.size(): {}'.format(bbox_embeddings[0].size()))
   S_entity = [torch.matmul(bbox_embedding, word_embedding.permute(0, 2, 1)) for bbox_embedding, word_embedding in zip(bbox_embeddings, word_embeddings)]
 
   # Compute the similarity scores for the current batch
@@ -219,21 +219,20 @@ def batch_process_grounding(batch_unpacked, model, tester):
     # Compute the common space embeddings for the batch
     image_common, sent_common, word2noun_att_output, word_common, noun2word_att_output, noun_emb_common = \
         model.similarity(verb_emb_common, noun_emb_common, verb_emb, noun_emb, word_common, word_emb, word_mask)
-    print('image_common.size(): {}, sent_common.size(): {}'.format(image_common.size(), sent_common.size())) # XXX
+    print('verb_emb_common.size(): {}, image_common.size(): {}, sent_common.size(): {}'.format(verb_emb_common.size(), image_common.size(), sent_common.size())) # XXX
     
     image_info = {'image_id': image_id, 
                   'bbox_entities_label': bbox_entities_label, 
                   'bbox_entities_id': bbox_entities_id}
     # print('bbox entities id: {}'.format(bbox_entities_id)) # XXX
     # print('bbox_entities label: {}'.format(bbox_entities_label))
-    return verb_emb_common, image_common, word_common, sent_common, image_info, entitylabels
+    return noun_emb_common, image_common, word_common, sent_common, image_info, entitylabels
 
 
 def run_over_batch_grounding(batch, model, tester, ee_hyps,
                              img_dir, transform, add_object=False,
                              object_results=None, object_label=None,
                              object_detection_threshold=.2, vocab_objlabel=None):
-
     # XXX try:
     #    # words, x_len, postags, entitylabels, adjm, image_id, image = unpack_grounding(batch, device, transform,
     #    #                                                                           img_dir, ee_hyps)
@@ -296,7 +295,6 @@ def run_over_data_grounding(model, data_iter, tester, ee_hyps,
       sentence_embeddings.append(emb_sentence)
      
     # Compute similarity matrix
-    bbox_embeddings = torch.cat(bbox_embeddings)
     image_embeddings = torch.cat(image_embeddings)
     # word_embeddings = torch.cat(word_embeddings)
     sentence_embeddings = torch.cat(sentence_embeddings)
@@ -313,8 +311,8 @@ def run_over_data_grounding(model, data_iter, tester, ee_hyps,
                       'entity_labels': entitylabel, 
                       'scores': S_entity_i}\
                       for img_id, entity_id, bbox_entity_label, entitylabel, S_entity_i in \
-                          zip(image_dicts['image_id'], image_dicts['bbox_entities_label'],\
-                              image_dicts['bbox_entities_id'], entitylabels, S_entity_list)]
+                          zip(image_dicts['image_id'], image_dicts['bbox_entities_id'],\
+                              image_dicts['bbox_entities_label'], entitylabels, S_entity_list)]
     json.dump(S_entity_dict, open(os.path.join(out_dir, 'entity_similarity_matrix.json'), 'w'), indent=2, sort_keys=True) 
 
 

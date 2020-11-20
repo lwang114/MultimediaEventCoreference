@@ -64,6 +64,7 @@ class GroundingRunner(object):
         parser.add_argument("--out", help="output model path", default="out")
         parser.add_argument("--finetune_sr", help="pretrained sr model path")
         parser.add_argument("--finetune_ee", help="pretrained ee model path")
+        parser.add_argument("--finetune", help="pretrained grounding model path")
         parser.add_argument("--earlystop", default=999999, type=int)
         parser.add_argument("--restart", default=999999, type=int)
         parser.add_argument("--shuffle", help="shuffle", action='store_true')
@@ -245,8 +246,11 @@ class GroundingRunner(object):
         else:
             ee_model = load_ee_model(self.a.ee_hps, None, WordsField.vocab.vectors, self.device)
             log('model created from scratch, there are %i sets of params' % len(ee_model.parameters_requires_grads()))
-
+        
         model = GroundingModel(ee_model, sr_model, self.get_device())
+        if self.a.finetune:
+            model.load_model(self.a.finetune)
+
 
         if self.a.optimizer == "adadelta":
             optimizer_constructor = partial(torch.optim.Adadelta, params=model.parameters_requires_grads(),
