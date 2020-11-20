@@ -34,7 +34,7 @@ class CorefVisualizer:
 
     for ex, entity_score_dict in enumerate(entity_score_dicts):
       # Extract retrieved image ids      
-      ret_img_ids = [self.img_ids[idx] for idx in np.argsort(self.event_scores[:, ex], axis=0)[:10].tolist()] 
+      ret_img_ids = [self.img_ids[idx] for idx in np.argsort(-self.event_scores[ex])[:10].tolist()] 
       self.ret_img_ids.append(ret_img_ids)
 
       # Extract caption
@@ -87,7 +87,7 @@ class CorefVisualizer:
     Visualize the cross-modal entity coreference results.
     :param visual_path: str, path to the output directory
     :param image_path: str, path to the image directory
-		:param display_path: str, path printed in the html file
+    :param display_path: str, path printed in the html file
     ''' 
     if not image_path:
         image_path = '/ws/ifp-53_2/hasegawa/lwang114/fall2020/MultimediaEventCoreference/m2e2/data/voa/rawdata/img/'
@@ -114,7 +114,7 @@ class CorefVisualizer:
 
         # Display the predicted entity labels for the current image
         f_html.write('[box_entity_predicted]')
-        for _, ys_ in self.y_bbox_[ex].items():			
+        for _, ys_ in self.y_bbox_[ex].items():	
           f_html.write('|{}'.format(' '.join(ys_))) 
         f_html.write('\n<br>')
 
@@ -139,7 +139,7 @@ if __name__ == '__main__':
                                event_score_npy=os.path.join(exp_dir, 'event_similarity_matrix.npy'),
                                entity_mapping_file=os.path.join(exp_dir, 'entity.vec'), 
                                noun_mapping_file=os.path.join(data_dir, 'vocab/vocab_situation_noun.pkl'), 
-                               grounding_file=os.path.join(data_dir, 'grounding/grounding_test_10000.json'))
+                               grounding_file=os.path.join(data_dir, 'grounding/backup/11_19_2020/grounding_test_10000.json')) # XXX
   visualizer.visualize_html(visual_path=os.path.join(exp_dir, 'visualization'),
                             image_path=os.path.join(data_dir, 'voa/rawdata/img'),
                             display_path='/Users/liming/research/PhD_research/fall2020/pictures/visualization')

@@ -42,10 +42,15 @@ def generate_json(img_id, caption, example_list):
     if sum(1 for _ in sentences) > 1:
         # if caption contain multiple sentence, ignore this datapoint
         # print('multiple sentences: ', caption)
-        return example_list
-
+        # XXX return example_list
+        captions = []
+        for sentence_start, sentence_end in sent_tokenizer.span_tokenize(caption):
+          captions.append(caption[sentence_start:sentence_end])
+        caption = captions[0]
+          
     sent_idx = 0
     for sentence_start, sentence_end in sent_tokenizer.span_tokenize(caption):
+        print('sent_idx: {}'.format(sent_idx))
         # each sentence
         sen_obj = dict()
         sen_obj["image"] = img_id
@@ -84,7 +89,6 @@ def generate_json(img_id, caption, example_list):
           entity_obj['end'] = ner_info[entity_id]['end']
           sen_obj['golden-entity-mentions'].append(entity_obj)
 
-
         # Dependency parsing
         instance = dep_parser._dataset_reader.text_to_instance(sen_obj['words'], sen_obj['pos-tags'])
         parse = dep_parser.predict_instance(instance)
@@ -93,7 +97,6 @@ def generate_json(img_id, caption, example_list):
 
         example_list.append(sen_obj)
         # print('sen_obj', sen_obj)
-        sent_idx += 1
     return example_list
 
 def generate_json_all(pair_list):
