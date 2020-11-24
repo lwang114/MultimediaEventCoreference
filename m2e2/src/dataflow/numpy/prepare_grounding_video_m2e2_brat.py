@@ -7,7 +7,7 @@ import spacy
 from allennlp.predictors.predictor import Predictor
 import allennlp_models.structured_prediction
 
-nlp = spacy.load('en_core_sci_sm')
+nlp = spacy.load('en_core_web_sm')
 def int_overlap(a1, b1, a2, b2):
   '''Checks whether two intervals overlap'''
   if b1 < a2 or b2 < a1:
@@ -45,7 +45,7 @@ class Article:
       self.tokens.append([])
       self.postags.append([])
       for token in sent:
-        self.tokens[-1].append(Token(token.text, char_pos, char_pos+len(token.text)-1)
+        self.tokens[-1].append(Token(token.text, char_pos, char_pos+len(token.text)-1))
         self.postags[-1].append(token.tag_)
         char_pos += len(token.text)
         if token.whitespace_:
@@ -109,7 +109,7 @@ class Article:
                 t_start = idx
               t_end = idx
 
-          if not t_start::
+          if not t_start:
             continue
           name = [t.text for t in self.tokens[t_start:t_end+1]]
           triggers[sent_idx][parts[0]] = {'start': t_start, 
@@ -269,13 +269,21 @@ def generate_json(img_id, ann, example_list):
         sen_obj['stanford-colcc'].append('{}/dep={}/gov={}'.format(deprel, word_idx, head-1))
       example_list.append(sen_obj)
 
-   return example_list 
+    return example_list 
 
 def generate_json_all(pair_list):
     example_list = []
     for image_id, ann_file in pair_list:
       example_list = generate_json(image_id, ann_file, example_list)
     return example_list 
+
+def download_video(m2e2_caption):
+    m2e2_image_caption = json.load(open(m2e2_caption))
+    for _, caption_dict in m2e2_image_caption.items():
+      youtube_id = caption_dict['id'].split('v=')[-1]
+      video_name = os.path.join(img_dir, youtube_id+'.mp4')
+      if not os.path.isfile(video_name):
+        os.system('youtube-dl -i -f mp4 -o {} {}'.format(video_name, caption_dict['id']))
 
 def main(grounding_dir, img_dir, m2e2_caption, m2e2_annotation_dir, out_prefix='m2e2'):
     '''
@@ -286,25 +294,25 @@ def main(grounding_dir, img_dir, m2e2_caption, m2e2_annotation_dir, out_prefix='
     m2e2_image_caption = json.load(open(m2e2_caption))
     pairs = list()
     count = 0
-     
-    # Filter out unannotated examples
+    
+		# Create a list of (youtube_id, ann_file); download images/videos to img_dir
+    download_video(m2e2_caption) 
+
+    ''' XXX 
+		# Filter out unannotated examples
     ann_files = []
-    for ann_file in os.path.listdir(m2e2_annotation_dir+'*.ann'):
+    for ann_file in os.listdir(os.path.join(m2e2_annotation_dir, '*.ann')):
       with open(os.path.join(m2e2_annotation_dir, ann_file), 'r') as f:
         if len(f.readlines()) > 0:
           ann_files.append(ann_file)
-    
-    # Create a list of (youtube_id, ann_file); download images/videos to img_dir
-    keys = sorted(m2e2_image_caption)[select_indices]   
+    keys = sorted(m2e2_image_caption) 
     for ann_file in ann_files:
-      caption_dict = m2e2_image_caption[keys[int(ann_file.split('.')[0]]] 
+      caption_dict = m2e2_image_caption[keys[int(ann_file.split('.')[0])]] 
       youtube_id = caption_dict['id'].split('v=')[-1]
       if not os.path.isfile(os.path.join(img_dir, youtube_id+'.mp4')):
         os.system('youtube-dl -f mp4 -i {}'.format(caption_dict['id']))
       pairs.append((youtube_id, ann_file))
 
-    # XXX
-    ''' 
     result = generate_json_all(pairs)
     _file = codecs.open(os.path.join(grounding_dir, out_prefix + '.json'))  
     json.dump(result, _file, indent=2)
@@ -312,7 +320,7 @@ def main(grounding_dir, img_dir, m2e2_caption, m2e2_annotation_dir, out_prefix='
 
 if __name__ == '__main__':
   grounding_dir = ''
-  img_dir = '/ws/ifp-53_2/hasegawa/lwang114/fall2020/MultimediaEventCoreference/data/video_m2e2/videos/'
-  m2e2_caption = '/ws/ifp-53_2/hasegawa/lwang114/fall2020/MultimediaEventCoreference/data/video_m2e2/'
+  img_dir = '/ws/ifp-53_2/hasegawa/lwang114/fall2020/MultimediaEventCoreference/m2e2/data/video_m2e2/videos/'
+  m2e2_caption = '/ws/ifp-53_2/hasegawa/lwang114/fall2020/MultimediaEventCoreference/m2e2/data/video_m2e2/video_m2e2.json'
   m2e2_annotation_dir = ''
   main(grounding_dir, img_dir, m2e2_caption, m2e2_annotation_dir)
