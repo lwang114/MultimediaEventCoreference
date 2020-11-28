@@ -4,6 +4,8 @@ import os
 import pickle
 import codecs
 import nltk
+from allennlp.predictors.predictor import Predictor
+import allennlp_models.structured_prediction 
 
 dep_parser = Predictor.from_path('https://storage.googleapis.com/allennlp-public-models/biaffine-dependency-parser-ptb-2020.04.06.tar.gz')
 def generate_json(img_id, text, anns, example_list):
@@ -74,7 +76,7 @@ def generate_json(img_id, text, anns, example_list):
 
       # Dependency parsing
       instance = dep_parser._dataset_reader.text_to_instance(sen_obj['words'], sen_obj['pos-tags'])
-      parser = dep_parser.predict_instance(instance)
+      parse = dep_parser.predict_instance(instance)
       for word_idx, (head, deprel) in enumerate(zip(parse['predicted_heads'], parse['predicted_dependencies'])): 
         sen_obj['stanford-colcc'].append('{}/dep={}/gov={}'.format(deprel, word_idx, head-1))
 
@@ -98,7 +100,7 @@ def generate_json(img_id, text, anns, example_list):
         
 
 def main(grounding_dir, video_dir, m2e2_caption, 
-         m2e2_annotation_dir, out_prefix='video_m2e2'):
+         m2e2_annotation_dir, out_prefix='grounding_video_m2e2'):
     '''
     :param grounding_dir: str, directory of the meta info file
     :param video_dir: str, directory of the videos
@@ -111,21 +113,24 @@ def main(grounding_dir, video_dir, m2e2_caption,
     result = list()
     count = 0
 
-    keys = sorted(m2e2_image_caption)
-    for k in keys:    
-      youtube_id = m2e2_image_caption[k]['id']
+    keys = sorted(m2e2_image_caption) # XXX 
+    for k in keys:   
+      youtube_id = m2e2_image_caption[k]['id'].split('v=')[-1]
+      print(youtube_id)
       text = m2e2_image_caption[k]['long_desc']
       ann_file = os.path.join(m2e2_annotation_dir, youtube_id+'.json')
-      anns = json.loads(codecs.open(ann_file).read())
-      result = generate_json(img_id, text, anns, result)
+      anns = []
+      for line in codecs.open(ann_file, 'r', 'utf-8'):
+        anns.append(json.loads(line)) # TODO Deal with special symbols
+      result = generate_json(youtube_id, text, anns, result)
 
-    with codecs.open(os.path.join(grounding_dir, out_prefix+'.json'), 'r'):
-      json.dump(result, f, indent=2)
+    with codecs.open(os.path.join(grounding_dir, out_prefix+'.json'), 'w', 'utf-8') as f:
+      json.dump(result, f, indent=2, sort_keys=True)
 
 if __name__ == '__main__':
   data_dir = '../../../data'
   grounding_dir = os.path.join(data_dir, 'video_m2e2') 
   video_dir = os.path.join(data_dir, 'video_m2e2/videos')
   m2e2_caption = os.path.join(data_dir, 'video_m2e2/video_m2e2.json')
-  m2e2_annotation_dir = os.path.join(data_dir, 'video_m2e2/')
-  main()
+  m2e2_annotation_dir = os.path.join(data_dir, 'video_m2e2/json')
+  main(grounding_dir, video_dir, m2e2_caption, m2e2_annotation_dir)
