@@ -121,3 +121,11 @@ def main(grounding_dir, video_dir, m2e2_caption,
 
     with codecs.open(os.path.join(grounding_dir, out_prefix+'.json'), 'r'):
       json.dump(result, f, indent=2)
+
+if __name__ == '__main__':
+  data_dir = '../../../data'
+  grounding_dir = os.path.join(data_dir, 'video_m2e2') 
+  video_dir = os.path.join(data_dir, 'video_m2e2/videos')
+  m2e2_caption = os.path.join(data_dir, 'video_m2e2/video_m2e2.json')
+  m2e2_annotation_dir = os.path.join(data_dir, 'video_m2e2/')
+  main()
