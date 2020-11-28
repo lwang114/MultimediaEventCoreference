@@ -8,6 +8,7 @@ from allennlp.predictors.predictor import Predictor
 import allennlp_models.structured_prediction
 
 nlp = spacy.load('en_core_web_sm')
+dep_parser = Predictor.from_path('//storage.googleapis.com/allennlp-public-models/biaffine-dependency-parser-ptb-2020.04.06.tar.gz')
 def int_overlap(a1, b1, a2, b2):
   '''Checks whether two intervals overlap'''
   if b1 < a2 or b2 < a1:
@@ -157,10 +158,14 @@ class Article:
           if not t_start:
             continue
              
+          is_overlap = False
           for event_id, event in self.events[sent_idx].items():
             if t_start == event['start'] and t_end == event['end']: # TODO Check this 
               trigger2events[sent_idx][trigger_id] = event_id
+              is_overlap = True
               break
+          if not is_overlap:
+            trigger2events[sent_idx][trigger_id] = trigger_id
 
       entity_cluster = {}
       event_cluster = {}
@@ -168,7 +173,6 @@ class Article:
         parts = line.split()
         
         if parts[1] == 'Alias': # Check if the annotation is a coreference	
-          cluster[parts[0]] = []
           for mention_id in parts[2:]:
             if mention_id in trigger2events[sent_idx]: 
               event_cluster[parts[0]].append(trigger2events[sent_idx][mention_id])
@@ -207,7 +211,6 @@ def generate_json(img_id, ann, example_list):
                           'coreference': {'entities': list of list of ints, 'events': list of list of ints},
                           'mention_ids': {'entities': list of str,
                                           'events': list of str}}
-    :return example_list: updated list of processed examples
     '''
     with codecs.open(ann_file.replace('ann', 'txt'), 'r', encoding='utf-8') as f:
       caption = f.read()
@@ -218,7 +221,7 @@ def generate_json(img_id, ann, example_list):
     # Tokenize and preprocess the caption
     article = Article(caption, annotation)
     for idx in range(len(article.sentences)):
-      sent_id = '{}__{}'.format(sent_id, idx)
+      sent_id = '{}_{}'.format(img_id, idx)
       sen_obj = dict()
       sen_obj['image'] = img_id
       sen_obj['sentence_id'] = sent_id
@@ -288,8 +291,10 @@ def download_video(m2e2_caption):
 def main(grounding_dir, img_dir, m2e2_caption, m2e2_annotation_dir, out_prefix='m2e2'):
     '''
     :param grounding_dir: str, directory name for the grounding meta info files
-    :param m2e2_annotation_dir: str, json file name storing the dictionary with the format:
-                             [image id]: {[caption id]: 'cap': [caption text], 'url': [url to the image]}
+    :param img_dir: str, directory of the images/videos
+    :param m2e2_caption: str, json file name storing the dictionary with the format:
+                         [short desc]: {'id': [caption text], 'long_desc': [url to the image]}
+    :param m2e2_annotation_dir: str, directory name of the annotations
     '''
     m2e2_image_caption = json.load(open(m2e2_caption))
     pairs = list()
