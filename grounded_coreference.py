@@ -22,12 +22,34 @@ class ResNet152(nn.Module):
     self.device = device
     self.to(device)
      
-  def forward(self, images):    
+  def forward(self, images, mask=None, return_feat=False):    
+    images = images.to(self.device)
+    if mask is not None:
+      mask = mask.to(self.device)
+    
+    ndim = images.ndim
+    B, L = images.size(0), images.size(1)
+    if ndim == 5:
+      H, W, C = images.size(2), images.size(3), images.size(4)
+      images = images.view(B*L, H, W, C)
+
     fmap = self.backbone(images)
-    emb = self.pooler(fmap)
-    B, D, H, W = emb.size()
-    self.embedder(emb.permute(0, 2, 3, 1).view(B*H*W, D)).view(B, H, W, D)
-    return emb
+    fmap = self.pooler(fmap)
+    emb = self.embedder(fmap.permute(0, 2, 3, 1))
+
+    _, He, We, D = emb.size()
+    if ndim == 5:
+      emb = emb.view(B, L*He*We, D)
+      fmap = fmap.view(B, L, -1, He, We)
+      if mask is not None:
+        mask = mask.unsqueeze(-1).repeat(1, 1, He*We).flatten(start_dim=1)
+    else:
+      emb = emb.view(B, He*We, D)
+    
+    if return_feat:
+      return emb, fmap, mask
+    else: 
+      return emb, mask
     
 
 class GroundedCoreferencer(nn.Module):
@@ -47,11 +69,11 @@ class GroundedCoreferencer(nn.Module):
     
     att_weights_first = F.softmax(att_weights * second_mask.unsqueeze(1), dim=-1)
     att_first = torch.matmul(att_weights_first, second)
-    score = -F.mse_loss(first, att_first) 
+    score = F.mse_loss(first, att_first) 
     if score_type == 'both':
       att_weights_second = F.softmax(torch.transpose(att_weights, 1, 2) * first_mask.unsqueeze(1), dim=-1)    
       att_second = torch.matmul(att_weights_second, first)
-      score = score - F.mse_loss(second, att_second)
+      score = score +  F.mse_loss(second, att_second)   
     return score, att_first
 
   def forward(self, span_embeddings, image_embeddings, span_mask, image_mask): # entity_mappings, trigger_mappings,
@@ -63,7 +85,6 @@ class GroundedCoreferencer(nn.Module):
     :return score: FloatTensor of size (batch size,),
     '''
     self.text_scorer.train()
-    self.image_scorer.train()
     loss = self.calculate_loss(span_embeddings, image_embeddings, span_mask, image_mask)
     return loss
 
@@ -76,28 +97,30 @@ class GroundedCoreferencer(nn.Module):
   def predict(self, first_span_embeddings, first_image_embeddings, 
               first_span_mask, first_image_mask,
               second_span_embeddings, second_image_embeddings,
-              second_span_mask, second_image_mask, batched=True):
+              second_span_mask, second_image_mask):
     '''
     :param span_embeddings: FloatTensor of size (num. of spans, span embed dim),
     :param image_embeddings: FloatTensor of size (num. of ROIs, image embed dim),
-    :param delta: FloatTensor of size (num. of spans,)
-    :param back_ptrs: LongTensor of size (num. of spans,) 
     '''
-    if not batched:
-      first_span_embeddings = first_span_embeddings.unsqueeze(0)
-      first_image_embeddings = first_image_embeddings.unsqueeze(0)  
-      first_span_mask = first_span_mask.unsqueeze(0)
-      first_image_mask = first_image_mask.unsqueeze(0)
-      second_span_embeddings = second_span_embeddings.unsqueeze(0)
-      second_image_embeddings = second_image_embeddings.unsqueeze(0)
-      second_span_mask = second_span_mask.unsqueeze(0)
-      second_image_mask = second_image_mask.unsqueeze(0)
-
+    first_span_embeddings = first_span_embeddings.unsqueeze(0)
+    first_image_embeddings = first_image_embeddings.unsqueeze(0)  
+    first_span_mask = first_span_mask.unsqueeze(0)
+    first_image_mask = first_image_mask.unsqueeze(0)
+    second_span_embeddings = second_span_embeddings.unsqueeze(0)
+    second_image_embeddings = second_image_embeddings.unsqueeze(0)
+    second_span_mask = second_span_mask.unsqueeze(0)
+    second_image_mask = second_image_mask.unsqueeze(0)
+    
     self.text_scorer.eval()
     with torch.no_grad():
       _, first_span_image_emb = self.image_scorer(first_span_embeddings, first_image_embeddings, first_span_mask, first_image_mask)
       _, second_span_image_emb = self.image_scorer(second_span_embeddings, second_image_embeddings, second_span_mask, second_image_mask)
     
+    first_span_embeddings = first_span_embeddings.squeeze(0) 
+    first_span_image_emb = first_span_image_emb.squeeze(0)
+    second_span_embeddings = second_span_embeddings.squeeze(0)
+    second_span_image_emb = second_span_image_emb.squeeze(0)
+
     scores = self.text_scorer(first_span_embeddings, second_span_embeddings) +\
              self.text_scorer(first_span_image_emb, second_span_image_emb)
     return scores

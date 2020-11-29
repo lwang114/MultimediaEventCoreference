@@ -44,10 +44,9 @@ class SpanEmbedder(nn.Module):
                  torch.zeros(max_length - len(emb), device=self.device)))
              for emb in continuous_embeddings]
           )
-        else:  
-          print(continuous_embeddings.size())
-          span_num = width.size(1)
-          max_length = continuous_embeddings.shape[1]
+        else:
+          span_num = width.size(0)
+          max_length = continuous_embeddings.size(1)
           padded_tokens_embeddings = continuous_embeddings
           masks = torch.stack(
             [torch.cat(
@@ -60,8 +59,17 @@ class SpanEmbedder(nn.Module):
 
 
 
-    def forward(self, start_end, continuous_embeddings, width):
+    def forward(self, start_end, continuous_embeddings, width): # XXX
         vector = start_end
+        B, S, M = None, None, None
+        if not isinstance(continuous_embeddings, list):
+          B = continuous_embeddings.size(0)
+          S = continuous_embeddings.size(1)
+          M = continuous_embeddings.size(2)
+          continuous_embeddings = continuous_embeddings.view(B*S, M, -1)
+          width = width.view(B*S)
+          vector = vector.view(B*S, -1)
+
         if self.use_head_attention:
             padded_tokens_embeddings, masks = self.pad_continous_embeddings(continuous_embeddings, width)
             attention_scores = self.self_attention_layer(padded_tokens_embeddings).squeeze(-1)
@@ -77,6 +85,8 @@ class SpanEmbedder(nn.Module):
             width_embedding = self.width_feature(width)
             vector = torch.cat((vector, width_embedding), dim=1)
 
+        if not isinstance(continuous_embeddings, list):
+          vector = vector.view(B, S, -1)
         return vector
 
 
@@ -106,7 +116,7 @@ class SpanScorer(nn.Module):
 class SimplePairWiseClassifier(nn.Module):
     def __init__(self, config):
         super(SimplePairWiseClassifier, self).__init__()
-        self.input_layer = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2
+        self.input_layer = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2 
         if config.with_mention_width:
             self.input_layer += config.embedding_dimension
         self.input_layer *= 3

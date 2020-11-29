@@ -11,10 +11,11 @@ import argparse
 import pyhocon 
 import random
 import numpy as np
+from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
 from models import SpanEmbedder, SimplePairWiseClassifier
-from grounded_coreference import GroundedCoreferencer, ResNet152 
-from corpus import GroundingDataset
+from grounded_coreference import GroundedCoreferencer 
+from corpus_feat import GroundingFeatureDataset
 from evaluator import Evaluation
 
 
@@ -105,9 +106,7 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
   optimizer = get_optimizer(config, [text_model, image_model, coref_model])
    
   # Start training
-  if config['training_method'] in ('continue', 'e2e') and not config['use_gold_mentions']: 
-    text_model.train()
-
+  text_model.train()
   image_model.train()
   coref_model.train()
   total_loss = 0.
@@ -128,7 +127,7 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
       optimizer.zero_grad()
 
       text_output = text_model(start_end_embeddings, continuous_embeddings, width)
-      video_output, video_mask = image_model(videos, video_mask)
+      video_output = image_model(videos)
       loss = coref_model(text_output, video_output, span_mask, video_mask).mean()
       loss.backward()
       optimizer.step()
@@ -166,16 +165,16 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
 
           # Extract span and video embeddings
           text_output = text_model(start_end_embeddings, continuous_embeddings, width)
-          video_output, video_mask = image_model(videos, video_mask)
+          video_output = image_model(videos)
          
           # Compute score for each span pair
           B = start_end_embeddings.size(0) 
           for idx in range(B):
             first_idx, second_idx, pairwise_labels = get_pairwise_labels(labels[idx, :span_num[idx]], is_training=False, device=device)
-            scores = coref_model.predict(text_output[idx, first_idx], video_output[idx, first_idx],\
-                                       text_mask[idx, first_idx], video_mask[idx, first_idx],\
-                                       text_output[idx, second_idx], video_output[idx, second_idx],\
-                                       span_mask[idx, first_idx], video_mask[idx, second_idx])
+            scores = coref_model.module.predict(text_output[idx, first_idx], video_output[idx, first_idx],\
+                                                span_mask[idx, first_idx], video_mask[idx, first_idx],\
+                                                text_output[idx, second_idx], video_output[idx, second_idx],\
+                                                span_mask[idx, first_idx], video_mask[idx, second_idx])
             all_scores.append(scores.squeeze(0))
             all_labels.append(pairwise_labels.to(torch.int)) 
 
@@ -194,7 +193,6 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
                                                              len(all_labels)))
         logger.info('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
                                                                         eval.get_precision(), eval.get_f1()))
-
 
  
 if __name__ == '__main__':
@@ -217,8 +215,8 @@ if __name__ == '__main__':
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
 
   # Initialize dataloaders
-  train_set = GroundingDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config)
-  test_set = GroundingDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config) # XXX
+  train_set = GroundingFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config)
+  test_set = GroundingFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config) # XXX
   train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
   test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
 
@@ -227,7 +225,7 @@ if __name__ == '__main__':
   embedding_dim = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2
   if config.with_mention_width:
     embedding_dim += config.embedding_dimension
-  image_model = ResNet152(embedding_dim=embedding_dim)
+  image_model = nn.Linear(2048, embedding_dim)
   coref_model = GroundedCoreferencer(config).to(device)
 
   # Training

@@ -8,17 +8,18 @@ import json
 import cv2
 import os
 import PIL.Image as Image
+import logging
 from transformers import AutoTokenizer, AutoModel
 
-
-def pad_and_read_bert(bert_token_ids, bert_model):
+logger = logging.getLogger(__name__)
+def pad_and_read_bert(bert_token_ids, bert_model, device=torch.device('cpu')):
     length = np.array([len(d) for d in bert_token_ids])
     max_length = max(length)
 
     if max_length > 512:
         raise ValueError('Error! Segment too long!')
 
-    device = bert_model.device
+    bert_model = bert_model.to(device)
     docs = torch.tensor([doc + [0] * (max_length - len(doc)) for doc in bert_token_ids], device=device)
     attention_masks = torch.tensor([[1] * len(doc) + [0] * (max_length - len(doc)) for doc in bert_token_ids], device=device)
     with torch.no_grad():
@@ -64,7 +65,7 @@ class GroundingDataset(Dataset):
     super(GroundingDataset, self).__init__()
     self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     self.segment_window = config.get('segment_window', 512) 
-    self.max_span_num = config.get('max_span_num', 256)
+    self.max_span_num = config.get('max_span_num', 80)
     self.max_frame_num = config.get('max_frame_num', 20)
     self.max_mention_span = config.get('max_mention_span', 15)
 
@@ -80,7 +81,7 @@ class GroundingDataset(Dataset):
     documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
     mentions = json.load(codecs.open(mention_json, 'r', 'utf-8'))
     documents = self.filter(documents)
-    self.doc_ids = sorted(documents)[:3] # XXX
+    self.doc_ids = sorted(documents) # XXX
     
     # Extract coreference cluster labels
     self.label_dict = self.create_dict_labels(mentions)
@@ -97,7 +98,7 @@ class GroundingDataset(Dataset):
       bert_model = AutoModel.from_pretrained(config['bert_model']).to(self.device) 
       print('{} not found, start extracting BERT embeddings ...'.format('{}_{}.npz'.format(doc_json.split('.')[0], 'bert_embeddings')))
       docs_embeddings, _ = pad_and_read_bert(self.bert_tokens, bert_model)
-      self.docs_embeddings = {'{}_{}'.format(doc_id, idx):emb.cpu().detach().data for idx, (doc_id, emb) in enumerate(zip(self.doc_ids, docs_embeddings))}
+      self.docs_embeddings = {'{}_{}'.format(doc_id, idx):emb.cpu().detach().numpy() for idx, (doc_id, emb) in enumerate(zip(self.doc_ids, docs_embeddings))}
       print('Finish extracting BERT embeddings, start saving ...')
       np.savez('{}_{}.npz'.format(doc_json.split('.')[0], 'bert_embeddings'), **self.docs_embeddings)
       print('Finish saving BERT embeddings!')
@@ -124,9 +125,9 @@ class GroundingDataset(Dataset):
     docs_origin_tokens = []
     docs_start_end_bert = []
 
-    for doc_id in sorted(documents)[:3]: # XXX
-      print(doc_id) # XXX
-      tokens = documents[doc_id]
+    for doc_id in sorted(documents): # XXX
+      # print(doc_id) # XXX
+      tokens = documents[doc_id][:self.segment_window]
       bert_tokens_ids, bert_sentence_ids = [], []
       start_bert_idx, end_bert_idx = [], [] # Start and end token indices for each bert token
       original_tokens = []
@@ -143,7 +144,8 @@ class GroundingDataset(Dataset):
           bert_end_index = bert_cursor
           end_bert_idx.append(bert_end_index)
           original_tokens.append([sent_id, token_id, token_text, flag_sentence])
-
+      if len(bert_tokens_ids) > 512:
+        print(doc_id, len(bert_tokens_ids))
       docs_bert_tokens.append(bert_tokens_ids)
       docs_origin_tokens.append(original_tokens)
       start_end = np.concatenate((np.expand_dims(start_bert_idx, 1), np.expand_dims(end_bert_idx, 1)), axis=1)
@@ -200,10 +202,8 @@ class GroundingDataset(Dataset):
     labels = [int(self.label_dict[self.doc_ids[idx]][(start, end)]) for start, end in zip(origin_candidate_starts, origin_candidate_ends)]
     labels = torch.LongTensor(labels)
     labels = fix_embedding_length(labels.unsqueeze(1), self.max_span_num).squeeze(1)
-
-
-    # TODO Confirm output format
     mask = torch.FloatTensor([1. if i < span_num else 0 for i in range(self.max_span_num)])
+
     return start_end_embeddings, continuous_tokens_embeddings, mask, width, labels
 
   def load_video(self, filename):
@@ -212,20 +212,29 @@ class GroundingDataset(Dataset):
     :return video_frames: FloatTensor of size (batch size, max num. of frames, width, height, n_channel)
     :return mask: LongTensor of size (batch size, max num. of frames)
     '''    
+    # Create mask
+    mask = torch.ones((self.max_frame_num,))
+
     # Load video
-    cap = cv2.VideoCapture(filename)
-    video = []
-    while True:
-      ret, img = cap.read()
-      if not ret:
-        print('{}, number of video frames: {}'.format(filename, len(video)))
-        break
-      video.append(img)
+    try:
+      cap = cv2.VideoCapture(filename)
+      video = []
+      while True:
+        ret, img = cap.read()
+        if not ret:
+          print('{}, number of video frames: {}'.format(filename, len(video)))
+          break
+        video.append(img)
     
-    # Subsample the video frames
-    step = len(video) // self.max_frame_num
-    indices = list(range(0, step*self.max_frame_num, step))
-     
+      # Subsample the video frames
+      step = len(video) // self.max_frame_num
+      indices = list(range(0, step*self.max_frame_num, step))
+    except:
+      print('Corrupted video file: {}'.format(filename))
+      logging.info('Corrupted video file: {}'.format(filename))
+      video = [torch.zeros((1, 3, 224, 224)) for _ in range(self.max_frame_num)]
+      return torch.cat(video, dim=0), mask
+
     images = [video[idx] for idx in indices] 
 
     video_frames = []
@@ -236,9 +245,7 @@ class GroundingDataset(Dataset):
         image_vec = self.transform(image)
       video_frames.append(image_vec.unsqueeze(0))
 
-    mask = torch.ones((self.max_frame_num,))
     return torch.cat(video_frames, dim=0), mask
-
 
   def __getitem__(self, idx):
     filename = os.path.join(self.img_dir, self.doc_ids[idx]+'.mp4')
