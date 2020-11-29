@@ -12,7 +12,7 @@ from model_utils import *
 from utils import *
 
 
-
+logger = logging.getLogger(__name__)
 def train_pairwise_classifier(config, pairwise_model, span_repr, span_scorer, span_embeddings,
                                     first, second, labels, batch_size, criterion, optimizer):
     accumulate_loss = 0

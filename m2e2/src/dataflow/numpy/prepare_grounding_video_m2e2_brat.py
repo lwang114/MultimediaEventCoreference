@@ -8,7 +8,7 @@ from allennlp.predictors.predictor import Predictor
 import allennlp_models.structured_prediction
 
 nlp = spacy.load('en_core_web_sm')
-dep_parser = Predictor.from_path('//storage.googleapis.com/allennlp-public-models/biaffine-dependency-parser-ptb-2020.04.06.tar.gz')
+dep_parser = Predictor.from_path('https://storage.googleapis.com/allennlp-public-models/biaffine-dependency-parser-ptb-2020.04.06.tar.gz')
 def int_overlap(a1, b1, a2, b2):
   '''Checks whether two intervals overlap'''
   if b1 < a2 or b2 < a1:
@@ -286,7 +286,14 @@ def download_video(m2e2_caption):
       youtube_id = caption_dict['id'].split('v=')[-1]
       video_name = os.path.join(img_dir, youtube_id+'.mp4')
       if not os.path.isfile(video_name):
-        os.system('youtube-dl -i -f mp4 -o {} {}'.format(video_name, caption_dict['id']))
+        print(caption_dict['id'], youtube_id, youtube_id == '7WMebV5qt3s')
+        os.system('youtube-dl -f mp4 -R 1 -o {} {}'.format(video_name, caption_dict['id']))
+      
+      if not os.path.isfile(video_name):
+        print(caption_dict['id'], youtube_id, youtube_id == '7WMebV5qt3s')
+        os.system('youtube-dl -R 1 -o {} {}'.format(video_name, caption_dict['id']))
+
+      
 
 def main(grounding_dir, img_dir, m2e2_caption, m2e2_annotation_dir, out_prefix='m2e2'):
     '''
@@ -302,9 +309,9 @@ def main(grounding_dir, img_dir, m2e2_caption, m2e2_annotation_dir, out_prefix='
     
 		# Create a list of (youtube_id, ann_file); download images/videos to img_dir
     download_video(m2e2_caption) 
-
-    ''' XXX 
+ 
 		# Filter out unannotated examples
+    '''
     ann_files = []
     for ann_file in os.listdir(os.path.join(m2e2_annotation_dir, '*.ann')):
       with open(os.path.join(m2e2_annotation_dir, ann_file), 'r') as f:

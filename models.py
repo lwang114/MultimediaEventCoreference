@@ -45,6 +45,7 @@ class SpanEmbedder(nn.Module):
              for emb in continuous_embeddings]
           )
         else:  
+          print(continuous_embeddings.size())
           span_num = width.size(1)
           max_length = continuous_embeddings.shape[1]
           padded_tokens_embeddings = continuous_embeddings

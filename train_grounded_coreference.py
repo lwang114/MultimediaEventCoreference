@@ -1,8 +1,16 @@
 # Some code borrowed from https://github.com/ariecattan/coref/
 import torch
+import torch.nn as nn
+import torch.optim as optim
 import os
 import logging
 import time
+from datetime import datetime
+import json
+import argparse
+import pyhocon 
+import random
+import numpy as np
 from transformers import AdamW, get_linear_schedule_with_warmup
 from models import SpanEmbedder, SimplePairWiseClassifier
 from grounded_coreference import GroundedCoreferencer, ResNet152 
@@ -10,9 +18,7 @@ from corpus import GroundingDataset
 from evaluator import Evaluation
 
 
-logging.basicConfig(filename='{}/train.log'.format(args.exp_dir), format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
 logger = logging.getLogger(__name__)
-
 def fix_seed(config):
     torch.manual_seed(config.random_seed)
     random.seed(config.random_seed)
@@ -68,7 +74,7 @@ def get_pairwise_labels(labels, is_training, device):
 
 
 def train(text_model, image_model, coref_model, train_loader, test_loader, args):
-  config = json.load(open(args.config_file))
+  config = pyhocon.ConfigFactory.parse_file(args.config)
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
   torch.set_grad_enabled(True)
   fix_seed(config)
@@ -96,7 +102,7 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
     coref_model.load_state_dict(torch.load('{}/models/text_scorer.{}.pth'.format(args.exp_dir, args.start_epoch)))
 
   # Set up the optimizer  
-  optimizer = get_optimizer([text_model, image_model, coref_model], config)
+  optimizer = get_optimizer(config, [text_model, image_model, coref_model])
    
   # Start training
   if config['training_method'] in ('continue', 'e2e') and not config['use_gold_mentions']: 
@@ -107,7 +113,7 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
   total_loss = 0.
   total = 0.
   begin_time = time.time()
-  for epoch in range(args.start_epoch, args.n_epochs):
+  for epoch in range(args.start_epoch, config.epochs):
     for i, batch in enumerate(train_loader):
       start_end_embeddings, continuous_embeddings,\
       span_mask, width, videos, video_mask, _ = batch   
@@ -125,9 +131,9 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
       L = videos.size(1)
       W, H, C = videos.size(2), videos.size(3), videos.size(4)
       video_output = image_model(videos.view(B*L, W, H, C))\
-      .view(B, L*video_output.size(2)*video_output.size(3), video_output.size(4)) 
+                     .view(B, L*video_output.size(2)*video_output.size(3), video_output.size(4)) 
       video_mask = video_mask.unsqueeze(-1).repeat(1, 1, video_output.size(2)*video_output.size(3)).view(B, -1)
-      loss = coref_model(text_output, video_output, span_mask, video_mask) # TODO
+      loss = coref_model(text_output, video_output, span_mask, video_mask)
       loss.backward()
       optimizer.step()
 
@@ -138,7 +144,7 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
         print(info)
         logger.info(info) 
     
-    info = 'Epoch: [{}][{}/{}]\tTime {:.3f}\tLoss total {:.4f} ({:.4f})'.format(epoch, i, time.time()-begin_time, total_loss, total_loss / total)
+    info = 'Epoch: [{}][{}/{}]\tTime {:.3f}\tLoss total {:.4f} ({:.4f})'.format(epoch, i, len(train_loader), time.time()-begin_time, total_loss, total_loss / total)
     print(info)
     logger.info(info)
 
@@ -201,26 +207,34 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
 
  
 if __name__ == '__main__':
-  import argparse
   # Set up argument parser
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-  parser.add_argument('--exp_dir', type=str, default='./')
-  parser.add_argument('--config', type=str, default='config/grounded_coreference.json')
+  parser.add_argument('--exp_dir', type=str, default='models/grounded_coref')
+  parser.add_argument('--config', type=str, default='configs/config_grounded.json')
   parser.add_argument('--start_epoch', type=int, default=0)
   args = parser.parse_args()
 
-  # Initialize dataloaders
-  config = json.load(open(args.config))
-  train_set = GroundingDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config)
-  test_set = GroundingDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), config)
-  train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
-  test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False,
-  num_workers=0, pin_memory=True)
+  device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+  if not os.path.isdir(args.exp_dir):
+    os.mkdir(args.exp_dir)
 
-  # TODO Initialize models
+  # Set up logger
+  config = pyhocon.ConfigFactory.parse_file(args.config)
+  if not os.path.isdir(config['log_path']):
+    os.mkdir(config['log_path']) 
+  logging.basicConfig(filename=os.path.join(config['log_path'],'{}.txt'.format(datetime.now().strftime("%Y_%m_%d_%H_%M_%S"))),\
+                      format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
+
+  # Initialize dataloaders
+  train_set = GroundingDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config)
+  test_set = GroundingDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config) # XXX
+  train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
+  test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
+
+  # Initialize models
   text_model = SpanEmbedder(config, device).to(device)
   image_model = ResNet152(embedding_dim=config['hidden_layer'])
   coref_model = GroundedCoreferencer(config).to(device)
 
-  # TODO Training
-  train(text_model, image_model, coref_model, train_set, test_set, args)
+  # Training
+  train(text_model, image_model, coref_model, train_loader, test_loader, args)

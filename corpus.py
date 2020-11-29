@@ -1,9 +1,13 @@
 import numpy as np
 import collections
+import codecs
 import torch
 from torch.utils.data import Dataset
+import torchvision.transforms as transforms
 import json
 import cv2
+import os
+import PIL.Image as Image
 from transformers import AutoTokenizer, AutoModel
 
 
@@ -33,7 +37,7 @@ def get_all_token_embedding(embedding, start, end):
 def fix_embedding_length(emb, L):
   size = emb.size()[1:]
   if emb.size(0) < L:
-    pad = [torch.zeros(size).unsqueeze(0) for _ in range(L-emb.size(0))]
+    pad = [torch.zeros(size, dtype=emb.dtype).unsqueeze(0) for _ in range(L-emb.size(0))]
     emb = torch.cat([emb]+pad, dim=0)
   else:
     emb = emb[:L]
@@ -60,11 +64,11 @@ class GroundingDataset(Dataset):
     super(GroundingDataset, self).__init__()
     self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     self.segment_window = config.get('segment_window', 512) 
-    self.max_span_num = config.get('max_span_num', 50)
+    self.max_span_num = config.get('max_span_num', 256)
     self.max_frame_num = config.get('max_frame_num', 20)
     self.max_mention_span = config.get('max_mention_span', 15)
 
-    self.img_dir = config.get('img_dir', './')
+    self.img_dir = config.get('image_dir', './')
     self.transform = transforms.Compose([
             transforms.Resize(256),
             transforms.RandomHorizontalFlip(),
@@ -72,26 +76,46 @@ class GroundingDataset(Dataset):
             transforms.ToTensor(),
             transforms.Normalize((0.485, 0.456, 0.406),
                                  (0.229, 0.224, 0.225))])
+    # Extract doc/image ids
     documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
     mentions = json.load(codecs.open(mention_json, 'r', 'utf-8'))
-    
-    # Extract image ids
-    self.video_ids = sorted(documents)
+    documents = self.filter(documents)
+    self.doc_ids = sorted(documents)[:3] # XXX
     
     # Extract coreference cluster labels
-    self.label_dicts = self.create_dict_labels(mentions)
+    self.label_dict = self.create_dict_labels(mentions)
     
     # Extract original mention spans
-    self.candidate_start_ends = [np.asarray([[start, end] for start, end in sorted(label_dict[doc_id])]) for doc_id in sorted(documents)]
-    
+    self.candidate_start_ends = [np.asarray([[start, end] for start, end in sorted(self.label_dict[doc_id])]) for doc_id in self.doc_ids]
+
     # Tokenize documents and extract token spans after bert tokenization
     self.tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
     self.origin_tokens, self.bert_tokens, self.bert_start_ends = self.tokenize(documents) 
-    
-    # Extract BERT embeddings
-    self.bert_model = AutoModel.from_pretrained(config['bert_model']).to(self.device) 
-    self.docs_embeddings = pad_and_read_bert(self.bert_tokens, self.bert_model)
 
+    # Extract BERT embeddings
+    if not os.path.exists('{}_{}.npz'.format(doc_json.split('.')[0], 'bert_embeddings')):
+      bert_model = AutoModel.from_pretrained(config['bert_model']).to(self.device) 
+      print('{} not found, start extracting BERT embeddings ...'.format('{}_{}.npz'.format(doc_json.split('.')[0], 'bert_embeddings')))
+      docs_embeddings, _ = pad_and_read_bert(self.bert_tokens, bert_model)
+      self.docs_embeddings = {'{}_{}'.format(doc_id, idx):emb.cpu().detach().data for idx, (doc_id, emb) in enumerate(zip(self.doc_ids, docs_embeddings))}
+      print('Finish extracting BERT embeddings, start saving ...')
+      np.savez('{}_{}.npz'.format(doc_json.split('.')[0], 'bert_embeddings'), **self.docs_embeddings)
+      print('Finish saving BERT embeddings!')
+    else:
+      print('Load existing BERT embeddings from {}'.format('{}_{}.npz'.format(doc_json.split('.')[0], 'bert_embeddings')))
+      self.docs_embeddings = np.load('{}_{}.npz'.format(doc_json.split('.')[0], 'bert_embeddings'))
+
+
+  def filter(self, documents):
+    filtered_documents = {}
+    for doc_id in sorted(documents): 
+        filename = os.path.join(self.img_dir, doc_id+'.mp4')
+        if os.path.exists(filename):
+            filtered_documents[doc_id] = documents[doc_id]
+    print('Keep {} out of {} documents'.format(len(filtered_documents), len(documents)))
+    return filtered_documents
+                                      
+        
   def tokenize(self, documents):
     '''
     Tokenize the sentences in BERT format. Adapted from https://github.com/ariecattan/coref
@@ -100,7 +124,8 @@ class GroundingDataset(Dataset):
     docs_origin_tokens = []
     docs_start_end_bert = []
 
-    for doc_id in sorted(documents):
+    for doc_id in sorted(documents)[:3]: # XXX
+      print(doc_id) # XXX
       tokens = documents[doc_id]
       bert_tokens_ids, bert_sentence_ids = [], []
       start_bert_idx, end_bert_idx = [], [] # Start and end token indices for each bert token
@@ -119,7 +144,7 @@ class GroundingDataset(Dataset):
           end_bert_idx.append(bert_end_index)
           original_tokens.append([sent_id, token_id, token_text, flag_sentence])
 
-      docs_bert_tokens.append(bert_token_ids)
+      docs_bert_tokens.append(bert_tokens_ids)
       docs_origin_tokens.append(original_tokens)
       start_end = np.concatenate((np.expand_dims(start_bert_idx, 1), np.expand_dims(end_bert_idx, 1)), axis=1)
       docs_start_end_bert.append(start_end)
@@ -132,7 +157,7 @@ class GroundingDataset(Dataset):
     '''
     label_dict = collections.defaultdict(dict)
     for m in mentions:
-      label_dict[m['doc_id']][(min(m['token_ids']), max(m['tokens_ids']))] = m['cluster_id']
+      label_dict[m['doc_id']][(min(m['tokens_ids']), max(m['tokens_ids']))] = m['cluster_id']
     return label_dict    
   
   def load_text(self, idx):
@@ -144,25 +169,27 @@ class GroundingDataset(Dataset):
     :return span_mask: LongTensor of size (batch size, max num. spans) 
     '''
     # Extract the original spans of the current doc
-    origin_candidate_starts = self.candidate_start_ends[idx][0]
-    origin_candidate_ends = self.candidate_start_ends[idx][1]
+    origin_candidate_starts = self.candidate_start_ends[idx][:, 0]
+    origin_candidate_ends = self.candidate_start_ends[idx][:, 1]
 
     # Convert the original spans to the bert tokenized spans
     bert_start_ends = self.bert_start_ends[idx]
-    bert_candidate_starts = bert_start_ends[origin_candidate_starts]
-    bert_candidate_ends = bert_start_ends[origin_candidate_ends]
+    bert_candidate_starts = bert_start_ends[origin_candidate_starts, 0]
+    bert_candidate_ends = bert_start_ends[origin_candidate_ends, 1]
     span_num = len(bert_candidate_starts)
 
     # Extract the current doc embedding
     doc_len = len(self.bert_tokens[idx])
-    doc_embeddings = self.docs_embeddings[idx][:doc_len]
+    doc_embeddings = self.docs_embeddings['{}_{}'.format(self.doc_ids[idx], idx)][:doc_len]
+    doc_embeddings = torch.FloatTensor(doc_embeddings)
     start_end_embeddings = torch.cat((doc_embeddings[bert_candidate_starts],
                                       doc_embeddings[bert_candidate_ends]), dim=1)
     continuous_tokens_embeddings, width = get_all_token_embedding(doc_embeddings, 
-                                                                   bert_candidate_starts,
-                                                                   bert_candidate_ends)
-    continuous_tokens_embeddings = torch.FloatTensor([fix_embedding_length(length(emb, self.max_mention_span)\
-                                           for emb in continuous_tokens_embeddings])
+                                                                  bert_candidate_starts,
+                                                                  bert_candidate_ends)
+    continuous_tokens_embeddings = torch.stack([fix_embedding_length(emb, self.max_mention_span)\
+                                           for emb in continuous_tokens_embeddings], axis=0)
+    width = torch.LongTensor(width)
 
     # Pad/truncate the outputs to max num. of spans
     start_end_embeddings = fix_embedding_length(start_end_embeddings, self.max_span_num)
@@ -170,11 +197,14 @@ class GroundingDataset(Dataset):
     width = fix_embedding_length(width.unsqueeze(1), self.max_span_num).squeeze(1)
 
     # Extract coreference cluster labels
-    labels = [int(self.label_dict[self.video_ids[idx]][(start, end)]) for start, end in zip(origin_candidate_starts, origin_candidate_ends)]
+    labels = [int(self.label_dict[self.doc_ids[idx]][(start, end)]) for start, end in zip(origin_candidate_starts, origin_candidate_ends)]
+    labels = torch.LongTensor(labels)
+    labels = fix_embedding_length(labels.unsqueeze(1), self.max_span_num).squeeze(1)
+
 
     # TODO Confirm output format
-    mask = torch.LongTensor([1. if i < span_num else 0 for i in range(self.max_span_num)])
-    return start_end_embeddings, continuous_embeddings, torch.LongTensor(mask), torch.LongTensor(width), torch.LongTensor(labels)
+    mask = torch.FloatTensor([1. if i < span_num else 0 for i in range(self.max_span_num)])
+    return start_end_embeddings, continuous_tokens_embeddings, mask, width, labels
 
   def load_video(self, filename):
     '''Load video
@@ -188,24 +218,22 @@ class GroundingDataset(Dataset):
     while True:
       ret, img = cap.read()
       if not ret:
-        print('Number of video frames: {}'.format(len(img)))
+        print('{}, number of video frames: {}'.format(filename, len(video)))
         break
       video.append(img)
     
     # Subsample the video frames
-    if len(video) < self.max_frame_num:
-      video = video.extend([np.zeros((224, 224, 3)) for _ in range(self.max_frame_num-len(video))])
     step = len(video) // self.max_frame_num
     indices = list(range(0, step*self.max_frame_num, step))
      
-    images = video[indices] 
+    images = [video[idx] for idx in indices] 
 
     video_frames = []
     for image in images:
       image = Image.fromarray(image)
       # Apply transform to each frame
-      if transform is not None:
-        image_vec = transform(image)
+      if self.transform is not None:
+        image_vec = self.transform(image)
       video_frames.append(image_vec.unsqueeze(0))
 
     mask = torch.ones((self.max_frame_num,))
@@ -213,7 +241,10 @@ class GroundingDataset(Dataset):
 
 
   def __getitem__(self, idx):
-    filename = os.path.join(self.img_dir, self.video_ids[idx]+'.mp4')
+    filename = os.path.join(self.img_dir, self.doc_ids[idx]+'.mp4')
     video_frames, video_mask = self.load_video(filename)
     start_end_embeddings, continuous_embeddings, span_mask, width, labels = self.load_text(idx)
-    return start_end_embeddings, continuous_embeddings, span_mask, width, video_frames, video_mask, labels 
+    return start_end_embeddings, continuous_embeddings, span_mask, width, video_frames, video_mask, labels
+
+  def __len__(self):
+    return len(self.doc_ids)

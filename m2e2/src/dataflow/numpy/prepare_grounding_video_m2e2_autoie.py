@@ -91,10 +91,16 @@ def generate_json(img_id, text, anns, example_list):
       # Events
       for trigger in ann['graph']['triggers']:
         sen_obj['golden-event-mentions'].append({
-          'start': trigger[0],
-          'end': trigger[1],
+          'trigger': {'start': trigger[0],
+                      'end': trigger[1],
+                      'text': ' '.join(tokens[trigger[0]:trigger[1]+1])},
           'event-type': trigger[2],
-          'text': ' '.join(tokens[trigger[0]:trigger[1]+1])})
+          'arguments': []})
+        for role in ann['graph']['roles']:
+          sen_obj['golden-event-mentions'][-1]['arguments'].append({'start': role[0],
+                  'end': role[1],
+                  'role': role[2],
+                  'text': ' '.join(tokens[role[0]:role[1]+1])})
       example_list.append(sen_obj)
     return example_list
         

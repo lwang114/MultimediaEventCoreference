@@ -3,14 +3,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import torchvision.models as models
-    
+from models import SimplePairWiseClassifier  
 
-class ResNet152:
+class ResNet152(nn.Module):
   def __init__(self, embedding_dim=1024, device=torch.device('cpu')):
+    super(ResNet152, self).__init__()
     net = getattr(models, 'resnet152')(pretrained=True)
     b = list(net.children())
     self.backbone = nn.Sequential(*b[:-2])
-    self.pooler = nn.Sequential(*b[-2])
+    self.pooler = nn.Sequential(*[b[-2]])
     self.embedder = nn.Linear(2048, embedding_dim)
     
     for p in self.backbone.parameters():
@@ -31,6 +32,7 @@ class ResNet152:
 
 class GroundedCoreferencer(nn.Module):
   def __init__(self, config):
+    super(GroundedCoreferencer, self).__init__()
     self.text_scorer = SimplePairWiseClassifier(config) 
     self.image_scorer = self.score_image
 
@@ -45,12 +47,12 @@ class GroundedCoreferencer(nn.Module):
     
     att_weights_first = F.softmax(att_weights * second_mask.unsqueeze(1), dim=-1)
     att_first = torch.matmul(att_weights_first, second)
-    scores = -torch.dist(first, att_first, 2) 
+    score = -F.mse_loss(first, att_first) 
     if score_type == 'both':
       att_weights_second = F.softmax(torch.transpose(att_weights, 1, 2) * first_mask.unsqueeze(1), dim=-1)    
       att_second = torch.matmul(att_weights_second, first)
-      scores = scores - torch.dist(second, att_second, 2)
-    return scores, att_first
+      score = score - F.mse_loss(second, att_second)
+    return score, att_first
 
   def forward(self, span_embeddings, image_embeddings, span_mask, image_mask): # entity_mappings, trigger_mappings,
     '''
@@ -68,8 +70,8 @@ class GroundedCoreferencer(nn.Module):
   def calculate_loss(self, span_emb, image_emb, span_mask, image_mask):
     B = span_emb.size(0)
     # Compute visual grounding scores   
-    image_scores, _ = self.image_scorer(span_emb, image_emb, span_mask, image_mask)
-    return torch.mean(image_scores)
+    loss, _ = self.image_scorer(span_emb, image_emb, span_mask, image_mask)
+    return loss
     
   def predict(self, first_span_embeddings, first_image_embeddings, 
               first_span_mask, first_image_mask,
