@@ -9,6 +9,7 @@ import cv2
 import os
 import PIL.Image as Image
 import logging
+import math
 from transformers import AutoTokenizer, AutoModel
 
 logger = logging.getLogger(__name__)
@@ -216,36 +217,34 @@ class GroundingDataset(Dataset):
     mask = torch.ones((self.max_frame_num,))
 
     # Load video
-    try:
-      cap = cv2.VideoCapture(filename)
-      video = []
-      while True:
-        ret, img = cap.read()
-        if not ret:
-          print('{}, number of video frames: {}'.format(filename, len(video)))
-          break
-        video.append(img)
+    # try:
+    cap = cv2.VideoCapture(filename)
+    frame_rate = cap.get(5)
+    video = []
+    while True:
+      frame_id = cap.get(1)
+      ret, img = cap.read()
+      if not ret:
+        print('{}, number of video frames: {}'.format(filename, len(video)))
+        break
+      if (frame_id % math.floor(frame_rate) == 0):
+        video.append(img)    
+
+    # Subsample the video frames
+    step = len(video) // self.max_frame_num
+    indices = list(range(0, step*self.max_frame_num, step))
+    # except:
+    #   print('Corrupted video file: {}'.format(filename))
+    #   logging.info('Corrupted video file: {}'.format(filename))
+    #   video = [torch.zeros((1, 3, 224, 224)) for _ in range(self.max_frame_num)]
+    #   return torch.cat(video, dim=0), mask
+    video = [Image.fromarray(video[idx]) for idx in indices]
+
+    # Apply transform to each frame
+    if self.transform is not None:
+      video = [self.transform(img).unsqueeze(0) for img in video]
     
-      # Subsample the video frames
-      step = len(video) // self.max_frame_num
-      indices = list(range(0, step*self.max_frame_num, step))
-    except:
-      print('Corrupted video file: {}'.format(filename))
-      logging.info('Corrupted video file: {}'.format(filename))
-      video = [torch.zeros((1, 3, 224, 224)) for _ in range(self.max_frame_num)]
-      return torch.cat(video, dim=0), mask
-
-    images = [video[idx] for idx in indices] 
-
-    video_frames = []
-    for image in images:
-      image = Image.fromarray(image)
-      # Apply transform to each frame
-      if self.transform is not None:
-        image_vec = self.transform(image)
-      video_frames.append(image_vec.unsqueeze(0))
-
-    return torch.cat(video_frames, dim=0), mask
+    return torch.cat(video, dim=0), mask
 
   def __getitem__(self, idx):
     filename = os.path.join(self.img_dir, self.doc_ids[idx]+'.mp4')
