@@ -175,7 +175,8 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
                                                 span_mask[idx, first_idx], video_mask[idx],\
                                                 text_output[idx, second_idx], video_output[idx],\
                                                 span_mask[idx, second_idx], video_mask[idx])
-            all_scores.append(scores.squeeze(0))
+            all_scores.append(scores.squeeze(1))
+             
             all_labels.append(pairwise_labels.to(torch.int)) 
 
         all_scores = torch.cat(all_scores)

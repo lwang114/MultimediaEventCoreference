@@ -228,6 +228,11 @@ if __name__ == '__main__':
 
         strict_preds = (all_scores > 0).to(torch.int)
         eval = Evaluation(strict_preds, all_labels.to(device))
+        print('Number of predictions: {}/{}'.format(strict_preds.sum(), len(strict_preds)))
+        print('Number of positive pairs: {}/{}'.format(len((all_labels == 1).nonzero()),
+                                                       len(all_labels)))
+        print('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
+                                                                  eval.get_precision(), eval.get_f1()))
         logger.info('Number of predictions: {}/{}'.format(strict_preds.sum(), len(strict_preds)))
         logger.info('Number of positive pairs: {}/{}'.format(len((all_labels == 1).nonzero()),
                                                              len(all_labels)))

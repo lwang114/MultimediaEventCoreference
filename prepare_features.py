@@ -26,27 +26,27 @@ def load_video(filename, config, transform=None):
     mask = torch.ones((max_frame_num,))
 
     # Load video
-    # try:
-    cap = cv2.VideoCapture(filename)
-    frame_rate = cap.get(5) 
-    video = [] 
-    while True:
-      frame_id = cap.get(1)
-      ret, img = cap.read()
-      if not ret:
-        print('{}, frame_rate, number of video frames: {}'.format(filename, frame_rate, len(video)))
-        break
-      if (frame_id % math.floor(frame_rate) == 0):
-        video.append(img)    
+    try:
+      cap = cv2.VideoCapture(filename)
+      frame_rate = cap.get(5) 
+      video = [] 
+      while True:
+        frame_id = cap.get(1)
+        ret, img = cap.read()
+        if not ret:
+          print('{}, frame_rate, number of video frames: {}, {}'.format(filename, frame_rate, len(video)))
+          break
+        if (frame_id % math.floor(frame_rate) == 0):
+          video.append(img)    
 
-    # Subsample the video frames
-    step = len(video) // max_frame_num
-    indices = list(range(0, step*max_frame_num, step))
-    # except:
-    #   print('Corrupted video file: {}'.format(filename))
-    #   logging.info('Corrupted video file: {}'.format(filename))
-    #   video = [torch.zeros((1, 3, 224, 224)) for _ in range(self.max_frame_num)]
-    #   return torch.cat(video, dim=0), mask
+      # Subsample the video frames
+      step = len(video) // max_frame_num
+      indices = list(range(0, step*max_frame_num, step))
+    except:
+      print('Corrupted video file: {}'.format(filename))
+      logging.info('Corrupted video file: {}'.format(filename))
+      video = [torch.zeros((1, 3, 224, 224)) for _ in range(max_frame_num)]
+      return torch.cat(video, dim=0), mask
     video = [Image.fromarray(video[idx]) for idx in indices]
 
     # Apply transform to each frame

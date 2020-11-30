@@ -47,6 +47,8 @@ class SpanEmbedder(nn.Module):
         else:
           span_num = width.size(0)
           max_length = continuous_embeddings.size(1)
+          if (max_length - width.max()) < 0:
+            print('max width {} is shorter than max width {} in the batch!'.format(max_length, width.max()))
           padded_tokens_embeddings = continuous_embeddings
           masks = torch.stack(
             [torch.cat(

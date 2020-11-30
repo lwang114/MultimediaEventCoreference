@@ -155,6 +155,7 @@ class GroundingFeatureDataset(Dataset):
     :return (bert_candidate_starts, bert_candidate_ends):
     :return span_mask: LongTensor of size (batch size, max num. spans) 
     '''
+    print(self.doc_ids[idx]) # XXX
     # Extract the original spans of the current doc
     origin_candidate_starts = self.candidate_start_ends[idx][:, 0]
     origin_candidate_ends = self.candidate_start_ends[idx][:, 1]
@@ -176,7 +177,7 @@ class GroundingFeatureDataset(Dataset):
                                                                   bert_candidate_ends)
     continuous_tokens_embeddings = torch.stack([fix_embedding_length(emb, self.max_mention_span)\
                                            for emb in continuous_tokens_embeddings], axis=0)
-    width = torch.LongTensor(width)
+    width = torch.LongTensor([min(w, self.max_mention_span) for w in width])
 
     # Pad/truncate the outputs to max num. of spans
     start_end_embeddings = fix_embedding_length(start_end_embeddings, self.max_span_num)
