@@ -171,10 +171,10 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
           B = start_end_embeddings.size(0) 
           for idx in range(B):
             first_idx, second_idx, pairwise_labels = get_pairwise_labels(labels[idx, :span_num[idx]], is_training=False, device=device)
-            scores = coref_model.module.predict(text_output[idx, first_idx], video_output[idx, first_idx],\
-                                                span_mask[idx, first_idx], video_mask[idx, first_idx],\
-                                                text_output[idx, second_idx], video_output[idx, second_idx],\
-                                                span_mask[idx, first_idx], video_mask[idx, second_idx])
+            scores = coref_model.module.predict(text_output[idx, first_idx], video_output[idx],\
+                                                span_mask[idx, first_idx], video_mask[idx],\
+                                                text_output[idx, second_idx], video_output[idx],\
+                                                span_mask[idx, second_idx], video_mask[idx])
             all_scores.append(scores.squeeze(0))
             all_labels.append(pairwise_labels.to(torch.int)) 
 
@@ -227,6 +227,12 @@ if __name__ == '__main__':
     embedding_dim += config.embedding_dimension
   image_model = nn.Linear(2048, embedding_dim)
   coref_model = GroundedCoreferencer(config).to(device)
+
+  if config['training_method'] in ('pipeline', 'continue'):
+      text_model.load_state_dict(torch.load(config['span_repr_path'], map_location=device))
+      image_model.load_state_dict(torch.load(config['image_repr_path'], map_location=device))
+      coref_model.text_scorer.load_state_dict(torch.load(config['pairwise_scorer_path'], map_location=device))
+  
 
   # Training
   train(text_model, image_model, coref_model, train_loader, test_loader, args)
