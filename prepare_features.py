@@ -68,18 +68,19 @@ def cleanup(documents, config):
 def main():
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   parser.add_argument('--config', type=str, default='configs/config_grounded.json')
+  parser.add_argument('--split', choices={'train', 'test'}, default='train')
   args = parser.parse_args()  
   config = pyhocon.ConfigFactory.parse_file(args.config) 
   if not os.path.isdir(config['log_path']):
     os.mkdir(config['log_path']) 
   
-  if not os.path.isdir(os.path.join(config['data_folder'], 'train_resnet152/')):
-    os.mkdir(os.path.join(config['data_folder'], 'train_resnet152/'))
+  if not os.path.isdir(os.path.join(config['data_folder'], args.split+'_resnet152/')):
+    os.mkdir(os.path.join(config['data_folder'], args.split+'_resnet152/'))
   logging.basicConfig(filename=os.path.join(config['log_path'],'prep_feat_{}.txt'.format(datetime.now().strftime("%Y_%m_%d_%H_%M_%S"))),\
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO)   
 
   # Extract doc ids
-  doc_json = os.path.join(config['data_folder'], 'train.json')
+  doc_json = os.path.join(config['data_folder'], args.split+'.json')
   documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))   
   documents = cleanup(documents, config)
   doc_ids = sorted(documents) # XXX
@@ -95,7 +96,7 @@ def main():
   image_model = ResNet152(device=torch.device('cuda')) 
 
   for idx, doc_id in enumerate(doc_ids):
-    embed_file = os.path.join(config['data_folder'], 'train_resnet152/{}_{}.npy'.format(doc_id, idx))
+    embed_file = os.path.join(config['data_folder'], '{}_resnet152/{}_{}.npy'.format(args.split, doc_id, idx))
     video_file = os.path.join(config['image_dir'], doc_id+'.mp4')
     if os.path.exists(embed_file):
       print('Skip {}_{}'.format(doc_id, idx))

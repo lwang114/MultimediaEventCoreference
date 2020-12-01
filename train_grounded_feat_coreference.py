@@ -41,6 +41,8 @@ def get_optimizer(config, models):
         return optim.SGD(parameters, lr=config.learning_rate, weight_decay=config.weight_decay)
 
 def get_pairwise_labels(labels, is_training, device):
+    if len(labels) <= 1:
+      return None, None, None
     first, second = zip(*list(combinations(range(len(labels)), 2)))
     first = torch.tensor(first)
     second = torch.tensor(second)
@@ -71,7 +73,9 @@ def get_pairwise_labels(labels, is_training, device):
 
     return first, second, pairwise_labels
 
-
+def make_prediction_readable(pred_json, readable_json='prediction_readable.txt'): # TODO
+  pred_dicts = json.load(open(pred_json, 'r'))
+    
 
 
 def train(text_model, image_model, coref_model, train_loader, test_loader, args):
@@ -112,6 +116,8 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
   total_loss = 0.
   total = 0.
   begin_time = time.time()
+  if args.evaluate_only:
+    config.epochs = 0
   for epoch in range(args.start_epoch, config.epochs):
     for i, batch in enumerate(train_loader):
       start_end_embeddings, continuous_embeddings,\
@@ -143,14 +149,15 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
     print(info)
     logger.info(info)
 
-    torch.save(text_model.module.state_dict(), '{}/text_model.{}.pth'.format(args.exp_dir, args.start_epoch))
-    torch.save(image_model.module.state_dict(), '{}/image_model.{}.pth'.format(args.exp_dir, args.start_epoch))
-    torch.save(coref_model.module.text_scorer.state_dict(), '{}/text_scorer.{}.pth'.format(args.exp_dir, args.start_epoch))
+    torch.save(text_model.module.state_dict(), '{}/text_model.{}.pth'.format(args.exp_dir, epoch))
+    torch.save(image_model.module.state_dict(), '{}/image_model.{}.pth'.format(args.exp_dir, epoch))
+    torch.save(coref_model.module.text_scorer.state_dict(), '{}/text_scorer.{}.pth'.format(args.exp_dir, epoch))
  
     if epoch % 5 == 0:
       all_scores = []
       all_labels = []
       with torch.no_grad(): 
+        pred_dicts = []
         for i, batch in enumerate(test_loader):
           start_end_embeddings, continuous_embeddings,\
           span_mask, width, videos, video_mask, labels = batch
@@ -171,13 +178,22 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
           B = start_end_embeddings.size(0) 
           for idx in range(B):
             first_idx, second_idx, pairwise_labels = get_pairwise_labels(labels[idx, :span_num[idx]], is_training=False, device=device)
+            if first_idx is None:
+              pred_dicts.append({'first_idx': [],
+                                 'second_idx': [],
+                                 'score': [],
+                                 'pairwise_label': []})
+              continue
             scores = coref_model.module.predict(text_output[idx, first_idx], video_output[idx],\
                                                 span_mask[idx, first_idx], video_mask[idx],\
                                                 text_output[idx, second_idx], video_output[idx],\
                                                 span_mask[idx, second_idx], video_mask[idx])
-            all_scores.append(scores.squeeze(1))
-             
+            all_scores.append(scores.squeeze(1))             
             all_labels.append(pairwise_labels.to(torch.int)) 
+            pred_dicts.append({'first_idx': first_idx.cpu().detach().numpy().tolist(),
+                               'second_idx': second_idx.cpu().detach().numpy().tolist(),
+                               'score': scores.squeeze(1).cpu().detach().numpy().tolist(),
+                               'pairwise_label': pairwise_labels.cpu().detach().numpy().tolist()})# TODO
 
         all_scores = torch.cat(all_scores)
         all_labels = torch.cat(all_labels)
@@ -194,7 +210,7 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
                                                              len(all_labels)))
         logger.info('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
                                                                         eval.get_precision(), eval.get_f1()))
-
+        json.dump(pred_dicts, open(os.path.join(args.exp_dir, 'prediction.json'), 'w'), indent=4, sort_keys=True)
  
 if __name__ == '__main__':
   # Set up argument parser
@@ -202,6 +218,7 @@ if __name__ == '__main__':
   parser.add_argument('--exp_dir', type=str, default='models/grounded_coref')
   parser.add_argument('--config', type=str, default='configs/config_grounded.json')
   parser.add_argument('--start_epoch', type=int, default=0)
+  parser.add_argument('--evaluate_only', action='store_true')
   args = parser.parse_args()
 
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -217,7 +234,7 @@ if __name__ == '__main__':
 
   # Initialize dataloaders
   train_set = GroundingFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config)
-  test_set = GroundingFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config) # XXX
+  test_set = GroundingFeatureDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), config) # XXX
   train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
   test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
 
@@ -234,6 +251,8 @@ if __name__ == '__main__':
       image_model.load_state_dict(torch.load(config['image_repr_path'], map_location=device))
       coref_model.text_scorer.load_state_dict(torch.load(config['pairwise_scorer_path'], map_location=device))
   
-
   # Training
   train(text_model, image_model, coref_model, train_loader, test_loader, args)
+
+  # Convert the predictions to readable format
+  # make_prediction_readable(os.path.join(args.exp_dir, 'prediction.json'), os.path.join(args.exp_dir, 'prediction_readable.txt')) # TODO

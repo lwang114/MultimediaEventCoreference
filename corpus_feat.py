@@ -144,7 +144,10 @@ class GroundingFeatureDataset(Dataset):
     '''
     label_dict = collections.defaultdict(dict)
     for m in mentions:
-      label_dict[m['doc_id']][(min(m['tokens_ids']), max(m['tokens_ids']))] = m['cluster_id']
+      if len(m['tokens_ids']) == 0:
+        label_dict[m['doc_id']][(-1, -1)] = m['cluster_id']
+      else:
+        label_dict[m['doc_id']][(min(m['tokens_ids']), max(m['tokens_ids']))] = m['cluster_id']
     return label_dict    
   
   def load_text(self, idx):
@@ -155,7 +158,6 @@ class GroundingFeatureDataset(Dataset):
     :return (bert_candidate_starts, bert_candidate_ends):
     :return span_mask: LongTensor of size (batch size, max num. spans) 
     '''
-    print(self.doc_ids[idx]) # XXX
     # Extract the original spans of the current doc
     origin_candidate_starts = self.candidate_start_ends[idx][:, 0]
     origin_candidate_ends = self.candidate_start_ends[idx][:, 1]

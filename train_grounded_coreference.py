@@ -40,6 +40,8 @@ def get_optimizer(config, models):
         return optim.SGD(parameters, lr=config.learning_rate, weight_decay=config.weight_decay)
 
 def get_pairwise_labels(labels, is_training, device):
+    if len(labels) == 0:
+      return None, None, None
     first, second = zip(*list(combinations(range(len(labels)), 2)))
     first = torch.tensor(first)
     second = torch.tensor(second)
@@ -113,6 +115,9 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
   total_loss = 0.
   total = 0.
   begin_time = time.time()
+  if args.evaluate_only:
+    config.epochs = 0
+
   for epoch in range(args.start_epoch, config.epochs):
     for i, batch in enumerate(train_loader):
       start_end_embeddings, continuous_embeddings,\
@@ -171,6 +176,7 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
           # Compute score for each span pair
           B = start_end_embeddings.size(0) 
           for idx in range(B):
+
             first_idx, second_idx, pairwise_labels = get_pairwise_labels(labels[idx, :span_num[idx]], is_training=False, device=device)
             scores = coref_model.predict(text_output[idx, first_idx], video_output[idx, first_idx],\
                                        text_mask[idx, first_idx], video_mask[idx, first_idx],\
@@ -203,6 +209,7 @@ if __name__ == '__main__':
   parser.add_argument('--exp_dir', type=str, default='models/grounded_coref')
   parser.add_argument('--config', type=str, default='configs/config_grounded.json')
   parser.add_argument('--start_epoch', type=int, default=0)
+  parser.add_argument('--evaluate_only', action='store_true')
   args = parser.parse_args()
 
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

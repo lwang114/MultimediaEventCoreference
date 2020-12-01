@@ -120,7 +120,7 @@ class GroundedCoreferencer(nn.Module):
     first_span_image_emb = first_span_image_emb.squeeze(0)
     second_span_embeddings = second_span_embeddings.squeeze(0)
     second_span_image_emb = second_span_image_emb.squeeze(0)
-
+    
     scores = self.text_scorer(first_span_embeddings, second_span_embeddings) +\
              self.text_scorer(first_span_image_emb, second_span_image_emb)
     return scores
