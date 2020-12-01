@@ -33,10 +33,8 @@ class SpanEmbedder(nn.Module):
 
     def pad_continous_embeddings(self, continuous_embeddings):
         max_length = max(len(v) for v in continuous_embeddings)
-        padded_tokens_embeddings = torch.stack(
-            [torch.cat((emb, self.padded_vector.repeat(max_length - len(emb), 1)))
-             for emb in continuous_embeddings]
-        )
+        padded_tokens_embeddings = torch.stack([torch.cat((emb, self.padded_vector.repeat(max_length - len(emb),1)))
+             for emb in continuous_embeddings])
         masks = torch.stack(
             [torch.cat(
                 (torch.ones(len(emb), device=self.device),

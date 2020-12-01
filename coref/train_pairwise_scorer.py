@@ -4,7 +4,7 @@ from sklearn.utils import shuffle
 from transformers import AutoTokenizer, AutoModel
 from tqdm import tqdm
 from itertools import combinations
-
+from embedding import get_embedding
 from models import SpanEmbedder, SpanScorer, SimplePairWiseClassifier
 from evaluator import Evaluation
 from spans import TopicSpans
@@ -121,16 +121,19 @@ if __name__ == '__main__':
     device = torch.device('cuda:{}'.format(config.gpu_num[0]))
 
     # init train and dev set
-    bert_tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
-    training_set = create_corpus(config, bert_tokenizer, 'train')
-    dev_set = create_corpus(config, bert_tokenizer, 'dev')
-
+    #bert_tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
+    #training_set = create_corpus(config, bert_tokenizer, 'train')
+    #dev_set = create_corpus(config, bert_tokenizer, 'dev')
+    wase_model, WordsField = get_embedding(device)
+    training_set = create_corpus(config, WordsField, "train")
+    dev_set = create_corpus(config, WordsField, "dev")
 
     ## Model initiation
     logger.info('Init models')
-    bert_model = AutoModel.from_pretrained(config['bert_model']).to(device)
-    config['bert_hidden_size'] = bert_model.config.hidden_size
-
+    #bert_model = AutoModel.from_pretrained(config['bert_model']).to(device)
+    #config['bert_hidden_size'] = bert_model.config.hidden_size
+    config['bert_hidden_size'] = 300
+    
     span_repr = SpanEmbedder(config, device).to(device)
     span_scorer = SpanScorer(config).to(device)
 
@@ -173,7 +176,7 @@ if __name__ == '__main__':
         total_number_of_pairs = 0
         for topic_num in tqdm(list_of_topics):
             topic = training_set.topic_list[topic_num]
-            topic_spans = get_all_candidate_spans(config, bert_model, span_repr, span_scorer, training_set, topic_num)
+            topic_spans = get_all_candidate_spans(config, wase_model, span_repr, span_scorer, training_set, topic_num)
             first, second, pairwise_labels = get_pairwise_labels(topic_spans.labels, is_training=config['neg_samp'])
             span_embeddings = topic_spans.start_end_embeddings, topic_spans.continuous_embeddings, topic_spans.width
             loss = train_pairwise_classifier(config, pairwise_model, span_repr, span_scorer, span_embeddings, first,
@@ -195,7 +198,7 @@ if __name__ == '__main__':
         all_scores, all_labels = [], []
 
         for topic_num, topic in enumerate(tqdm(dev_set.topic_list)):
-            topic_spans = get_all_candidate_spans(config, bert_model, span_repr, span_scorer, dev_set, topic_num)
+            topic_spans = get_all_candidate_spans(config, wase_model, span_repr, span_scorer, dev_set, topic_num)
             first, second, pairwise_labels = get_pairwise_labels(topic_spans.labels, is_training=False)
 
             span_embeddings = topic_spans.start_end_embeddings, topic_spans.continuous_embeddings, \

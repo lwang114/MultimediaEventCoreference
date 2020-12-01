@@ -31,10 +31,10 @@ from src.util.util_model import log
 class GroundingRunner(object):
     def __init__(self, data_dir='../../data', glove_dir='../../data/glove'):
         parser = argparse.ArgumentParser(description="neural networks trainer")
-        parser.add_argument("--test", help="validation set", default=os.path.join(data_dir, 'grounding/grounding_test_10000.json'))
-        parser.add_argument("--train", help="training set", default=os.path.join(data_dir, 'grounding/grounding_train_10000.json'))
-        parser.add_argument("--dev", help="development set", default=os.path.join(data_dir, 'm2e2_rawdata/article_events.json'))
-        parser.add_argument("--webd", help="word embedding", default=os.path.join(glove_dir, 'glove.6B.300d.txt')) # XXX
+        parser.add_argument("--test", help="validation set", default=os.path.join(data_dir, 'grounding_m2e2/grounding_test_10000.json'))
+        parser.add_argument("--train", help="training set", default=os.path.join(data_dir, 'grounding_m2e2/grounding_train_10000.json'))
+        parser.add_argument("--dev", help="development set", default=os.path.join(data_dir, 'grounding_m2e2/grounding_valid_10000.json'))
+        parser.add_argument("--webd", help="word embedding", default=os.path.join(glove_dir, 'glove.840B.300d.txt')) # XXX
         parser.add_argument("--img_dir", help="Grounding images directory", default=os.path.join(data_dir, 'm2e2_rawdata/image/image'))
         parser.add_argument("--amr", help="use amr", action='store_true')
         # sr model parameter
@@ -50,7 +50,7 @@ class GroundingRunner(object):
         parser.add_argument("--vocab", help="vocab_dir", default=os.path.join(data_dir, 'vocab'))
         parser.add_argument("--sr_hps", help="sr model hyperparams", default="{'wemb_dim': 300, 'wemb_ft': False, 'wemb_dp': 0.0, 'iemb_backbone': 'vgg16', 'iemb_dim':4096, 'iemb_ft': False, 'iemb_dp': 0.0, 'posemb_dim': 512, 'fmap_dim': 512, 'fmap_size': 7, 'att_dim': 1024, 'loss_weight_verb': 1.0, 'loss_weight_noun': 0.1, 'loss_weight_role': 0.0, 'gcn_layers': 1, 'gcn_dp': False, 'gcn_use_bn': False, 'use_highway': False}")
         # ee model parameter
-        parser.add_argument("--ee_hps", help="ee model hyperparams", default="{'wemb_dim': 300, 'wemb_ft': True, 'wemb_dp': 0.5, 'pemb_dim': 50, 'pemb_dp': 0.5, 'eemb_dim': 50, 'eemb_dp': 0.5, 'psemb_dim': 50, 'psemb_dp': 0.5, 'lstm_dim': 150, 'lstm_layers': 1, 'lstm_dp': 0, 'gcn_et': 3, 'gcn_use_bn': True, 'gcn_layers': 3, 'gcn_dp': 0.5, 'sa_dim': 300, 'use_highway': True, 'loss_alpha': 5}")
+        parser.add_argument("--ee_hps", help="ee model hyperparams", default="{'wemb_dim': 300, 'wemb_ft': True, 'wemb_dp': 0.5, 'pemb_dim': 50, 'pemb_dp': 0.5, 'eemb_dim': 50, 'eemb_dp': 0.5, 'psemb_dim': 50, 'psemb_dp': 0.5, 'lstm_dim': 150, 'lstm_layers': 1, 'lstm_dp': 0, 'gcn_et': 3, 'gcn_use_bn': True, 'gcn_layers': 0, 'gcn_dp': 0.5, 'sa_dim': 300, 'use_highway': True, 'loss_alpha': 5}")
 
         parser.add_argument("--batch", help="batch size", default=16, type=int)
         parser.add_argument("--epochs", help="n of epochs", default=300, type=int) # sys.maxsize,
@@ -61,7 +61,7 @@ class GroundingRunner(object):
         parser.add_argument("--l2decay", default=0, type=float)
         parser.add_argument("--maxnorm", default=3, type=float)
 
-        parser.add_argument("--out", help="output model path", default="out")
+        parser.add_argument("--out", help="output model path", default="out_m2e2")
         parser.add_argument("--finetune_sr", help="pretrained sr model path")
         parser.add_argument("--finetune_ee", help="pretrained ee model path")
         parser.add_argument("--finetune", help="pretrained grounding model path")
@@ -219,7 +219,7 @@ class GroundingRunner(object):
         if "pemb_size" not in self.a.ee_hps:
             self.a.ee_hps["pemb_size"] = len(PosTagsField.vocab.itos)
         if "psemb_size" not in self.a.ee_hps:
-            self.a.ee_hps["psemb_size"] = max([train_set.longest(), dev_set.longest(), test_set.longest()]) + 2
+            self.a.ee_hps["psemb_size"] = 512#max([train_set.longest(), dev_set.longest(), test_set.longest()]) + 2
         if "eemb_size" not in self.a.ee_hps:
             self.a.ee_hps["eemb_size"] = len(EntityLabelsField.vocab.itos)
         if "oc" not in self.a.ee_hps:

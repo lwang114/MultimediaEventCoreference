@@ -3,7 +3,7 @@ import pyhocon
 from sklearn.utils import shuffle
 from transformers import AutoTokenizer, AutoModel
 from tqdm import tqdm
-
+from embedding import get_embedding
 from evaluator import Evaluation
 from models import SpanEmbedder, SpanScorer
 from model_utils import *
@@ -73,16 +73,18 @@ if __name__ == '__main__':
 
 
     # read and tokenize data
-    bert_tokenizer = AutoTokenizer.from_pretrained(config['bert_model'], add_special_tokens=True)
-    training_set = create_corpus(config, bert_tokenizer, 'train')
-    dev_set = create_corpus(config, bert_tokenizer, 'dev')
-
-
+    #bert_tokenizer = AutoTokenizer.from_pretrained(config['bert_model'], add_special_tokens=True)
+    wase_model, WordsField = get_embedding(device)
+    #training_set = create_corpus(config, bert_tokenizer, 'train')
+    #dev_set = create_corpus(config, bert_tokenizer, 'dev')
+    training_set = create_corpus(config, WordsField, "train")
+    dev_set = create_corpus(config, WordsField, "dev")
 
     # Mention extractor configuration
     logger.info('Init models')
-    bert_model = AutoModel.from_pretrained(config['bert_model']).to(device)
-    config['bert_hidden_size'] = bert_model.config.hidden_size
+    #bert_model = AutoModel.from_pretrained(config['bert_model']).to(device)
+    #config['bert_hidden_size'] = bert_model.config.hidden_size
+    config['bert_hidden_size'] = 300
     span_repr = SpanEmbedder(config, device).to(device)
     span_scorer = SpanScorer(config).to(device)
     optimizer = get_optimizer(config, [span_scorer, span_repr])
@@ -113,7 +115,7 @@ if __name__ == '__main__':
         for topic_num in tqdm(list_of_topics):
             topic = training_set.topic_list[topic_num]
             span_meta_data, span_embeddings, mention_labels, num_of_tokens = \
-                get_span_data_from_topic(config, bert_model, training_set, topic_num)
+                get_span_data_from_topic(config, wase_model, training_set, topic_num)
 
             topic_start_end_embeddings, topic_continuous_embeddings, topic_width = span_embeddings
             epoch_loss = train_topic_mention_extractor(span_repr, span_scorer, topic_start_end_embeddings,
@@ -134,7 +136,7 @@ if __name__ == '__main__':
         dev_num_of_tokens = 0
         for topic_num, topic in enumerate(tqdm(dev_set.topic_list)):
             span_meta_data, span_embeddings, mention_labels, num_of_tokens = \
-                get_span_data_from_topic(config, bert_model, dev_set, topic_num)
+                get_span_data_from_topic(config, wase_model, dev_set, topic_num)
 
             all_labels.extend(mention_labels)
             dev_num_of_tokens += num_of_tokens
@@ -173,3 +175,4 @@ if __name__ == '__main__':
 
 
     logger.info('Best Performance: {}'.format(max_dev))
+    
