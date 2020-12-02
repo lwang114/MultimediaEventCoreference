@@ -54,6 +54,11 @@ def get_mention_doc(data_json, out_prefix):
 
     if doc_id != cur_id:
       cur_id = doc_id
+      coref2event = {c:e for e, c in event2coref.items()}
+      coref2entity = {c:e for e, c in entity2coref.items()}
+      n_event_corefs += sum(len(c)*(len(c)-1.)/2. for c_id, c in coref2event.items())  
+      n_entity_corefs += sum(len(c)*(len(c)-1.)/2. for c_id, c in coref2entity.items())  
+
       event2coref = {}
       entity2coref = {}
       event_cluster2id = {}
@@ -79,7 +84,6 @@ def get_mention_doc(data_json, out_prefix):
             n_entity_cluster += 1
           entity2coref[mention[0]] = entity_cluster2id[cluster_id]
           print(doc_id, mention, cluster_id, entity2coref[mention[0]])
-          n_entity_corefs += 1
       
       for i_mention, mention in enumerate(event_mentions):
         if not i_mention in event2coref:
@@ -90,12 +94,17 @@ def get_mention_doc(data_json, out_prefix):
         if not i_mention in entity2coref:
           entity2coref[i_mention] = n_entity_cluster 
           n_entity_cluster += 1
+
+    coref2event = {c:e for e, c in event2coref.items()}
+    coref2entity = {c:e for e, c in entity2coref.items()}
+    n_event_corefs += sum(len(c)*(len(c)-1.)/2. for c_id, c in coref2event.items())  
+    n_entity_corefs += sum(len(c)*(len(c)-1.)/2. for c_id, c in coref2entity.items())
     
     entity_mask = [0]*len(tokens)
     event_mask = [0]*len(tokens)
     # Create dict for [out_prefix]_entities.json
     for m_idx, mention in enumerate(entity_mentions):
-        for pos in range(mention['start'], mention['end']):
+        for pos in range(mention['start'], mention['end']+1):
           entity_mask[pos] = 1
         
         if 'coreference' in sen_dict:
@@ -106,8 +115,8 @@ def get_mention_doc(data_json, out_prefix):
                          'subtopic': '0',
                          'm_id': '0',
                          'sentence_id': sent_id,
-                         'tokens_ids': list(range(mention['start'], mention['end'])),
-                         'tokens': ' '.join(tokens[mention['start']:mention['end']]),
+                         'tokens_ids': list(range(mention['start'], mention['end']+1)),
+                         'tokens': ' '.join(tokens[mention['start']:mention['end']+1]),
                          'tags': '',
                          'lemmas': '',
                          'cluster_id': cluster_id,
@@ -123,7 +132,7 @@ def get_mention_doc(data_json, out_prefix):
           start = mention['start']
           end = mention['end']
 
-        for pos in range(start, end):
+        for pos in range(start, end+1):
           event_mask[pos] = 1
 
         if 'coreference' in sen_dict:
@@ -134,8 +143,8 @@ def get_mention_doc(data_json, out_prefix):
                        'subtopic': '0',
                        'm_id': '0',
                        'sentence_id': sent_id,
-                       'tokens_ids': list(range(start, end)),
-                       'tokens': ' '.join(tokens[start:end]),
+                       'tokens_ids': list(range(start, end+1)),
+                       'tokens': ' '.join(tokens[start:end+1]),
                        'tags': '',
                        'lemmas': '',
                        'cluster_id': cluster_id,
