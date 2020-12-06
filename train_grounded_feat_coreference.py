@@ -71,11 +71,7 @@ def get_pairwise_labels(labels, is_training, device):
     torch.cuda.empty_cache()
 
 
-    return first, second, pairwise_labels
-
-def make_prediction_readable(pred_json, readable_json='prediction_readable.txt'): # TODO
-  pred_dicts = json.load(open(pred_json, 'r'))
-    
+    return first, second, pairwise_labels    
 
 
 def train(text_model, image_model, coref_model, train_loader, test_loader, args):

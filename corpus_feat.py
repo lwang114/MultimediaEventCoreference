@@ -63,7 +63,7 @@ class GroundingFeatureDataset(Dataset):
     '''
     super(GroundingFeatureDataset, self).__init__()
     self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    self.segment_window = config.get('segment_window', 512) 
+    self.segment_window = config.get('segment_window', 512)
     self.max_span_num = config.get('max_span_num', 80)
     self.max_frame_num = config.get('max_frame_num', 20)
     self.max_mention_span = config.get('max_mention_span', 15)
@@ -124,19 +124,22 @@ class GroundingFeatureDataset(Dataset):
         if bert_token:
           bert_tokens_ids.extend(bert_token)
           bert_start_index = bert_cursor + 1
+          if bert_cursor + len(bert_token) > self.segment_window: # Truncate the document if the num. of bert tokens exceeds upper limit
+            print('doc_id: {}, len(bert_tokens_ids): {}, bert_cursor:{}'.format(doc_id, len(bert_tokens_ids), bert_cursor))
+            break
           start_bert_idx.append(bert_start_index)
           bert_cursor += len(bert_token)
+
           bert_end_index = bert_cursor
           end_bert_idx.append(bert_end_index)
           original_tokens.append([sent_id, token_id, token_text, flag_sentence])
-      if len(bert_tokens_ids) > 512:
-        print(doc_id, len(bert_tokens_ids))
+
       docs_bert_tokens.append(bert_tokens_ids)
       docs_origin_tokens.append(original_tokens)
       start_end = np.concatenate((np.expand_dims(start_bert_idx, 1), np.expand_dims(end_bert_idx, 1)), axis=1)
       docs_start_end_bert.append(start_end)
 
-    return docs_origin_tokens, docs_bert_tokens, docs_start_end_bert 
+    return docs_origin_tokens, docs_bert_tokens, docs_start_end_bert
 
   def create_dict_labels(self, mentions):
     '''
@@ -151,12 +154,13 @@ class GroundingFeatureDataset(Dataset):
     return label_dict    
   
   def load_text(self, idx):
-    '''Load span embeddings for the document
+    '''Load mention span embeddings for the document
     :param idx: int, doc index
-    :return span_embeddings: FloatTensor of size (batch size, max num. spans, span embed dim)
-    :return (original_candidate_starts, original_candidate_ends): tuple of LongTensors of size (batch size, max num. spans), start and end of the spans
-    :return (bert_candidate_starts, bert_candidate_ends):
-    :return span_mask: LongTensor of size (batch size, max num. spans) 
+    :return start_end_embeddings: FloatTensor of size (max num. spans, 2, span embed dim)
+    :return continuous_tokens_embeddings: FloatTensor of size (max num. spans, max mention span, span embed dim)
+    :return mask: FloatTensor of size (max num. spans,)
+    :return width: LongTensor of size (max num. spans,)
+    :return labels: LongTensor of size (max num. spans,) 
     '''
     # Extract the original spans of the current doc
     origin_candidate_starts = self.candidate_start_ends[idx][:, 0]
