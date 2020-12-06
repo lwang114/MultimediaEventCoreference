@@ -3,8 +3,9 @@ import json
 import numpy as np
 import codecs
 import os
+import collections
 
-def get_mention_doc(data_json, out_prefix):
+def get_mention_doc(data_json, out_prefix, inclusive=False):
   '''
   :param data_json: str of filename of the meta info file storing a list of dicts with keys:
       sentence_id: str, file prefix of the image for the caption
@@ -38,12 +39,18 @@ def get_mention_doc(data_json, out_prefix):
   '''
   sen_dicts = json.load(open(data_json))
   outs = {}
+  event2coref = {}
+  entity2coref = {}
+  event_cluster2id = {}
+  entity_cluster2id = {}
   entities = []
   events = []
   n_event_cluster = 0
   n_event_corefs = 0
   n_entity_cluster = 0
   n_entity_corefs = 0
+  sen_start = 0
+  end_inc = 0 if inclusive else 1 
   cur_id = ''
   for sen_dict in sen_dicts:
     doc_id = sen_dict['image'] 
@@ -54,10 +61,16 @@ def get_mention_doc(data_json, out_prefix):
 
     if doc_id != cur_id:
       cur_id = doc_id
-      coref2event = {c:e for e, c in event2coref.items()}
-      coref2entity = {c:e for e, c in entity2coref.items()}
-      n_event_corefs += sum(len(c)*(len(c)-1.)/2. for c_id, c in coref2event.items())  
-      n_entity_corefs += sum(len(c)*(len(c)-1.)/2. for c_id, c in coref2entity.items())  
+      sen_start = 0
+      if len(event2coref) > 0:
+        coref2event = collections.defaultdict(list)
+        coref2entity = collections.defaultdict(list)
+        for e, c in event2coref.items():
+          coref2event[c].append(e)
+        for e, c in entity2coref.items():
+          coref2entity[c].append(e)
+        n_event_corefs += sum(len(c)*(len(c)-1.)/2. for c_id, c in coref2event.items())  
+        n_entity_corefs += sum(len(c)*(len(c)-1.)/2. for c_id, c in coref2entity.items())  
 
       event2coref = {}
       entity2coref = {}
@@ -95,8 +108,12 @@ def get_mention_doc(data_json, out_prefix):
           entity2coref[i_mention] = n_entity_cluster 
           n_entity_cluster += 1
 
-    coref2event = {c:e for e, c in event2coref.items()}
-    coref2entity = {c:e for e, c in entity2coref.items()}
+    coref2event = collections.defaultdict(list)
+    coref2entity = collections.defaultdict(list)
+    for e, c in event2coref.items():
+      coref2event[c].append(e)
+    for e, c in entity2coref.items():
+      coref2entity[c].append(e)
     n_event_corefs += sum(len(c)*(len(c)-1.)/2. for c_id, c in coref2event.items())  
     n_entity_corefs += sum(len(c)*(len(c)-1.)/2. for c_id, c in coref2entity.items())
     
@@ -104,7 +121,7 @@ def get_mention_doc(data_json, out_prefix):
     event_mask = [0]*len(tokens)
     # Create dict for [out_prefix]_entities.json
     for m_idx, mention in enumerate(entity_mentions):
-        for pos in range(mention['start'], mention['end']+1):
+        for pos in range(mention['start'], mention['end']+end_inc):
           entity_mask[pos] = 1
         
         if 'coreference' in sen_dict:
@@ -115,8 +132,8 @@ def get_mention_doc(data_json, out_prefix):
                          'subtopic': '0',
                          'm_id': '0',
                          'sentence_id': sent_id,
-                         'tokens_ids': list(range(mention['start'], mention['end']+1)),
-                         'tokens': ' '.join(tokens[mention['start']:mention['end']+1]),
+                         'tokens_ids': list(range(sen_start+mention['start'], sen_start+mention['end']+end_inc)),
+                         'tokens': ' '.join(tokens[sen_start+mention['start']:sen_start+mention['end']+end_inc]),
                          'tags': '',
                          'lemmas': '',
                          'cluster_id': cluster_id,
@@ -132,7 +149,7 @@ def get_mention_doc(data_json, out_prefix):
           start = mention['start']
           end = mention['end']
 
-        for pos in range(start, end+1):
+        for pos in range(start, end+end_inc if not inclusive else end):
           event_mask[pos] = 1
 
         if 'coreference' in sen_dict:
@@ -143,8 +160,8 @@ def get_mention_doc(data_json, out_prefix):
                        'subtopic': '0',
                        'm_id': '0',
                        'sentence_id': sent_id,
-                       'tokens_ids': list(range(start, end+1)),
-                       'tokens': ' '.join(tokens[start:end+1]),
+                       'tokens_ids': list(range(sen_start+start, sen_start+end+end_inc)),
+                       'tokens': ' '.join(tokens[sen_start+start:sen_start+end+end_inc]),
                        'tags': '',
                        'lemmas': '',
                        'cluster_id': cluster_id,
@@ -156,8 +173,9 @@ def get_mention_doc(data_json, out_prefix):
       outs[doc_id] = []
     
     for idx, token in enumerate(tokens):
-      outs[doc_id].append([sent_id, idx, token, entity_mask[idx] > 0 or event_mask[idx] > 0])
-
+      outs[doc_id].append([sent_id, sen_start+idx, token, entity_mask[idx] > 0 or event_mask[idx] > 0])
+    sen_start += len(tokens)
+      
   print('# of event coreference={}, # of entity coreference={}'.format(n_event_corefs, n_entity_corefs))
   print('# of event clusters={}, # of entity clusters={}'.format(n_event_cluster, n_entity_cluster))  
   json.dump(outs, codecs.open(out_prefix+'.json', 'w', 'utf-8'), indent=4, sort_keys=True)
@@ -171,6 +189,6 @@ if __name__ == '__main__':
     os.mkdir(data_dir)
     os.mkdir(os.path.join(data_dir, 'mentions'))
     os.mkdir(os.path.join(data_dir, 'gold'))
-  data_json = 'm2e2/data/video_m2e2/grounding_video_m2e2_test.json'
-  out_prefix = os.path.join(data_dir, 'mentions/test')
-  get_mention_doc(data_json, out_prefix) 
+  data_json = 'm2e2/data/video_m2e2/grounding_video_m2e2_test.json' # XXX
+  out_prefix = os.path.join(data_dir, 'mentions/test') # XXX
+  get_mention_doc(data_json, out_prefix, inclusive=False) # XXX
