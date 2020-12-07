@@ -189,7 +189,7 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
             pred_dicts.append({'first_idx': first_idx.cpu().detach().numpy().tolist(),
                                'second_idx': second_idx.cpu().detach().numpy().tolist(),
                                'score': scores.squeeze(1).cpu().detach().numpy().tolist(),
-                               'pairwise_label': pairwise_labels.cpu().detach().numpy().tolist()})# TODO
+                               'pairwise_label': pairwise_labels.cpu().detach().numpy().tolist()})
 
         all_scores = torch.cat(all_scores)
         all_labels = torch.cat(all_labels)
