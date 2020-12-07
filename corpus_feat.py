@@ -82,15 +82,15 @@ class GroundingFeatureDataset(Dataset):
     self.doc_ids = ['_'.join(k.split('_')[:-1]) for k in sorted(self.imgs_embeddings, key=lambda x:int(x.split('_')[-1]))] # XXX
     documents = {doc_id:documents[doc_id] for doc_id in self.doc_ids}
 
-    # Extract original mention spans
-    self.candidate_start_ends = [np.asarray([[start, end] for start, end in sorted(self.label_dict[doc_id])]) for doc_id in self.doc_ids]
-
     # Tokenize documents and extract token spans after bert tokenization
     self.tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
     self.origin_tokens, self.bert_tokens, self.bert_start_ends = self.tokenize(documents) 
 
+    # Extract original mention spans
+    self.candidate_start_ends = [np.asarray([[start, end] for start, end in sorted(self.label_dict[doc_id]) if end < len(self.origin_tokens[idx])]) for idx, doc_id in enumerate(self.doc_ids)]
+    
     # Extract BERT embeddings
-    bert_embed_file = '{}_bert_embeddings.npz'.format(doc_json.split('.')[0]) # XXX
+    bert_embed_file = '{}_bert_embeddings.npz'.format(doc_json.split('.')[0])
     if not os.path.exists(bert_embed_file):
       bert_model = AutoModel.from_pretrained(config['bert_model']).to(self.device) 
       print('{} not found, start extracting BERT embeddings ...'.format(bert_embed_file))
@@ -122,11 +122,11 @@ class GroundingFeatureDataset(Dataset):
         sent_id, token_id, token_text, flag_sentence = token
         bert_token = self.tokenizer.encode(token_text, add_special_tokens=True)[1:-1]   
         if bert_token:
-          bert_tokens_ids.extend(bert_token)
-          bert_start_index = bert_cursor + 1
-          if bert_cursor + len(bert_token) > self.segment_window: # Truncate the document if the num. of bert tokens exceeds upper limit
+          if bert_cursor + len(bert_token) + 1 > self.segment_window: # Truncate the document if the num. of bert tokens exceeds upper limit
             print('doc_id: {}, len(bert_tokens_ids): {}, bert_cursor:{}'.format(doc_id, len(bert_tokens_ids), bert_cursor))
             break
+          bert_start_index = bert_cursor + 1
+          bert_tokens_ids.extend(bert_token)
           start_bert_idx.append(bert_start_index)
           bert_cursor += len(bert_token)
 
