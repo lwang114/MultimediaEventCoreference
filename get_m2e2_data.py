@@ -80,21 +80,22 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
       coreference = sen_dict['coreference']
 
       # Create coreference mapping
-      for cluster_id in sorted(coreference['events'], key=lambda x:int(x)):
+      for cluster_id in sorted(coreference['events']):
         for mention in coreference['events'][cluster_id]:
           if not cluster_id in event_cluster2id:
             event_cluster2id[cluster_id] = n_event_cluster 
             n_event_cluster += 1
           event2coref[mention[0]] = event_cluster2id[cluster_id]
           n_event_corefs += 1
+          print('doc id: {}, mention id: {}, event cluster id: {}, event cluster idx: {}'.format(doc_id, mention[0], cluster_id, event2coref[mention[0]])) # XXX
 
-      for cluster_id in sorted(coreference['entities'], key=lambda x:int(x)):
+      for cluster_id in sorted(coreference['entities']):
         for mention in coreference['entities'][cluster_id]:
           if not cluster_id in entity_cluster2id:
             entity_cluster2id[cluster_id] = n_entity_cluster
             n_entity_cluster += 1
           entity2coref[mention[0]] = entity_cluster2id[cluster_id]
-          print(doc_id, mention, cluster_id, entity2coref[mention[0]]) # XXX
+          print('doc id: {}, mention id: {}, entity cluster id: {}, entity cluster idx: {}'.format(doc_id, mention[0], cluster_id, entity2coref[mention[0]])) # XXX
       
       for i_mention, mention in enumerate(event_mentions):
         if not i_mention in event2coref:
