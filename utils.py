@@ -62,7 +62,7 @@ if __name__ == '__main__':
   model_dir = 'models/grounded_coref'
   img_dir = 'm2e2/data/video_m2e2/videos'
   data_dir = 'data/video_m2e2'
-  pred_json = os.path.join(model_dir, 'prediction_multimedia.json')
+  pred_json = os.path.join(model_dir, 'prediction_multimedia_12_07_2020.json')
   mention_json = os.path.join(data_dir, 'mentions/test_mixed.json')
   make_prediction_readable(pred_json, img_dir, mention_json, pred_json.split('.')[0]+'_readable.txt')  
   '''

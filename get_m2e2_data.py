@@ -21,6 +21,7 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
                      'text': str}
          'event_type': str,
          'arguments': [...]}
+      inclusive: boolean, true if the token interval is [start, end] and false if it is [start, end)
   :param out_prefix: str of the prefix of three files:
       1. [prefix].json: dict of 
         [doc_id]: list of [sent id, token id, token, is entity/event]
@@ -50,13 +51,13 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
   n_entity_cluster = 0
   n_entity_corefs = 0
   sen_start = 0
-  end_inc = 0 if inclusive else 1 
+  end_inc = 1 if inclusive else 0 
   cur_id = ''
   for sen_dict in sen_dicts:
     doc_id = sen_dict['image'] 
     sent_id = sen_dict['sentence_id'].split('-')[-1]
     tokens = sen_dict['words']
-    entity_mentions = sen_dict['golden-entity-mentions']    
+    entity_mentions = sen_dict['golden-entity-mentions']
     event_mentions = sen_dict['golden-event-mentions']
 
     if doc_id != cur_id:
@@ -69,8 +70,6 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
           coref2event[c].append(e)
         for e, c in entity2coref.items():
           coref2entity[c].append(e)
-        n_event_corefs += sum(len(c)*(len(c)-1.)/2. for c_id, c in coref2event.items())  
-        n_entity_corefs += sum(len(c)*(len(c)-1.)/2. for c_id, c in coref2entity.items())  
 
       event2coref = {}
       entity2coref = {}
@@ -89,14 +88,13 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
           event2coref[mention[0]] = event_cluster2id[cluster_id]
           n_event_corefs += 1
 
-
       for cluster_id in sorted(coreference['entities'], key=lambda x:int(x)):
         for mention in coreference['entities'][cluster_id]:
           if not cluster_id in entity_cluster2id:
             entity_cluster2id[cluster_id] = n_entity_cluster
             n_entity_cluster += 1
           entity2coref[mention[0]] = entity_cluster2id[cluster_id]
-          print(doc_id, mention, cluster_id, entity2coref[mention[0]])
+          print(doc_id, mention, cluster_id, entity2coref[mention[0]]) # XXX
       
       for i_mention, mention in enumerate(event_mentions):
         if not i_mention in event2coref:
@@ -114,8 +112,6 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
       coref2event[c].append(e)
     for e, c in entity2coref.items():
       coref2entity[c].append(e)
-    n_event_corefs += sum(len(c)*(len(c)-1.)/2. for c_id, c in coref2event.items())  
-    n_entity_corefs += sum(len(c)*(len(c)-1.)/2. for c_id, c in coref2entity.items())
     
     entity_mask = [0]*len(tokens)
     event_mask = [0]*len(tokens)
@@ -133,7 +129,7 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
                          'm_id': '0',
                          'sentence_id': sent_id,
                          'tokens_ids': list(range(sen_start+mention['start'], sen_start+mention['end']+end_inc)),
-                         'tokens': ' '.join(tokens[sen_start+mention['start']:sen_start+mention['end']+end_inc]),
+                         'tokens': ' '.join(tokens[mention['start']:mention['end']+end_inc]),
                          'tags': '',
                          'lemmas': '',
                          'cluster_id': cluster_id,
@@ -161,7 +157,7 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
                        'm_id': '0',
                        'sentence_id': sent_id,
                        'tokens_ids': list(range(sen_start+start, sen_start+end+end_inc)),
-                       'tokens': ' '.join(tokens[sen_start+start:sen_start+end+end_inc]),
+                       'tokens': ' '.join(tokens[start:end+end_inc]),
                        'tags': '',
                        'lemmas': '',
                        'cluster_id': cluster_id,
@@ -176,8 +172,6 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
       outs[doc_id].append([sent_id, sen_start+idx, token, entity_mask[idx] > 0 or event_mask[idx] > 0])
     sen_start += len(tokens)
       
-  print('# of event coreference={}, # of entity coreference={}'.format(n_event_corefs, n_entity_corefs))
-  print('# of event clusters={}, # of entity clusters={}'.format(n_event_cluster, n_entity_cluster))  
   json.dump(outs, codecs.open(out_prefix+'.json', 'w', 'utf-8'), indent=4, sort_keys=True)
   json.dump(entities, codecs.open(out_prefix+'_entities.json', 'w', 'utf-8'), indent=4, sort_keys=True)
   json.dump(events, codecs.open(out_prefix+'_events.json', 'w', 'utf-8'), indent=4, sort_keys=True)
@@ -191,4 +185,4 @@ if __name__ == '__main__':
     os.mkdir(os.path.join(data_dir, 'gold'))
   data_json = 'm2e2/data/video_m2e2/grounding_video_m2e2_test.json' # XXX
   out_prefix = os.path.join(data_dir, 'mentions/test') # XXX
-  get_mention_doc(data_json, out_prefix, inclusive=False) # XXX
+  get_mention_doc(data_json, out_prefix, inclusive=True) # XXX
