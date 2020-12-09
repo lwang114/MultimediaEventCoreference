@@ -57,6 +57,7 @@ class GroundedCoreferencer(nn.Module):
     super(GroundedCoreferencer, self).__init__()
     self.text_scorer = SimplePairWiseClassifier(config) 
     self.image_scorer = self.score_image
+    self.text_only_decode = config.get('text_only_decode', False)
 
   def score_image(self, first, second, first_mask, second_mask, score_type='both'):
     '''
@@ -121,6 +122,7 @@ class GroundedCoreferencer(nn.Module):
     second_span_embeddings = second_span_embeddings.squeeze(0)
     second_span_image_emb = second_span_image_emb.squeeze(0)
     
-    scores = self.text_scorer(first_span_embeddings, second_span_embeddings) +\
-             self.text_scorer(first_span_image_emb, second_span_image_emb)
+    scores = self.text_scorer(first_span_embeddings, second_span_embeddings)
+    if not self.text_only_decode:
+      scores = scores + self.text_scorer(first_span_image_emb, second_span_image_emb)
     return scores
