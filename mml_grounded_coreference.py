@@ -87,7 +87,7 @@ class MMLGroundedCoreferencer(nn.Module):
     '''
     self.text_scorer.train()
     n = span_embeddings.size(0)
-    S = torch.zeros((n, n) dtype=torch.float, device=span_embeddings.device, requires_grad=True)
+    S = torch.zeros((n, n), dtype=torch.float, device=span_embeddings.device, requires_grad=True)
     m = nn.LogSoftmax(dim=1) 
     for s_idx in range(n):
       for v_idx in range(n):
@@ -103,12 +103,21 @@ class MMLGroundedCoreferencer(nn.Module):
     loss, _ = self.image_scorer(span_emb, image_emb, span_mask, image_mask)
     return loss
     
-  def retrieve(self, span_embeddings, image_embeddings):
+  def retrieve(self, span_embeddings, image_embeddings, span_mask, image_mask, k=10):
     '''
     :param span_embeddings: FloatTensor of size (num. of spans, span embed dim),
     :param image_embeddings: FloatTensor of size (num. of ROIs, image embed dim),
     '''
-    # TODO
+    self.text_scorer.eval()
+    n = span_embeddings.size(0)
+    span_embeddings = span_embeddings.cpu()
+    image_embeddings = image_embeddings.cpu()
+    S = torch.zeros((n, n), dtype=torch.float, device=torch.device('cpu'), requires_grad=False)
+    m = nn.LogSoftmax(dim=1)
+    for s_idx in range(n):
+      for v_idx in range(n):
+        S[s_idx, v_idx] = -self.calculate_loss(span_embeddings[s_idx], image_embeddings[v_idx], span_mask, image_mask)
+    return S.topk(k, 0).t(), S.topk(k, 1) 
 
   def predict(self, first_span_embeddings, first_image_embeddings, 
               first_span_mask, first_image_mask,
