@@ -176,7 +176,6 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
           # Compute score for each span pair
           B = start_end_embeddings.size(0) 
           for idx in range(B):
-
             first_idx, second_idx, pairwise_labels = get_pairwise_labels(labels[idx, :span_num[idx]], is_training=False, device=device)
             scores = coref_model.predict(text_output[idx, first_idx], video_output[idx, first_idx],\
                                        text_mask[idx, first_idx], video_mask[idx, first_idx],\

@@ -158,6 +158,9 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
 def test(text_model, image_model, coref_model, test_loader, args):
     all_scores = []
     all_labels = []
+    text_model.eval()
+    image_model.eval()
+    coref_model.eval()
     with torch.no_grad(): 
       pred_dicts = []
       for i, batch in enumerate(test_loader):
@@ -181,10 +184,6 @@ def test(text_model, image_model, coref_model, test_loader, args):
         for idx in range(B):
           first_idx, second_idx, pairwise_labels = get_pairwise_labels(labels[idx, :span_num[idx]], is_training=False, device=device)
           if first_idx is None:
-            pred_dicts.append({'first_idx': [],
-                               'second_idx': [],
-                               'score': [],
-                               'pairwise_label': []})
             continue
           scores = coref_model.module.predict(text_output[idx, first_idx], video_output[idx],\
                                               span_mask[idx, first_idx], video_mask[idx],\
@@ -192,8 +191,16 @@ def test(text_model, image_model, coref_model, test_loader, args):
                                               span_mask[idx, second_idx], video_mask[idx])
           all_scores.append(scores.squeeze(1))             
           all_labels.append(pairwise_labels.to(torch.int)) 
-          pred_dicts.append({'first_idx': first_idx.cpu().detach().numpy().tolist(),
+          
+          global_idx = i * test_loader.batch_size + idx
+          doc_id = test_loader.dataset.doc_ids[global_idx] 
+          origin_tokens = [token[2] for token in test_loader.dataset.origin_tokens[global_idx]]
+          candidate_start_ends = test_loader.dataset.candidate_start_ends[global_idx]
+          pred_dicts.append({'doc_id': doc_id,
+                             'first_idx': first_idx.cpu().detach().numpy().tolist(),
                              'second_idx': second_idx.cpu().detach().numpy().tolist(),
+                             'tokens': origin_tokens, 
+                             'mention_spans': candidate_start_ends.tolist(), 
                              'score': scores.squeeze(1).cpu().detach().numpy().tolist(),
                              'pairwise_label': pairwise_labels.cpu().detach().numpy().tolist()})
 
@@ -212,7 +219,7 @@ def test(text_model, image_model, coref_model, test_loader, args):
                                                            len(all_labels)))
       logger.info('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
                                                                       eval.get_precision(), eval.get_f1()))
-      json.dump(pred_dicts, open(os.path.join(args.exp_dir, 'prediction.json'), 'w'), indent=4, sort_keys=True)
+      json.dump(pred_dicts, open(os.path.join(args.exp_dir, '{}_prediction.json'.format(args.config.split('.')[0].split('/')[-1])), 'w'), indent=4, sort_keys=True)
  
 if __name__ == '__main__':
   # Set up argument parser
@@ -236,7 +243,7 @@ if __name__ == '__main__':
 
   # Initialize dataloaders
   train_set = GroundingFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config)
-  test_set = GroundingFeatureDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), config) # XXX
+  test_set = GroundingFeatureDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), config)
   train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
   test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
 
@@ -257,7 +264,8 @@ if __name__ == '__main__':
   train(text_model, image_model, coref_model, train_loader, test_loader, args)
 
   # Convert the predictions to readable format
-  make_prediction_readable(os.path.join(args.exp_dir, 'prediction.json'),
+  pred_json = '{}_prediction.json'.format(args.config.split('/')[-1].split('.')[0])
+  make_prediction_readable(os.path.join(args.exp_dir, pred_json),
                            config['image_dir'],
                            os.path.join(config['data_folder'], 'test_mixed.json'),
-                           os.path.join(args.exp_dir, 'prediction_readable.txt'))
+                           os.path.join(args.exp_dir, pred_json.split('.')[0]+'_readable.txt'))
