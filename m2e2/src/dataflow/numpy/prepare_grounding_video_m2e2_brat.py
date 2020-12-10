@@ -15,6 +15,7 @@ NE = ['ABS', 'AML', 'BAL', 'BOD',
       'PTH', 'RES', 'SEN', 'SID',
       'TTL', 'VAL', 'VEH', 'WEA', 'UNK']
 UNK_EVENT = 'EVENT'
+PUNCT = [',', '.', '?', '\'', '\"', '!']
 nlp = spacy.load('en_core_web_sm')
 nlp.add_pipe(nlp.create_pipe('sentencizer'))
 dep_parser = Predictor.from_path('https://storage.googleapis.com/allennlp-public-models/biaffine-dependency-parser-ptb-2020.04.06.tar.gz')
@@ -77,10 +78,12 @@ class Article:
         parts = line.split()
         if parts[0][0] == 'T' and parts[1] in NE: # Check if the annotation is a mention
           # print('Currently reading {} {} {} {} for sent idx {}'.format(parts[0], parts[1], parts[2], parts[3], sent_idx)) # XXX
-          mention_id, ner, start, end = parts[0], parts[1], int(parts[2]), int(parts[3]) 
+          mention_id, ner, start, end = parts[0], parts[1], int(parts[2]), int(parts[3])-1 
           ne_start = None
           ne_end = None
           for idx, token in enumerate(self.tokens[sent_idx]):
+            if token.text in PUNCT:
+              continue
             if int_overlap(start, end, token.start_char, token.end_char):
               if ne_start is None:
                 ne_start = idx
@@ -103,10 +106,13 @@ class Article:
       for line in self.annotation:
         parts = line.split()
         if parts[0][0] == 'T' and not parts[1] in NE:
-            mention_id, event_type, start, end = parts[0], parts[1], int(parts[2]), int(parts[3])
+            mention_id, event_type, start, end = parts[0], parts[1], int(parts[2]), int(parts[3])-1
             t_start = None
             t_end = None
             for idx, token in enumerate(self.tokens[sent_idx]):
+              if token.text in PUNCT:
+                # print('Skip punctuation: {}'.format(token.text))
+                continue
               if int_overlap(start, end, token.start_char, token.end_char):
                 if t_start is None:
                   t_start = idx
@@ -168,10 +174,12 @@ class Article:
       for line in self.annotation:
         parts = line.split()
         if parts[1] == 'EVENT':
-          trigger_id, start, end = parts[0], int(parts[2]), int(parts[3])
+          trigger_id, start, end = parts[0], int(parts[2]), int(parts[3])-1
           t_start = None
           t_end = None 
           for idx, token in enumerate(self.tokens[sent_idx]):
+            if token.text in PUNCT:
+              continue
             if int_overlap(start, end, token.start_char, token.end_char):
               if t_start is None:
                 t_start = idx

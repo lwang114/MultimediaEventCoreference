@@ -46,4 +46,23 @@ class Evaluation:
     def get_f1(self):
         return 2 * self.precision * self.recall / (self.precision + self.recall) if (self.precision + self.recall) > 0 else 0
 
+class RetrievalEvaluation:
+  def __init__(self, predictions, labels=None):
+    self.predictions = predictions
+    self.labels = labels
+    self.total = len(predictions)
+    if labels is None:
+      self.labels = list(range(self.total))
+
+  def get_recall_at_k(self, k=10):
+    recall_at_k = 0.
+    for i in range(self.total):
+      for idx in range(k):
+        if self.predictions[i][idx] == self.labels[i]:
+          recall_at_k += 1
+          break
+    return recall_at_k / self.total  
+         
+          
+
 
