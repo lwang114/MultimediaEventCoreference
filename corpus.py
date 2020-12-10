@@ -46,7 +46,7 @@ def fix_embedding_length(emb, L):
   return emb  
 
 class GroundingDataset(Dataset):
-  def __init__(self, doc_json, mention_json, config):
+  def __init__(self, doc_json, mention_json, config, split='train'):
     '''
     :param doc_json: dict of 
         [doc_id]: list of [sent id, token id, token, is entity/event]
@@ -82,7 +82,13 @@ class GroundingDataset(Dataset):
     documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
     mentions = json.load(codecs.open(mention_json, 'r', 'utf-8'))
     documents = self.filter(documents)
-    self.doc_ids = sorted(documents) # XXX
+    with open(config.test_id_file) as f:
+      test_ids = f.read().strip().split() 
+
+    if split == 'train':
+      self.doc_ids = [doc_id for doc_id in sorted(documents) if not doc_id in test_ids] # XXX
+    else:
+      self.doc_ids = [doc_id for doc_id in sorted(documents) if doc_id in test_ids] # XXX
     
     # Extract coreference cluster labels
     self.label_dict = self.create_dict_labels(mentions)
