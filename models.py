@@ -137,4 +137,24 @@ class SimplePairWiseClassifier(nn.Module):
     def forward(self, first, second):
         return self.pairwise_mlp(torch.cat((first, second, first * second), dim=1))
 
-
+if __name__ == '__main__':
+  import argparse
+  import pyhocon
+  parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+  parser.add_argument('--config', type=str, default='configs/config_grounded.json')
+  args = parser.parse_args()
+  
+  config = pyhocon.ConfigFactory.parse_file(args.config) 
+  clf = SimplePairWiseClassifier(config)
+  clf.load_state_dict(torch.load(config.pairwise_scorer_path))
+  clf.eval()
+  with torch.no_grad():
+    first = torch.ones((1, clf.input_layer // 3))
+    second = torch.ones((1, clf.input_layer // 3))
+    print('Pairwise classifier score between all-one vectors: {}'.format(clf(first, second)))
+    third = torch.zeros((1, clf.input_layer // 3))
+    print('Pairwise classifier score between all-one and all-zero vectors: {}'.format(clf(first, third)))
+    first = torch.randn((1, clf.input_layer // 3))
+    second = torch.randn((1, clf.input_layer // 3))
+    print('Pairwise classifier score between two random vectors: {}'.format(clf(first, second)))
+    print('Pairwise classifier score between random vector and itself: {}'.format(clf(first, first)))

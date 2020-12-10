@@ -11,11 +11,13 @@ import argparse
 import pyhocon 
 import random
 import numpy as np
+from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
 from models import SpanEmbedder, SimplePairWiseClassifier
-from grounded_coreference import GroundedCoreferencer, ResNet152 
-from corpus import GroundingDataset
+from grounded_coreference import GroundedCoreferencer 
+from corpus_feat import GroundingFeatureDataset
 from evaluator import Evaluation
+from utils import make_prediction_readable
 
 
 logger = logging.getLogger(__name__)
@@ -40,7 +42,7 @@ def get_optimizer(config, models):
         return optim.SGD(parameters, lr=config.learning_rate, weight_decay=config.weight_decay)
 
 def get_pairwise_labels(labels, is_training, device):
-    if len(labels) == 0:
+    if len(labels) <= 1:
       return None, None, None
     first, second = zip(*list(combinations(range(len(labels)), 2)))
     first = torch.tensor(first)
@@ -70,9 +72,7 @@ def get_pairwise_labels(labels, is_training, device):
     torch.cuda.empty_cache()
 
 
-    return first, second, pairwise_labels
-
-
+    return first, second, pairwise_labels    
 
 
 def train(text_model, image_model, coref_model, train_loader, test_loader, args):
@@ -107,9 +107,7 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
   optimizer = get_optimizer(config, [text_model, image_model, coref_model])
    
   # Start training
-  if config['training_method'] in ('continue', 'e2e') and not config['use_gold_mentions']: 
-    text_model.train()
-
+  text_model.train()
   image_model.train()
   coref_model.train()
   total_loss = 0.
@@ -117,7 +115,6 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
   begin_time = time.time()
   if args.evaluate_only:
     config.epochs = 0
-
   for epoch in range(args.start_epoch, config.epochs):
     for i, batch in enumerate(train_loader):
       start_end_embeddings, continuous_embeddings,\
@@ -133,7 +130,7 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
       optimizer.zero_grad()
 
       text_output = text_model(start_end_embeddings, continuous_embeddings, width)
-      video_output, video_mask = image_model(videos, video_mask)
+      video_output = image_model(videos)
       loss = coref_model(text_output, video_output, span_mask, video_mask).mean()
       loss.backward()
       optimizer.step()
@@ -149,58 +146,80 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
     print(info)
     logger.info(info)
 
-    torch.save(text_model.module.state_dict(), '{}/text_model.{}.pth'.format(args.exp_dir, args.start_epoch))
-    torch.save(image_model.module.state_dict(), '{}/image_model.{}.pth'.format(args.exp_dir, args.start_epoch))
-    torch.save(coref_model.module.text_scorer.state_dict(), '{}/text_scorer.{}.pth'.format(args.exp_dir, args.start_epoch))
+    torch.save(text_model.module.state_dict(), '{}/text_model.{}.pth'.format(args.exp_dir, epoch))
+    torch.save(image_model.module.state_dict(), '{}/image_model.{}.pth'.format(args.exp_dir, epoch))
+    torch.save(coref_model.module.text_scorer.state_dict(), '{}/text_scorer.{}.pth'.format(args.exp_dir, epoch))
  
     if epoch % 5 == 0:
-      all_scores = []
-      all_labels = []
-      with torch.no_grad(): 
-        for i, batch in enumerate(test_loader):
-          start_end_embeddings, continuous_embeddings,\
-          span_mask, width, videos, video_mask, labels = batch
-          start_end_embeddings = start_end_embeddings.to(device)
-          continuous_embeddings = continuous_embeddings.to(device)
-          span_mask = span_mask.to(device)
-          span_num = span_mask.sum(-1).long()
-          width = width.to(device)
-          videos = videos.to(device)
-          video_mask = video_mask.to(device)
-          labels = labels.to(device)
+      test(text_model, image_model, coref_model, test_loader, args)
+  if args.evaluate_only:
+    test(text_model, image_model, coref_model, test_loader, args)
 
-          # Extract span and video embeddings
-          text_output = text_model(start_end_embeddings, continuous_embeddings, width)
-          video_output, video_mask = image_model(videos, video_mask)
-         
-          # Compute score for each span pair
-          B = start_end_embeddings.size(0) 
-          for idx in range(B):
-            first_idx, second_idx, pairwise_labels = get_pairwise_labels(labels[idx, :span_num[idx]], is_training=False, device=device)
-            scores = coref_model.predict(text_output[idx, first_idx], video_output[idx, first_idx],\
-                                       text_mask[idx, first_idx], video_mask[idx, first_idx],\
-                                       text_output[idx, second_idx], video_output[idx, second_idx],\
-                                       span_mask[idx, first_idx], video_mask[idx, second_idx])
-            all_scores.append(scores.squeeze(0))
-            all_labels.append(pairwise_labels.to(torch.int)) 
+def test(text_model, image_model, coref_model, test_loader, args):
+    all_scores = []
+    all_labels = []
+    text_model.eval()
+    image_model.eval()
+    coref_model.eval()
+    with torch.no_grad(): 
+      pred_dicts = []
+      for i, batch in enumerate(test_loader):
+        start_end_embeddings, continuous_embeddings,\
+        span_mask, width, videos, video_mask, labels = batch
+        start_end_embeddings = start_end_embeddings.to(device)
+        continuous_embeddings = continuous_embeddings.to(device)
+        span_mask = span_mask.to(device)
+        span_num = span_mask.sum(-1).long()
+        width = width.to(device)
+        videos = videos.to(device)
+        video_mask = video_mask.to(device)
+        labels = labels.to(device)
 
-        all_scores = torch.cat(all_scores)
-        all_labels = torch.cat(all_labels)
+        # Extract span and video embeddings
+        text_output = text_model(start_end_embeddings, continuous_embeddings, width)
+        video_output = image_model(videos)
+       
+        # Compute score for each span pair
+        B = start_end_embeddings.size(0) 
+        for idx in range(B):
+          first_idx, second_idx, pairwise_labels = get_pairwise_labels(labels[idx, :span_num[idx]], is_training=False, device=device)
+          if first_idx is None:
+            continue
+          scores = coref_model.module.predict(text_output[idx, first_idx], video_output[idx],\
+                                              span_mask[idx, first_idx], video_mask[idx],\
+                                              text_output[idx, second_idx], video_output[idx],\
+                                              span_mask[idx, second_idx], video_mask[idx])
+          all_scores.append(scores.squeeze(1))             
+          all_labels.append(pairwise_labels.to(torch.int)) 
+          
+          global_idx = i * test_loader.batch_size + idx
+          doc_id = test_loader.dataset.doc_ids[global_idx] 
+          origin_tokens = [token[2] for token in test_loader.dataset.origin_tokens[global_idx]]
+          candidate_start_ends = test_loader.dataset.candidate_start_ends[global_idx]
+          pred_dicts.append({'doc_id': doc_id,
+                             'first_idx': first_idx.cpu().detach().numpy().tolist(),
+                             'second_idx': second_idx.cpu().detach().numpy().tolist(),
+                             'tokens': origin_tokens, 
+                             'mention_spans': candidate_start_ends.tolist(), 
+                             'score': scores.squeeze(1).cpu().detach().numpy().tolist(),
+                             'pairwise_label': pairwise_labels.cpu().detach().numpy().tolist()})
 
-        strict_preds = (all_scores > 0).to(torch.int)
-        eval = Evaluation(strict_preds, all_labels.to(device))
-        print('Number of predictions: {}/{}'.format(strict_preds.sum(), len(strict_preds)))
-        print('Number of positive pairs: {}/{}'.format(len((all_labels == 1).nonzero()),
-                                                       len(all_labels)))
-        print('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
-                                                                  eval.get_precision(), eval.get_f1()))
-        logger.info('Number of predictions: {}/{}'.format(strict_preds.sum(), len(strict_preds)))
-        logger.info('Number of positive pairs: {}/{}'.format(len((all_labels == 1).nonzero()),
-                                                             len(all_labels)))
-        logger.info('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
-                                                                        eval.get_precision(), eval.get_f1()))
+      all_scores = torch.cat(all_scores)
+      all_labels = torch.cat(all_labels)
 
-
+      strict_preds = (all_scores > 0).to(torch.int)
+      eval = Evaluation(strict_preds, all_labels.to(device))
+      print('Number of predictions: {}/{}'.format(strict_preds.sum(), len(strict_preds)))
+      print('Number of positive pairs: {}/{}'.format(len((all_labels == 1).nonzero()),
+                                                     len(all_labels)))
+      print('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
+                                                                eval.get_precision(), eval.get_f1()))
+      logger.info('Number of predictions: {}/{}'.format(strict_preds.sum(), len(strict_preds)))
+      logger.info('Number of positive pairs: {}/{}'.format(len((all_labels == 1).nonzero()),
+                                                           len(all_labels)))
+      logger.info('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
+                                                                      eval.get_precision(), eval.get_f1()))
+      json.dump(pred_dicts, open(os.path.join(args.exp_dir, '{}_prediction.json'.format(args.config.split('.')[0].split('/')[-1])), 'w'), indent=4, sort_keys=True)
  
 if __name__ == '__main__':
   # Set up argument parser
@@ -223,8 +242,8 @@ if __name__ == '__main__':
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
 
   # Initialize dataloaders
-  train_set = GroundingDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config)
-  test_set = GroundingDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config) # XXX
+  train_set = GroundingFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config)
+  test_set = GroundingFeatureDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), config)
   train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
   test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
 
@@ -233,8 +252,25 @@ if __name__ == '__main__':
   embedding_dim = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2
   if config.with_mention_width:
     embedding_dim += config.embedding_dimension
-  image_model = ResNet152(embedding_dim=embedding_dim)
-  coref_model = GroundedCoreferencer(config).to(device)
+  image_model = nn.Linear(2048, embedding_dim)
+  if config.loss == 'mml':
+    coref_model = MMLGroundedCoreferencer(config).to(device)
+  else:
+    coref_model = GroundedCoreferencer(config).to(device)
+  
 
+
+  if config['training_method'] in ('pipeline', 'continue'):
+      text_model.load_state_dict(torch.load(config['span_repr_path'], map_location=device))
+      image_model.load_state_dict(torch.load(config['image_repr_path'], map_location=device))
+      coref_model.text_scorer.load_state_dict(torch.load(config['pairwise_scorer_path'], map_location=device))
+  
   # Training
   train(text_model, image_model, coref_model, train_loader, test_loader, args)
+
+  # Convert the predictions to readable format
+  pred_json = '{}_prediction.json'.format(args.config.split('/')[-1].split('.')[0])
+  make_prediction_readable(os.path.join(args.exp_dir, pred_json),
+                           config['image_dir'],
+                           os.path.join(config['data_folder'], 'test_mixed.json'),
+                           os.path.join(args.exp_dir, pred_json.split('.')[0]+'_readable.txt'))
