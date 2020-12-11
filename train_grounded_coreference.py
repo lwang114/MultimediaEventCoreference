@@ -153,9 +153,16 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
     if epoch % 5 == 0:
       test(text_model, image_model, coref_model, test_loader, args)
   if args.evaluate_only:
-    test(text_model, image_model, coref_model, test_loader, args)
+    if config.task == 'coreference':
+      test(text_model, image_model, coref_model, test_loader, args)
+    elif config.task == 'retrieval':
+      test_retrieve(text_model, image_model, coref_model, test_loader, args)
+    elif config.task == 'both':
+      test(text_model, image_model, coref_model, test_loader, args)
+      test_retrieve(text_model, image_model, coref_model, test_loader, args)
 
 def test(text_model, image_model, coref_model, test_loader, args):
+    config = pyhocon.ConfigFactory.parse_file(args.config)
     all_scores = []
     all_labels = []
     text_model.eval()
@@ -220,7 +227,53 @@ def test(text_model, image_model, coref_model, test_loader, args):
       logger.info('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
                                                                       eval.get_precision(), eval.get_f1()))
       json.dump(pred_dicts, open(os.path.join(args.exp_dir, '{}_prediction.json'.format(args.config.split('.')[0].split('/')[-1])), 'w'), indent=4, sort_keys=True)
- 
+
+def test_retrieve(text_model, image_model, coref_model, test_loader, args): # TODO
+  config = pyhocon.ConfigFactory.parse_file(args.config)
+  span_embeddings = []
+  video_embeddings = []
+  span_masks = []
+  video_masks = []
+  text_model.eval()
+  image_model.eval()
+  coref_model.eval()
+  with torch.no_grad():
+    pred_dicts = []
+    for i, batch in enumerate(test_loader):
+      start_end_embeddings, continuous_embeddings,\
+      span_mask, width, videos, video_mask, labels = batch
+      
+      text_output = text_model(start_end_embeddings, continuous_embeddings, width)
+      video_output = image_model(videos)
+
+      text_output = text_output.cpu().detach()
+      video_output = video_output.cpu().detach()
+      span_mask = span_mask.cpu().detach()
+      video_mask = video_mask.cpu().detach()
+
+      span_embeddings.append(text_output)
+      video_embeddings.append(video_output)
+      span_masks.append(span_mask)
+      video_masks.append(video_mask)
+
+  span_embeddings = torch.cat(span_embeddings)
+  video_embeddings = torch.cat(video_embeddings)
+  span_masks = torch.cat(span_masks)
+  video_masks = torch.cat(video_masks) 
+  I2S_idxs, S2I_idxs = coref_model.retrieve(span_embeddings, video_embeddings, span_masks, video_masks)
+  I2S_eval = RetrievalEvaluation(I2S_idxs)
+  S2I_eval = RetrievalEvaluation(S2I_idxs)
+  I2S_r1 = I2S_eval.get_recall_at_k(1) 
+  I2S_r5 = I2S_eval.get_recall_at_k(5)
+  I2S_r10 = I2S_eval.get_recall_at_k(10)
+  S2I_r1 = S2I_eval.get_recall_at_k(1) 
+  S2I_r5 = S2I_eval.get_recall_at_k(5)
+  S2I_r10 = S2I_eval.get_recall_at_k(10)
+
+  print('Number of article-video pairs: {}'.format(I2S_idxs.size(0)))
+  print('I2S recall@1={}\tI2S recall@5={}\tI2S recall@10={}'.format(I2S_r1, I2S_r5, I2S_r10)) 
+  print('S2I recall@1={}\tS2I recall@5={}\tS2I recall@10={}'.format(S2I_r1, S2I_r5, S2I_r10)) 
+
 if __name__ == '__main__':
   # Set up argument parser
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -242,8 +295,8 @@ if __name__ == '__main__':
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
 
   # Initialize dataloaders
-  train_set = GroundingFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config)
-  test_set = GroundingFeatureDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), config)
+  train_set = GroundingFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config, split='train')
+  test_set = GroundingFeatureDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), config, split='test')
   train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
   test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
 
@@ -258,7 +311,6 @@ if __name__ == '__main__':
   else:
     coref_model = GroundedCoreferencer(config).to(device)
   
-
 
   if config['training_method'] in ('pipeline', 'continue'):
       text_model.load_state_dict(torch.load(config['span_repr_path'], map_location=device))
