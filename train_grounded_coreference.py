@@ -15,8 +15,9 @@ from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
 from models import SpanEmbedder, SimplePairWiseClassifier
 from grounded_coreference import GroundedCoreferencer 
-from corpus_feat import GroundingFeatureDataset
-from evaluator import Evaluation
+from mml_grounded_coreference import MMLGroundedCoreferencer 
+from corpus import GroundingFeatureDataset
+from evaluator import Evaluation, RetrievalEvaluation
 from utils import make_prediction_readable
 
 
@@ -151,13 +152,22 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
     torch.save(coref_model.module.text_scorer.state_dict(), '{}/text_scorer.{}.pth'.format(args.exp_dir, epoch))
  
     if epoch % 5 == 0:
-      test(text_model, image_model, coref_model, test_loader, args)
+      task = config.get('task', 'coreference')
+      if task == 'coreference':
+        test(text_model, image_model, coref_model, test_loader, args)
+      elif task == 'retrieval':
+        test_retrieve(text_model, image_model, coref_model, test_loader, args)
+      elif task == 'both':
+        test_retrieve(text_model, image_model, coref_model, test_loader, args)
+        test(text_model, image_model, coref_model, test_loader, args)
   if args.evaluate_only:
-    if config.task == 'coreference':
+    task = config.get('task', 'coreference')
+    print(task)
+    if task == 'coreference':
       test(text_model, image_model, coref_model, test_loader, args)
-    elif config.task == 'retrieval':
+    elif task == 'retrieval':
       test_retrieve(text_model, image_model, coref_model, test_loader, args)
-    elif config.task == 'both':
+    elif task == 'both':
       test(text_model, image_model, coref_model, test_loader, args)
       test_retrieve(text_model, image_model, coref_model, test_loader, args)
 
@@ -228,7 +238,7 @@ def test(text_model, image_model, coref_model, test_loader, args):
                                                                       eval.get_precision(), eval.get_f1()))
       json.dump(pred_dicts, open(os.path.join(args.exp_dir, '{}_prediction.json'.format(args.config.split('.')[0].split('/')[-1])), 'w'), indent=4, sort_keys=True)
 
-def test_retrieve(text_model, image_model, coref_model, test_loader, args): # TODO
+def test_retrieve(text_model, image_model, coref_model, test_loader, args):
   config = pyhocon.ConfigFactory.parse_file(args.config)
   span_embeddings = []
   video_embeddings = []
@@ -260,7 +270,7 @@ def test_retrieve(text_model, image_model, coref_model, test_loader, args): # TO
   video_embeddings = torch.cat(video_embeddings)
   span_masks = torch.cat(span_masks)
   video_masks = torch.cat(video_masks) 
-  I2S_idxs, S2I_idxs = coref_model.retrieve(span_embeddings, video_embeddings, span_masks, video_masks)
+  I2S_idxs, S2I_idxs = coref_model.module.retrieve(span_embeddings, video_embeddings, span_masks, video_masks)
   I2S_eval = RetrievalEvaluation(I2S_idxs)
   S2I_eval = RetrievalEvaluation(S2I_idxs)
   I2S_r1 = I2S_eval.get_recall_at_k(1) 

@@ -54,7 +54,7 @@ class ResNet152(nn.Module):
 
 class MMLGroundedCoreferencer(nn.Module):
   def __init__(self, config):
-    super(GroundedCoreferencer, self).__init__()
+    super(MMLGroundedCoreferencer, self).__init__()
     self.text_scorer = SimplePairWiseClassifier(config) 
     self.image_scorer = self.score_image
     self.text_only_decode = config.get('text_only_decode', False)
@@ -87,11 +87,14 @@ class MMLGroundedCoreferencer(nn.Module):
     '''
     self.text_scorer.train()
     n = span_embeddings.size(0)
-    S = torch.zeros((n, n), dtype=torch.float, device=span_embeddings.device, requires_grad=True)
+    S = torch.zeros((n, n), dtype=torch.float, device=span_embeddings.device)
     m = nn.LogSoftmax(dim=1) 
     for s_idx in range(n):
       for v_idx in range(n):
-        S[s_idx, v_idx] = self.calculate_loss(span_embeddings[s_idx], image_embeddings[v_idx], span_mask, image_mask)
+        S[s_idx, v_idx] = -self.calculate_loss(span_embeddings[s_idx].unsqueeze(0),
+                                               image_embeddings[v_idx].unsqueeze(0),
+                                               span_mask[s_idx].unsqueeze(0),
+                                               image_mask[v_idx].unsqueeze(0))
     
     loss = -torch.sum(m(S).diag())-torch.sum(m(S.transpose(0, 1)).diag())
     loss = loss / n
@@ -116,9 +119,14 @@ class MMLGroundedCoreferencer(nn.Module):
     m = nn.LogSoftmax(dim=1)
     for s_idx in range(n):
       for v_idx in range(n):
-        S[s_idx, v_idx] = -self.calculate_loss(span_embeddings[s_idx], image_embeddings[v_idx], span_mask, image_mask)
-    return S.topk(k, 0).t(), S.topk(k, 1) 
-
+        S[s_idx, v_idx] = -self.calculate_loss(span_embeddings[s_idx].unsqueeze(0),
+                                               image_embeddings[v_idx].unsqueeze(0),
+                                               span_mask[s_idx].unsqueeze(0),
+                                               image_mask[v_idx].unsqueeze(0))
+    _, I2S_idxs = S.topk(k, 0)
+    _, S2I_idxs = S.topk(k, 1) 
+    return I2S_idxs.t(), S2I_idxs
+    
   def predict(self, first_span_embeddings, first_image_embeddings, 
               first_span_mask, first_image_mask,
               second_span_embeddings, second_image_embeddings,
