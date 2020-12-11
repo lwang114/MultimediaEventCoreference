@@ -5,10 +5,9 @@ import torch.nn.functional as F
 
 
 def init_weights(m):
-    if isinstance(m, nn.Linear):
+    if isinstance(m, nn.Linear) or isinstance(m, nn.Bilinear):
         nn.init.xavier_uniform_(m.weight)
         nn.init.uniform_(m.bias)
-
 
 class SpanEmbedder(nn.Module):
     def __init__(self, config, device):
@@ -136,6 +135,36 @@ class SimplePairWiseClassifier(nn.Module):
 
     def forward(self, first, second):
         return self.pairwise_mlp(torch.cat((first, second, first * second), dim=1))
+
+class SymbolicPairWiseClassifier(nn.Module):
+  def __init__(self, config):
+    super(SymbolicPairWiseClassifier, self).__init__()
+    self.symbolic_layer = config.get('type_embedding_dimension', 100)
+    self.input_layer = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2 
+    if config.with_mention_width:
+        self.input_layer += config.embedding_dimension
+    self.input_layer *= 3
+    self.hidden_layer = config.hidden_layer
+    self.pairwise_mlp = nn.Sequential(
+        nn.Dropout(config.dropout),
+        nn.Linear(self.input_layer, self.hidden_layer),
+        nn.ReLU(),
+        nn.Linear(self.hidden_layer, self.hidden_layer),
+        nn.Dropout(config.dropout),
+        nn.ReLU(),
+        nn.Linear(self.hidden_layer, 1),
+    )
+    self.symbolic_pairwise_mlp = nn.Bilinear(self.symbolic_layer, self.symbolic_layer, 1)
+
+    self.pairwise_mlp.apply(init_weights)
+    self.symbolic_pairwise_mlp.apply(init_weights)
+
+  def forward(self, first, second, first_symbolic=None, second_symbolic=None):
+    if first_symbolic is not None and second_symbolic is not None:
+      return self.pairwise_mlp(torch.cat((first, second, first * second), dim=1)) + self.symbolic_pairwise_mlp(first_symbolic, second_symbolic)
+    else:
+      return self.pairwise_mlp(torch.cat((first, second, first * second), dim=1))
+    
 
 if __name__ == '__main__':
   import argparse
