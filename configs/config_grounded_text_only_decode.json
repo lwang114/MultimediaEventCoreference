@@ -36,5 +36,5 @@
   "span_repr_path": "coref/models/topic_level_predicted_mentions/mixed_0.35/span_repr_9",
   "image_repr_path": "models/grounded_coref/image_model.9.pth",
   "pairwise_scorer_path": "coref/models/topic_level_predicted_mentions/mixed_0.35/pairwise_scorer_9",
-  "model_path": "models/grounded_coref/model"
+  "model_path": "models/grounded_coref_text_decode"
 }

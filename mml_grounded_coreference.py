@@ -50,8 +50,21 @@ class ResNet152(nn.Module):
       return emb, fmap, mask
     else: 
       return emb, mask
-    
 
+class NoOp(nn.Module):
+  def __init__(self):
+    super(NoOp, self).__init__()
+
+  def forward(self, x, mask=None, return_feat=False):
+    if return_feat:
+      return x, x, mask
+    else:
+      return x, mask
+
+# class BiLSTM(nn.Module): # TODO
+#  def __init__(self):
+#  def 
+    
 class MMLGroundedCoreferencer(nn.Module):
   def __init__(self, config):
     super(MMLGroundedCoreferencer, self).__init__()
@@ -66,13 +79,16 @@ class MMLGroundedCoreferencer(nn.Module):
     :param score_type: str from {'first', 'both'}
     :return scores: FloatTensor of size (batch size, max num. of [score_type] spans, span embed dim)
     '''
-    att_weights = torch.matmul(first, second.permute(0, 2, 1))
-    att_weights_first = F.softmax(att_weights * second_mask.unsqueeze(1), dim=-1)
+    mask = second_mask.unsqueeze(1) * first_mask.unsqueeze(-1)
+    att_weights = torch.matmul(first, second.permute(0, 2, 1)) * mask
+    att_weights = torch.where(att_weights != 0, att_weights, torch.tensor(-1e10, device=first.device))
+
+    att_weights_first = F.softmax(att_weights * second_mask.unsqueeze(1), dim=-1) * mask
     att_first = torch.matmul(att_weights_first, second)
     score = F.mse_loss(first, att_first) 
 
     if score_type == 'both':
-      att_weights_second = F.softmax(torch.transpose(att_weights, 1, 2) * first_mask.unsqueeze(1), dim=-1)    
+      att_weights_second = F.softmax(torch.transpose(att_weights, 1, 2), dim=-1) * torch.transpose(mask, 1, 2)    
       att_second = torch.matmul(att_weights_second, first)
       score = score + F.mse_loss(second, att_second)   
     return score, att_first

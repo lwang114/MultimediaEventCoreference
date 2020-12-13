@@ -58,12 +58,12 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
   end_inc = 1 if inclusive else 0 
   cur_id = ''
   for sen_dict in sen_dicts:
-    doc_id = sen_dict['image'] 
-    sent_id = sen_dict['sentence_id'].split('-')[-1]
+    doc_id = '_'.join(sen_dict['image'][0].split('_')[:-1])
+    sent_id = sen_dict['sentence_id']
     tokens = sen_dict['words']
     entity_mentions = sen_dict['golden-entity-mentions']
     event_mentions = sen_dict['golden-event-mentions']
-
+    
     if doc_id != cur_id:
       cur_id = doc_id
       sen_start = 0
@@ -74,63 +74,15 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
           coref2event[c].append(e)
         for e, c in entity2coref.items():
           coref2entity[c].append(e)
-
-      event2coref = {} # Mapping from event mention id to its integer cluster idx
-      entity2coref = {} # Mapping from entity mention id to its integer cluster idx
-      event_cluster2id = {} # Mapping from event cluster id to integer cluster idx
-      entity_cluster2id = {} # Mapping from entity cluster id to integer cluster idx
-
-    if 'coreference' in sen_dict:
-      coreference = sen_dict['coreference']
-      entity_mention_ids = sen_dict['mention_ids']['entities']
-      event_mention_ids = sen_dict['mention_ids']['events']
-      # Create coreference mapping
-      for cluster_id in sorted(coreference['events']):
-        if not cluster_id in event_cluster2id:
-          event_cluster2id[cluster_id] = n_event_cluster 
-          n_event_cluster += 1
-
-        for mention in coreference['events'][cluster_id]:
-          event2coref[mention[1]] = event_cluster2id[cluster_id]
-          print('doc id: {}, mention id: {}, event cluster id: {}, event cluster idx: {}'.format(doc_id, mention[1], cluster_id, event2coref[mention[1]])) # XXX
-
-      for mention_id in event_mention_ids:
-        if not mention_id in event2coref:
-          event2coref[mention_id] = n_event_cluster
-          n_event_cluster += 1
-
-      for cluster_id in sorted(coreference['entities']):
-        if not cluster_id in entity_cluster2id:
-          entity_cluster2id[cluster_id] = n_entity_cluster
-          n_entity_cluster += 1
-
-        for mention in coreference['entities'][cluster_id]:
-          entity2coref[mention[1]] = entity_cluster2id[cluster_id]
-          print('doc id: {}, mention id: {}, entity cluster id: {}, entity cluster idx: {}'.format(doc_id, mention[1], cluster_id, entity2coref[mention[1]])) # XXX
-      
-      for mention_id in entity_mention_ids:
-        if not mention_id in entity2coref:
-          entity2coref[mention_id] = n_entity_cluster 
-          n_entity_cluster += 1
-      
-    coref2event = collections.defaultdict(list)
-    coref2entity = collections.defaultdict(list)
-    for e, c in event2coref.items():
-      coref2event[c].append(e)
-    for e, c in entity2coref.items():
-      coref2entity[c].append(e)
     
     entity_mask = [0]*len(tokens)
     event_mask = [0]*len(tokens)
     # Create dict for [out_prefix]_entities.json
-    for m_id, mention in zip(entity_mention_ids, entity_mentions):
+    for m_id, mention in enumerate(entity_mentions):
         for pos in range(mention['start'], mention['end']+end_inc):
           entity_mask[pos] = 1
         
-        if 'coreference' in sen_dict:
-          cluster_id = entity2coref[m_id]
-        else:  
-          cluster_id = '0'
+        cluster_id = '0'
         entities.append({'doc_id': doc_id,
                          'subtopic': '0',
                          'm_id': '0',
@@ -144,7 +96,7 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
                          'singleton': False})
 
     # Create dict for [out_prefix]_events.json
-    for m_id, mention in zip(event_mention_ids, event_mentions): 
+    for m_id, mention in enumerate(event_mentions): 
         try: # XXX
           start = mention['trigger']['start']
           end = mention['trigger']['end']
@@ -155,10 +107,7 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
         for pos in range(start, end+end_inc if not inclusive else end):
           event_mask[pos] = 1
 
-        if 'coreference' in sen_dict:
-          cluster_id = event2coref[m_id]
-        else:
-          cluster_id = '0'
+        cluster_id = '0'
         events.append({'doc_id': doc_id,
                        'subtopic': '0',
                        'm_id': '0',
@@ -183,13 +132,13 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
   json.dump(entities, codecs.open(out_prefix+'_entities.json', 'w', 'utf-8'), indent=4, sort_keys=True)
   json.dump(events, codecs.open(out_prefix+'_events.json', 'w', 'utf-8'), indent=4, sort_keys=True)
   json.dump(entities+events, codecs.open(out_prefix+'_mixed.json', 'w', 'utf-8'), indent=4, sort_keys=True)
-
+  
 if __name__ == '__main__':
-  data_dir = 'data/video_m2e2'
+  data_dir = 'data/m2e2'
   if not os.path.isdir(data_dir):
     os.mkdir(data_dir)
     os.mkdir(os.path.join(data_dir, 'mentions'))
     os.mkdir(os.path.join(data_dir, 'gold'))
-  data_json = 'm2e2/data/video_m2e2/grounding_video_m2e2_test.json' # XXX
-  out_prefix = os.path.join(data_dir, 'mentions/test') # XXX
-  get_mention_doc(data_json, out_prefix, inclusive=True) # XXX
+  data_json = 'm2e2/data/m2e2_rawdata/article_event.json' # XXX
+  out_prefix = os.path.join(data_dir, 'mentions/test')
+  get_mention_doc(data_json, out_prefix, inclusive=True)

@@ -48,9 +48,13 @@ def train_pairwise_classifier(config, pairwise_model, span_repr, span_scorer, sp
     return accumulate_loss
 
 
-def get_all_candidate_spans(config, bert_model, span_repr, span_scorer, data, topic_num):
-    docs_embeddings, docs_length = pad_and_read_bert(data.topics_bert_tokens[topic_num], bert_model)
-    topic_spans = TopicSpans(config, data, topic_num, docs_embeddings, docs_length, is_training=True)
+def get_all_candidate_spans(config, bert_model, span_repr, span_scorer, data, topic_num, batch_idxs=None):
+    if not batch_idxs is None:
+        bert_tokens = [data.topics_bert_tokens[topic_num][i] for i in batch_idxs]
+    else:
+        bert_tokens = data.topics_bert_tokens[topic_num]
+    docs_embeddings, docs_length = pad_and_read_bert(bert_tokens, bert_model)
+    topic_spans = TopicSpans(config, data, topic_num, docs_embeddings, docs_length, is_training=True, batch_idxs=batch_idxs)
 
     topic_spans.set_span_labels()
 
@@ -123,8 +127,9 @@ if __name__ == '__main__':
     # init train and dev set
     bert_tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
     training_set = create_corpus(config, bert_tokenizer, 'train')
+    print('Number of training topics: {}'.format(len(training_set.topic_list)))
     dev_set = create_corpus(config, bert_tokenizer, 'dev')
-
+    print('Number of test topics: {}'.format(len(dev_set.topic_list)))
 
     ## Model initiation
     logger.info('Init models')
@@ -167,11 +172,11 @@ if __name__ == '__main__':
         if config['training_method'] in ('continue', 'e2e') and not config['use_gold_mentions']:
             span_repr.train()
             span_scorer.train()
-
+            
         accumulate_loss = 0
         list_of_topics = shuffle(list(range(len(training_set.topic_list))))
         total_number_of_pairs = 0
-        for topic_num in tqdm(list_of_topics):
+        for topic_num in tqdm(list_of_topics): # XXX
             topic = training_set.topic_list[topic_num]
             topic_spans = get_all_candidate_spans(config, bert_model, span_repr, span_scorer, training_set, topic_num)
             first, second, pairwise_labels = get_pairwise_labels(topic_spans.labels, is_training=config['neg_samp'])
@@ -191,18 +196,23 @@ if __name__ == '__main__':
         span_repr.eval()
         span_scorer.eval()
         pairwise_model.eval()
-
+        
         all_scores, all_labels = [], []
-
-        for topic_num, topic in enumerate(tqdm(dev_set.topic_list)):
-            topic_spans = get_all_candidate_spans(config, bert_model, span_repr, span_scorer, dev_set, topic_num)
-            first, second, pairwise_labels = get_pairwise_labels(topic_spans.labels, is_training=False)
-
-            span_embeddings = topic_spans.start_end_embeddings, topic_spans.continuous_embeddings, \
-                              topic_spans.width
-            topic_spans.width = topic_spans.width.to(device)
+        for topic_num, topic in enumerate(tqdm(dev_set.topic_list)): # XXX
             with torch.no_grad():
-                for i in range(0, len(first), 10000):
+                total = len(dev_set.topics_list_of_docs[topic_num])
+                nbatches = total // config['batch_size'] + 1
+                for b in range(nbatches):
+                  start_idx = b * config['batch_size']
+                  end_idx = min((b + 1) * config['batch_size'], total)
+                  batch_idxs = list(range(start_idx, end_idx))
+                  topic_spans = get_all_candidate_spans(config, bert_model, span_repr, span_scorer, dev_set, topic_num, batch_idxs)
+                  first, second, pairwise_labels = get_pairwise_labels(topic_spans.labels, is_training=False)
+
+                  span_embeddings = topic_spans.start_end_embeddings, topic_spans.continuous_embeddings, \
+                                    topic_spans.width
+                  topic_spans.width = topic_spans.width.to(device)
+                  for i in range(0, len(first), 10000): # XXX
                     end_max = i + 10000
                     first_idx, second_idx = first[i:end_max], second[i:end_max]
                     batch_labels = pairwise_labels[i:end_max]

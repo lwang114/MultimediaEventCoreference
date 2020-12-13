@@ -113,7 +113,6 @@ class SpanScorer(nn.Module):
 
 
 
-
 class SimplePairWiseClassifier(nn.Module):
     def __init__(self, config):
         super(SimplePairWiseClassifier, self).__init__()
@@ -170,7 +169,7 @@ if __name__ == '__main__':
   import argparse
   import pyhocon
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-  parser.add_argument('--config', type=str, default='configs/config_grounded.json')
+  parser.add_argument('--config', type=str, default='configs/config_grounded_text_only_decode.json')
   args = parser.parse_args()
   
   config = pyhocon.ConfigFactory.parse_file(args.config) 
@@ -183,7 +182,7 @@ if __name__ == '__main__':
     print('Pairwise classifier score between all-one vectors: {}'.format(clf(first, second)))
     third = torch.zeros((1, clf.input_layer // 3))
     print('Pairwise classifier score between all-one and all-zero vectors: {}'.format(clf(first, third)))
-    first = torch.randn((1, clf.input_layer // 3))
-    second = torch.randn((1, clf.input_layer // 3))
+    first = 0.01*torch.randn((1, clf.input_layer // 3))
+    second = 0.01*torch.randn((1, clf.input_layer // 3))
     print('Pairwise classifier score between two random vectors: {}'.format(clf(first, second)))
     print('Pairwise classifier score between random vector and itself: {}'.format(clf(first, first)))
