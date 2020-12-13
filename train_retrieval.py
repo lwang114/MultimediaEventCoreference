@@ -14,7 +14,7 @@ import numpy as np
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
 from models import SpanEmbedder, SimplePairWiseClassifier
-from mml_grounded_coreference import MMLGroundedCoreferencer, NoOp
+from mml_grounded_coreference import MMLGroundedCoreferencer, NoOp, BiLSTM
 from corpus_glove import GroundingGloveFeatureDataset
 from evaluator import Evaluation, RetrievalEvaluation
 
@@ -89,7 +89,7 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
   if not isinstance(coref_model, torch.nn.DataParallel):
     coref_model = nn.DataParallel(coref_model)
 
-  # text_model.to(device)
+  text_model.to(device)
   image_model.to(device)
   coref_model.to(device)
 
@@ -106,15 +106,15 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
   optimizer = get_optimizer(config, [text_model, image_model, coref_model])
    
   # Start training
-  text_model.train()
-  image_model.train()
-  coref_model.train()
   total_loss = 0.
   total = 0.
   begin_time = time.time()
   if args.evaluate_only:
     config.epochs = 0
   for epoch in range(args.start_epoch, config.epochs):
+    text_model.train()
+    image_model.train()
+    coref_model.train()
     for i, batch in enumerate(train_loader):
       doc_embeddings, video_embeddings, doc_mask, video_mask = batch   
 
@@ -126,7 +126,7 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
       optimizer.zero_grad()
 
       # text_output = text_model(start_end_embeddings, continuous_embeddings, width)
-      text_output = doc_embeddings
+      text_output = text_model(doc_embeddings)
       video_output = image_model(video_embeddings)
       loss = coref_model(text_output, video_output, doc_mask, video_mask).mean()
       loss.backward()
@@ -168,8 +168,7 @@ def test_retrieve(text_model, image_model, coref_model, test_loader, args):
     pred_dicts = []
     for i, batch in enumerate(test_loader):
       doc_embedding, video_embedding, doc_mask, video_mask = batch
-      # text_output = text_model(doc_embeddings)
-      text_output = doc_embedding
+      text_output = text_model(doc_embedding)
       video_output = image_model(video_embedding)
 
       text_output = text_output.cpu().detach()
@@ -181,7 +180,6 @@ def test_retrieve(text_model, image_model, coref_model, test_loader, args):
       video_embeddings.append(video_output)
       doc_masks.append(doc_mask)
       video_masks.append(video_mask)
-
   doc_embeddings = torch.cat(doc_embeddings)
   video_embeddings = torch.cat(video_embeddings)
   doc_masks = torch.cat(doc_masks)
@@ -231,9 +229,9 @@ if __name__ == '__main__':
   test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
 
   # Initialize models
-  text_model = NoOp()
   embedding_dim = config.glove_dimension
-  image_model = nn.Linear(2048, embedding_dim)
+  text_model = BiLSTM(embedding_dim, embedding_dim)
+  image_model = BiLSTM(2048, embedding_dim)
   coref_model = MMLGroundedCoreferencer(config).to(device)
 
   if config['training_method'] in ('pipeline', 'continue'):

@@ -63,14 +63,21 @@ def extract_glove_embeddings(doc_json, glove_file, config, dimension=300, out_pr
     :return out_file: output embedding for the sentences
     '''
     documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
-    documents = cleanup(documents, config)
+    if config.test_id_file:
+        with open(config.test_id_file, 'r') as f:
+            test_ids = sorted(f.read().strip().split('\n'), key=lambda x:int(x.split('_')[-1].split('.')[0]))
+            test_ids = ['_'.join(k.split('_')[:-1]) for k in test_ids]
+        documents = {test_id:documents[test_id] for test_id in test_ids}
+    else:
+        documents = cleanup(documents, config)
+    print('Number of documents: {}'.format(len(documents)))
     vocab = {'$$$UNK$$$': 0}
     # Compute vocab of the documents
     for doc_id in sorted(documents): # XXX
         tokens = documents[doc_id]
         for token in tokens:
             if not token[2].lower() in vocab:
-                print(token[2].lower())
+                # print(token[2].lower())
                 vocab[token[2].lower()] = len(vocab)
     print('Vocabulary size: {}'.format(len(vocab)))
                 
@@ -80,10 +87,13 @@ def extract_glove_embeddings(doc_json, glove_file, config, dimension=300, out_pr
     with codecs.open(glove_file, 'r', 'utf-8') as f:
         for line in f:
             segments = line.strip().split()
-            word = segments[0]
+            if len(segments) == 0:
+                print('Empty line')
+                break
+            word = ' '.join(segments[:-300])
             if word in vocab:
-                print('{} found'.format(word))
-                embed= [float(x) for x in segments[1:]]
+                # print('Found {}'.format(word))
+                embed= [float(x) for x in segments[-300:]]
                 embed_matrix.append(embed)
                 vocab_emb[word] = len(vocab_emb)
     print('Vocabulary size with embeddings: {}'.format(len(vocab_emb)))
@@ -93,20 +103,24 @@ def extract_glove_embeddings(doc_json, glove_file, config, dimension=300, out_pr
     doc_embeddings = {}
     for idx, doc_id in enumerate(sorted(documents)): # XXX
         embed_id = '{}_{}'.format(doc_id, idx)
-        print(embed_id)
+        # print(embed_id)
         tokens = documents[doc_id]
         doc_embedding = []
         for token in tokens:
             token_id = vocab_emb.get(token[2].lower(), 0)
             doc_embedding.append(embed_matrix[token_id])
+        print(np.asarray(doc_embedding).shape)
         doc_embeddings[embed_id] = np.asarray(doc_embedding)
     np.savez(out_prefix+'.npz', **doc_embeddings)
         
 def cleanup(documents, config):
     filtered_documents = {}
+    img_ids = [img_id.split('.')[0] for img_id in os.path.listdir(config['image_dir'])]
     for doc_id in sorted(documents): 
         filename = os.path.join(config['image_dir'], doc_id+'.mp4')
         if os.path.exists(filename):
+            filtered_documents[doc_id] = documents[doc_id]
+        elif doc_id in img_ids:
             filtered_documents[doc_id] = documents[doc_id]
     print('Keep {} out of {} documents'.format(len(filtered_documents), len(documents)))
     return filtered_documents
@@ -160,7 +174,7 @@ def main():
       np.save(embed_file, video_feat.squeeze(0).cpu().detach().numpy())
   if 1 in tasks:
     doc_json = os.path.join(config['data_folder'], args.split+'.json')
-    glove_file = 'm2e2/data/glove/glove.6B.300d.txt'
+    glove_file = 'm2e2/data/glove/glove.840B.300d.txt'
     extract_glove_embeddings(doc_json, glove_file, config, out_prefix='{}_glove_embeddings'.format(args.split))
 
 if __name__ == '__main__':

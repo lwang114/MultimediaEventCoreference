@@ -61,9 +61,29 @@ class NoOp(nn.Module):
     else:
       return x, mask
 
-# class BiLSTM(nn.Module): # TODO
-#  def __init__(self):
-#  def 
+class BiLSTM(nn.Module):
+  def __init__(self, input_dim, embedding_dim, num_layers=1):
+    super(BiLSTM, self).__init__()
+    self.embedding_dim = embedding_dim
+    self.n_layers = num_layers
+    self.rnn = nn.LSTM(input_size=input_dim, hidden_size=embedding_dim, num_layers=num_layers, batch_first=True, bidirectional=True)
+
+  def forward(self, x, save_features=False):
+    if x.dim() < 3:
+      x = x.unsqueeze(0)
+    B = x.size(0)
+    T = x.size(1)
+    h0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim))
+    c0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim))
+    if torch.cuda.is_available():
+      h0 = h0.cuda()
+      c0 = c0.cuda()
+    embed, _ = self.rnn(x, (h0, c0))
+    outputs = []
+    for b in range(B):
+      outputs.append(embed[b])
+    outputs = torch.stack(outputs, dim=1).transpose(0, 1)
+    return outputs
     
 class MMLGroundedCoreferencer(nn.Module):
   def __init__(self, config):

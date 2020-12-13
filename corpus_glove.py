@@ -83,7 +83,7 @@ class GroundingGloveFeatureDataset(Dataset):
 
     if test_id_file:
       with open(test_id_file) as f:
-        test_ids = f.read().strip().split()
+        test_ids = ['_'.join(k.split('_')[:-1]) for k in f.read().strip().split()]
 
       if split == 'train':
         self.doc_ids = [doc_id for doc_id in self.doc_ids if not doc_id in test_ids]
@@ -93,8 +93,9 @@ class GroundingGloveFeatureDataset(Dataset):
         self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in test_ids]
       assert len(self.doc_ids) == len(self.feat_keys)
     
-    self.doc_ids = self.doc_ids[:10] # XXX
-    self.feat_keys = self.feat_keys[:10] # XXX
+    self.doc_ids = self.doc_ids # XXX
+    self.feat_keys = self.feat_keys # XXX
+    print('Number of documents: ', len(self.doc_ids))
     self.origin_tokens = [documents[doc_id] for doc_id in self.doc_ids] 
 
     # Extract word embeddings
