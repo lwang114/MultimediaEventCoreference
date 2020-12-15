@@ -8,10 +8,14 @@ import cv2
 import codecs
 import json
 import math
-import torchvision.transforms as transforms
+# import torchvision.transforms as transforms
 import PIL.Image as Image
+from tqdm import tqdm
 from datetime import datetime
+from transformers import AutoTokenizer, AutoModel
 from grounded_coreference import ResNet152
+from coref.model_utils import pad_and_read_bert
+from coref.utils import create_corpus
 
 logger = logging.getLogger(__name__)
 def load_video(filename, config, transform=None, image_prefix=None):
@@ -57,13 +61,14 @@ def load_video(filename, config, transform=None, image_prefix=None):
     
     return torch.cat(video, dim=0), mask
 
-def extract_glove_embeddings(doc_json, glove_file, config, dimension=300, out_prefix='glove_emb'):
+def extract_glove_embeddings(config, split, glove_file, dimension=300, out_prefix='glove_embedding'):
     ''' Extract glove embeddings for a sentence
     :param doc_json: json metainfo file in m2e2 format
-    :return out_file: output embedding for the sentences
+    :return out_prefix: output embedding for the sentences
     '''
+    doc_json = os.path.join(config['data_folder'], split+'.json')
     documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
-    if config.test_id_file:
+    if config.test_id_file and split == 'test':
         with open(config.test_id_file, 'r') as f:
             test_ids = sorted(f.read().strip().split('\n'), key=lambda x:int(x.split('_')[-1].split('.')[0]))
             test_ids = ['_'.join(k.split('_')[:-1]) for k in test_ids]
@@ -112,10 +117,70 @@ def extract_glove_embeddings(doc_json, glove_file, config, dimension=300, out_pr
         print(np.asarray(doc_embedding).shape)
         doc_embeddings[embed_id] = np.asarray(doc_embedding)
     np.savez(out_prefix+'.npz', **doc_embeddings)
+
+def extract_bert_embeddings(config, split, out_prefix='bert_embedding'):
+    device = torch.device('cuda:{}'.format(config.gpu_num[0]))
+    bert_tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
+    bert_model = AutoModel.from_pretrained(config['bert_model']).to(device)
+    data = create_corpus(config, bert_tokenizer, split)
+    doc_json = os.path.join(config['data_folder'], split+'.json')
+    filtered_doc_ids = cleanup(json.load(codecs.open(doc_json, 'r', 'utf-8')), config)
+    
+    list_of_doc_id_tokens = []    
+    for topic_num in tqdm(range(len(data.topic_list))):  
+        list_of_doc_id_tokens_topic = [(doc_id, bert_tokens)
+                                       for doc_id, bert_tokens in
+                                       zip(data.topics_list_of_docs[topic_num], data.topics_bert_tokens[topic_num])]
+        list_of_doc_id_tokens.extend(list_of_doc_id_tokens_topic)
+    
+    if config.test_id_file and split == 'test':
+        with open(config.test_id_file, 'r') as f:
+            test_ids = f.read().strip().split('\n')
+            test_ids = ['_'.join(k.split('_')[:-1]) for k in test_ids]
+        list_of_doc_id_tokens = [doc_id_token for doc_id_token in list_of_doc_id_tokens if doc_id_token[0] in test_ids]
+            
+    list_of_doc_id_tokens = sorted(list_of_doc_id_tokens, key=lambda x:x[0]) # XXX
+    print('Number of documents: {}'.format(len(list_of_doc_id_tokens)))
+
+    emb_ids = {}
+    docs_embeddings = {}
+    with torch.no_grad():
+        total = len(list_of_doc_id_tokens)
+        for i in range(total):
+            doc_id = list_of_doc_id_tokens[i][0]
+            if not doc_id in emb_ids and doc_id in filtered_doc_ids:
+                emb_ids[doc_id] = '{}_{}'.format(doc_id, len(emb_ids))
         
+        nbatches = total // config['batch_size'] + 1 if total % config['batch_size'] != 0 else total // config['batch_size']
+        for b in range(nbatches):
+            start_idx = b * config['batch_size']
+            end_idx = min((b + 1) * config['batch_size'], total)
+            batch_idxs = list(range(start_idx, end_idx))
+            doc_ids = [list_of_doc_id_tokens[i][0] for i in batch_idxs]
+            bert_tokens = [list_of_doc_id_tokens[i][1] for i in batch_idxs]
+            bert_embeddings, docs_length = pad_and_read_bert(bert_tokens, bert_model)
+            for idx, doc_id in enumerate(doc_ids):
+                if not doc_id in emb_ids:
+                    print('Skip {}'.format(doc_id))
+                    continue
+                emb_id = emb_ids[doc_id]
+                # print(emb_id) # XXX
+                bert_embedding = bert_embeddings[idx][:docs_length[idx]].cpu().detach().numpy()
+                if emb_id in docs_embeddings:
+                    print(doc_id, emb_id) # XXX
+                    docs_embeddings[emb_id] = np.concatenate([docs_embeddings[emb_id], bert_embedding], axis=0)
+                    print(docs_embeddings[emb_id].shape)
+                else:
+                    docs_embeddings[emb_id] = bert_embedding
+    np.savez(out_prefix+'.npz', **docs_embeddings)
+    
 def cleanup(documents, config):
     filtered_documents = {}
-    img_ids = [img_id.split('.')[0] for img_id in os.path.listdir(config['image_dir'])]
+    # XXX img_ids = [img_id.split('.')[0] for img_id in os.listdir(config['image_dir'])]
+    config['image_dir'] = os.path.join(config['data_folder'], 'train_resnet152') # XXX
+    img_ids = ['_'.join(img_id.split('_')[:-1]) for img_id in os.listdir(config['image_dir'])]
+    print(img_ids[:10]) # XXX
+    
     for doc_id in sorted(documents): 
         filename = os.path.join(config['image_dir'], doc_id+'.mp4')
         if os.path.exists(filename):
@@ -173,9 +238,10 @@ def main():
       print('{}_{}'.format(doc_id, idx))
       np.save(embed_file, video_feat.squeeze(0).cpu().detach().numpy())
   if 1 in tasks:
-    doc_json = os.path.join(config['data_folder'], args.split+'.json')
     glove_file = 'm2e2/data/glove/glove.840B.300d.txt'
-    extract_glove_embeddings(doc_json, glove_file, config, out_prefix='{}_glove_embeddings'.format(args.split))
-
+    extract_glove_embeddings(config, args.split, glove_file, out_prefix='{}_glove_embeddings'.format(args.split))
+  if 2 in tasks:
+    extract_bert_embeddings(config, args.split, out_prefix='{}_bert_embeddings'.format(args.split))
+    
 if __name__ == '__main__':
   main()

@@ -66,13 +66,14 @@ class GroundedCoreferencer(nn.Module):
     :param score_type: str from {'first', 'both'}
     :return scores: FloatTensor of size (batch size, max num. of [score_type] spans, span embed dim)
     '''
-    att_weights = torch.matmul(first, second.permute(0, 2, 1))
-    
-    att_weights_first = F.softmax(att_weights * second_mask.unsqueeze(1), dim=-1)
+    mask = second_mask.unsqueeze(1) * first_mask.unsqueeze(-1)
+    att_weights = torch.matmul(first, second.permute(0, 2, 1)) * mask
+    att_weights = torch.where(att_weights != 0, att_weights, torch.tensor(-1e10, device=first.device))
+    att_weights_first = F.softmax(att_weights, dim=-1) * mask
     att_first = torch.matmul(att_weights_first, second)
     score = F.mse_loss(first, att_first) 
     if score_type == 'both':
-      att_weights_second = F.softmax(torch.transpose(att_weights, 1, 2) * first_mask.unsqueeze(1), dim=-1)    
+      att_weights_second = F.softmax(torch.transpose(att_weights, 1, 2), dim=-1) * torch.transpose(mask, 1, 2)
       att_second = torch.matmul(att_weights_second, first)
       score = score + F.mse_loss(second, att_second)   
     return score, att_first
@@ -123,6 +124,14 @@ class GroundedCoreferencer(nn.Module):
     second_span_image_emb = second_span_image_emb.squeeze(0)
     
     scores = self.text_scorer(first_span_embeddings, second_span_embeddings)
+    # print('first span emb: {}'.format(first_span_embeddings[0][1024:2048])) # XXX
+    # print('first_span_image_emb: {}'.format(first_span_image_emb[:, 1024:2048])) # XXX
+    # first_span_emb = torch.cat([first_span_embeddings[:, :1024], first_span_embeddings[:, :1024], first_span_embeddings[:, :1024], first_span_embeddings[:, -20:]], dim=1) 
+    # self_scores = self.text_scorer(10*first_span_emb, 10*first_span_emb)
+    # print('self score: {}'.format(self_scores))
+    # self_scores2 = self.text_scorer(first_span_image_emb, first_span_image_emb)
+    # print('self score img: {}'.format(self_scores2))
+    
     if not self.text_only_decode:
       scores = scores + self.text_scorer(first_span_image_emb, second_span_image_emb)
     return scores
