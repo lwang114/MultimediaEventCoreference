@@ -5,11 +5,33 @@ import codecs
 import pyhocon
 import os
 
-def get_mention_doc(caption_file, out_prefix):
+def get_mention_doc(caption_file, bbox_file, out_prefix):
     '''
     :param caption_file: str of filename of a .txt file. Each line is of the format [doc id] [caption text]
-    :param out_prefix: str of the prefix of the output file storing dict of
-    {[doc_id]: list of [sent id, token id, token, is entity/event]}
+    :param bbox_file: str of filename of a .txt file. Each line is of the format [doc id] [phrase] [x_min, y_min, x_max, y_max]
+    :param out_prefix: str of the prefix of the three output files
+       1. [out_prefix].json: storing dict of {[doc_id]: list of [sent id, token id, token, is entity/event]}
+       2. [out_prefix]_entities.json: storing a list of dicts of 
+          {'doc_id': str, doc id,
+           'subtopic': '0',
+           'm_id': '0',
+           'sentence_id': 0,
+           'tokens_ids': list of ints, position of mention tokens in the current sentence,
+           'tokens': str, mention tokens concatenated with space,
+           'tags': '',
+           'lemmas': '',
+           'cluster_id': cluster id, equal to tokens in this case,
+           'cluster_desc': '',
+           'singleton': boolean}
+       3. [out_prefix]_bboxes.json: storing a list of dicts of
+          {'doc_id': str, doc id,
+           'subtopic': '0',
+           'm_id': '0',
+           'sentence_id': 0,
+           'bbox': list of ints, [x_min, y_min, x_max, y_max] of the bounding box,
+           'tokens': str, tokens concatenated with space,
+           'cluster_id': cluster id, equal to [doc_id]_[tokens] in this case,
+           } 
     '''
     sen_dicts = {}
     with open(caption_file, 'r') as f:
@@ -23,6 +45,50 @@ def get_mention_doc(caption_file, out_prefix):
             for token_id, token in enumerate(caption):
                 sen_dicts[doc_id].append([0, token_id, token, True])
     json.dump(sen_dicts, open('{}.json'.format(out_prefix), 'w'), indent=4)
+
+    # Match bbox with caption
+    mention_dicts = []
+    bbox_dicts = []
+    with open(bbox_file, 'r') as bbox_f:
+      idx = -1
+      prev_doc_id = ''
+      for line in f:
+        doc_id, phrase, bbox = line.split('\t')
+        if not doc_id != prev_doc_id:
+          idx += 1
+          prev_doc_id = doc_id
+        bbox[0] = int(bbox[0])
+        bbox[1] = int(bbox[1])
+        bbox[2] = int(bbox[2])
+        bbox[3] = int(bbox[3]) 
+        print(doc_id, phrase, bbox) # XXX
+        bbox_dicts.append({'doc_id': '{}_{}'.format(doc_id, idx),
+                           'subtopic': '0',
+                           'm_id': '0',
+                           'sentence_id': 0,
+                           'bbox': bbox,
+                           'tokens': phrase,
+                           'cluster_id': '{}_{}'.format(doc_id, phrase)
+                           })
+
+        tokens = sen_dicts['{}_{}'.format(doc_id, idx)]
+        phrase_start, phrase_end = -1, -1 
+        phrase_len = len(phrase.split())
+        sent_len = len(tokens)
+        for token_id in range(sent_len-phrase_len+1):
+          cur_mention = ' '.join([token[2] for token in tokens[token_id:token_id+phrase_len]])
+          if phrase == cur_mention:
+            mention_dicts.append({'doc_id': '{}_{}'.format(doc_id, idx),
+                                  'subtopic': '0',
+                                  'm_id': '0',
+                                  'sentence_id': 0,
+                                  'tokens_ids': list(range(token_id, token_id+phrase_len-1)),
+                                  'tokens': phrase,
+                                  'cluster_id': '{}_{}'.format(doc_id, phrase)
+                                  })
+            break
+    json.dump(bbox_dicts, open('{}_bboxes.json'.format(out_prefix), 'w'), indent=4)
+    json.dump(mention_dicts, open('{}_entities.json'.format(out_prefix), 'w'), indent=4)
 
 def extract_glove_embeddings(config, glove_file, dimension=300, out_prefix='glove_embedding'):
     ''' Extract glove embeddings for a sentence
