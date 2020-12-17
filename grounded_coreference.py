@@ -4,54 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 import torchvision.models as models
 from models import SimplePairWiseClassifier  
-
-class ResNet152(nn.Module):
-  def __init__(self, embedding_dim=1024, device=torch.device('cpu')):
-    super(ResNet152, self).__init__()
-    net = getattr(models, 'resnet152')(pretrained=True)
-    b = list(net.children())
-    self.backbone = nn.Sequential(*b[:-2])
-    self.pooler = nn.Sequential(*[b[-2]])
-    self.embedder = nn.Linear(2048, embedding_dim)
     
-    for p in self.backbone.parameters():
-      p.requires_grad = False
-    for p in self.pooler.parameters():
-      p.requires_grad = False
-     
-    self.device = device
-    self.to(device)
-     
-  def forward(self, images, mask=None, return_feat=False):    
-    images = images.to(self.device)
-    if mask is not None:
-      mask = mask.to(self.device)
-    
-    ndim = images.ndim
-    B, L = images.size(0), images.size(1)
-    if ndim == 5:
-      H, W, C = images.size(2), images.size(3), images.size(4)
-      images = images.view(B*L, H, W, C)
-
-    fmap = self.backbone(images)
-    fmap = self.pooler(fmap)
-    emb = self.embedder(fmap.permute(0, 2, 3, 1))
-
-    _, He, We, D = emb.size()
-    if ndim == 5:
-      emb = emb.view(B, L*He*We, D)
-      fmap = fmap.view(B, L, -1, He, We)
-      if mask is not None:
-        mask = mask.unsqueeze(-1).repeat(1, 1, He*We).flatten(start_dim=1)
-    else:
-      emb = emb.view(B, He*We, D)
-    
-    if return_feat:
-      return emb, fmap, mask
-    else: 
-      return emb, mask
-    
-
 class GroundedCoreferencer(nn.Module):
   def __init__(self, config):
     super(GroundedCoreferencer, self).__init__()
@@ -101,8 +54,11 @@ class GroundedCoreferencer(nn.Module):
               second_span_embeddings, second_image_embeddings,
               second_span_mask, second_image_mask):
     '''
-    :param span_embeddings: FloatTensor of size (num. of spans, span embed dim),
-    :param image_embeddings: FloatTensor of size (num. of ROIs, image embed dim),
+    :param {first, second}_span_embeddings: FloatTensor of size (batch size, num. of spans, span embed dim),
+    
+    :param {first, second}_image_embeddings: FloatTensor of size (batch size, num. of ROIs, image embed dim),
+    :param {first, second}_span_mask: LongTensor of size (batch size, max num. of spans)
+    :param {first, second}_image_mask: LongTensor of size (batch size, max num. of ROIs)
     '''
     first_span_embeddings = first_span_embeddings.unsqueeze(0)
     first_image_embeddings = first_image_embeddings.unsqueeze(0)  
@@ -135,3 +91,22 @@ class GroundedCoreferencer(nn.Module):
     if not self.text_only_decode:
       scores = scores + self.text_scorer(first_span_image_emb, second_span_image_emb)
     return scores
+
+  def predict_cluster(self, first_span_embeddings, first_image_embeddings, 
+              first_span_mask, first_image_mask,
+              second_span_embeddings, second_image_embeddings,
+              second_span_mask, second_image_mask):
+    '''
+    :param {first, second}_span_embeddings: FloatTensor of size (batch size, num. of spans, span embed dim),
+    
+    :param {first, second}_image_embeddings: FloatTensor of size (batch size, num. of ROIs, image embed dim),
+    :param {first, second}_span_mask: LongTensor of size (batch size, max num. of spans)
+    :param {first, second}_image_mask: LongTensor of size (batch size, max num. of ROIs)
+    :return scores: FloatTensor of size (batch size, max num. of mention pairs),
+    :return clusters: dict of list of int, mapping from cluster id to mention ids of its members  
+    '''
+    scores = self.predict(first_span_embeddings, first_image_embeddings, 
+              first_span_mask, first_image_mask,
+              second_span_embeddings, second_image_embeddings,
+              second_span_mask, second_image_mask)
+    

@@ -173,6 +173,7 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
 
 def test(text_model, image_model, coref_model, test_loader, args):
     config = pyhocon.ConfigFactory.parse_file(args.config)
+    documents = test_loader.dataset.documents
     all_scores = []
     all_labels = []
     text_model.eval()
@@ -202,7 +203,7 @@ def test(text_model, image_model, coref_model, test_loader, args):
           first_idx, second_idx, pairwise_labels = get_pairwise_labels(labels[idx, :span_num[idx]], is_training=False, device=device)
           if first_idx is None:
             continue
-          scores = coref_model.module.predict(text_output[idx, first_idx], video_output[idx],\
+          clusters, scores = coref_model.module.predict_cluster(text_output[idx, first_idx], video_output[idx],\
                                               span_mask[idx, first_idx], video_mask[idx],\
                                               text_output[idx, second_idx], video_output[idx],\
                                               span_mask[idx, second_idx], video_mask[idx])
@@ -213,6 +214,8 @@ def test(text_model, image_model, coref_model, test_loader, args):
           doc_id = test_loader.dataset.doc_ids[global_idx] 
           origin_tokens = [token[2] for token in test_loader.dataset.origin_tokens[global_idx]]
           candidate_start_ends = test_loader.dataset.candidate_start_ends[global_idx]
+          doc_name = doc_id
+          write_output_file(data.documents, clusters, [doc_id], candidate_start_ends[:, 0].tolist(), candidate_start_ends[:, 1].tolist(), config['save_path'], doc_name)
           pred_dicts.append({'doc_id': doc_id,
                              'first_idx': first_idx.cpu().detach().numpy().tolist(),
                              'second_idx': second_idx.cpu().detach().numpy().tolist(),
@@ -335,8 +338,8 @@ if __name__ == '__main__':
   train(text_model, image_model, coref_model, train_loader, test_loader, args)
 
   # Convert the predictions to readable format
-  pred_json = '{}_prediction.json'.format(args.config.split('/')[-1].split('.')[0])
-  make_prediction_readable(os.path.join(args.exp_dir, pred_json),
-                           config['image_dir'],
-                           os.path.join(config['data_folder'], 'test_mixed.json'),
-                           os.path.join(args.exp_dir, pred_json.split('.')[0]+'_readable.txt'))
+  # pred_json = '{}_prediction.json'.format(args.config.split('/')[-1].split('.')[0])
+  # make_prediction_readable(os.path.join(args.exp_dir, pred_json),
+  #                          config['image_dir'],
+  #                          os.path.join(config['data_folder'], 'test_mixed.json'),
+  #                          os.path.join(args.exp_dir, pred_json.split('.')[0]+'_readable.txt'))
