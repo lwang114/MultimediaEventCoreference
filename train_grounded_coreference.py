@@ -19,7 +19,7 @@ from mml_grounded_coreference import MMLGroundedCoreferencer
 from corpus import GroundingFeatureDataset
 from evaluator import Evaluation, RetrievalEvaluation
 from utils import make_prediction_readable
-
+from conll import write_output_file
 
 logger = logging.getLogger(__name__)
 def fix_seed(config):
@@ -215,7 +215,7 @@ def test(text_model, image_model, coref_model, test_loader, args):
           origin_tokens = [token[2] for token in test_loader.dataset.origin_tokens[global_idx]]
           candidate_start_ends = test_loader.dataset.candidate_start_ends[global_idx]
           doc_name = doc_id
-          write_output_file(data.documents, clusters, [doc_id], candidate_start_ends[:, 0].tolist(), candidate_start_ends[:, 1].tolist(), config['save_path'], doc_name)
+          write_output_file(data.documents, clusters, [doc_id], candidate_start_ends[:, 0].tolist(), candidate_start_ends[:, 1].tolist(), os.path.join(config['save_path'], 'gold_conll'), doc_name)
           pred_dicts.append({'doc_id': doc_id,
                              'first_idx': first_idx.cpu().detach().numpy().tolist(),
                              'second_idx': second_idx.cpu().detach().numpy().tolist(),
@@ -308,6 +308,11 @@ if __name__ == '__main__':
     os.mkdir(config['model_path'])
   if not os.path.isdir(config['log_path']):
     os.mkdir(config['log_path']) 
+  
+  pred_out_dir = os.path.join(config['save_path'], 'pred_conll')
+  if not os.path.isdir(pred_out_dir):
+    os.mkdir(pred_out_dir)
+
   logging.basicConfig(filename=os.path.join(config['log_path'],'{}.txt'.format(datetime.now().strftime("%Y_%m_%d_%H_%M_%S"))),\
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
 

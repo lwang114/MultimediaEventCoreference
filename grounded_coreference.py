@@ -54,11 +54,10 @@ class GroundedCoreferencer(nn.Module):
               second_span_embeddings, second_image_embeddings,
               second_span_mask, second_image_mask):
     '''
-    :param {first, second}_span_embeddings: FloatTensor of size (batch size, num. of spans, span embed dim),
-    
-    :param {first, second}_image_embeddings: FloatTensor of size (batch size, num. of ROIs, image embed dim),
-    :param {first, second}_span_mask: LongTensor of size (batch size, max num. of spans)
-    :param {first, second}_image_mask: LongTensor of size (batch size, max num. of ROIs)
+    :param {first, second}_span_embeddings: FloatTensor of size (num. of spans, span embed dim),
+    :param {first, second}_image_embeddings: FloatTensor of size (num. of ROIs, image embed dim),
+    :param {first, second}_span_mask: LongTensor of size (max num. of spans,),
+    :param {first, second}_image_mask: LongTensor of size (max num. of ROIs,)
     '''
     first_span_embeddings = first_span_embeddings.unsqueeze(0)
     first_image_embeddings = first_image_embeddings.unsqueeze(0)  
@@ -97,16 +96,50 @@ class GroundedCoreferencer(nn.Module):
               second_span_embeddings, second_image_embeddings,
               second_span_mask, second_image_mask):
     '''
-    :param {first, second}_span_embeddings: FloatTensor of size (batch size, num. of spans, span embed dim),
-    
-    :param {first, second}_image_embeddings: FloatTensor of size (batch size, num. of ROIs, image embed dim),
-    :param {first, second}_span_mask: LongTensor of size (batch size, max num. of spans)
-    :param {first, second}_image_mask: LongTensor of size (batch size, max num. of ROIs)
+    :param {first, second}_span_embeddings: FloatTensor of size (num. of spans, span embed dim),
+    :param {first, second}_image_embeddings: FloatTensor of size (num. of ROIs, image embed dim),
+    :param {first, second}_span_mask: LongTensor of size (max num. of spans,)
+    :param {first, second}_image_mask: LongTensor of size (max num. of ROIs,)
     :return scores: FloatTensor of size (batch size, max num. of mention pairs),
     :return clusters: dict of list of int, mapping from cluster id to mention ids of its members  
     '''
+    thres = -0.5 # TODO Make this a config parameter
     scores = self.predict(first_span_embeddings, first_image_embeddings, 
               first_span_mask, first_image_mask,
               second_span_embeddings, second_image_embeddings,
               second_span_mask, second_image_mask)
+    span_num = first_span_mask.sum(0).data
+    scores = scores.cpu().detach().numpy()
+    children = -1 * np.ones(span_num, dtype=np.int64)
+    # Antecedent prediction
+    for second_idx in range(span_num):
+      candidate_scores = []
+      for first_idx in range(second_idx):
+        score_idx = first_idx * (2 * span_num - first_idx + 1) / 2
+        score_idx += second_idx
+        score = scores[i, j]
+        if children[i] == -1:
+          candidate_scores.append(score)
+        else:
+          candidate_scores.append(-np.inf)
+      candidate_scores = np.asarray(candidate_scores)
+      max_score = candidate_scores.max()
+      if max_score > thres:
+        parent = np.argmax(candidate_scores)
+        children[parent] = second_idx
     
+    # Extract clusters from coreference chains
+    cluster_id = 0
+    clusters = {}
+    covered_spans = []
+    for idx in range(span_num):
+      if not idx in covered_spans and children[idx] != -1:
+        covered_spans.append(idx)
+        clusters[cluster_id] = [idx]
+        cur_idx = idx
+        while children[cur_idx] != -1:
+          clusters[cluster_id].append(cur_idx)
+          cur_idx = children[cur_idx]
+        cluster_id += 1
+    print('Number of non-singleton clusters: {}'.format(cluster_id))
+    return clusters, scores
