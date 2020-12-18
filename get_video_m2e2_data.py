@@ -4,6 +4,7 @@ import numpy as np
 import codecs
 import os
 import collections
+from conll import write_output_file
 
 def get_mention_doc(data_json, out_prefix, inclusive=False):
   '''
@@ -185,7 +186,38 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
   json.dump(events, codecs.open(out_prefix+'_events.json', 'w', 'utf-8'), indent=4, sort_keys=True)
   json.dump(entities+events, codecs.open(out_prefix+'_mixed.json', 'w', 'utf-8'), indent=4, sort_keys=True)
 
-def get_conll(self): # TODO
+def save_gold_conll_files(doc_json, mention_json, dir_path):
+  documents = json.load(open(doc_json))
+  mentions = json.load(open(mention_json))
+
+  # Extract mention dicts
+  label_dict = collections.defaultdict(dict)
+  for m in mentions:
+    if len(m['tokens_ids']) == 0:
+      label_dict[m['doc_id']][(-1, -1)] = m['cluster_id']
+    else:
+      start = min(m['tokens_ids'])
+      end = max(m['tokens_ids'])
+      label_dict[m['doc_id']][(start, end)] = m['cluster_id']
+
+      
+  doc_ids = sorted(documents)
+  for doc_id in doc_ids:
+    document = documents[doc_id]
+    cur_label_dict = label_dict[doc_id]
+    start_ends = np.asarray([[start, end] for start, end in sorted(cur_label_dict)])
+    starts = start_ends[:, 0]
+    ends = start_ends[:, 1]
+
+    # Extract clusters
+    clusters = collections.defaultdict(list)
+    for m_idx, span in enumerate(sorted(cur_label_dict)):
+      cluster_id = cur_label_dict[span]
+      clusters[cluster_id].append(m_idx)
+    non_singletons = {}
+    non_singletons = {cluster: ms for cluster, ms in clusters.items() if len(ms) > 1}
+    doc_name = doc_id
+    write_output_file({doc_id:document}, non_singletons, [doc_id]*len(cur_label_dict), starts, ends, dir_path, doc_name)
 
   
 if __name__ == '__main__':
@@ -196,6 +228,6 @@ if __name__ == '__main__':
     os.mkdir(os.path.join(data_dir, 'gold'))
   data_json = 'm2e2/data/video_m2e2/grounding_video_m2e2_test.json' # XXX
   out_prefix = os.path.join(data_dir, 'mentions/test') # XXX
-  get_mention_doc(data_json, out_prefix, inclusive=True) # XXX
-
+  # get_mention_doc(data_json, out_prefix, inclusive=True) # XXX
+  save_gold_conll_files(out_prefix+'.json', out_prefix+'_mixed.json', os.path.join(data_dir, 'gold'))
   
