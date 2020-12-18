@@ -203,19 +203,23 @@ def test(text_model, image_model, coref_model, test_loader, args):
           first_idx, second_idx, pairwise_labels = get_pairwise_labels(labels[idx, :span_num[idx]], is_training=False, device=device)
           if first_idx is None:
             continue
-          clusters, scores = coref_model.module.predict_cluster(text_output[idx, first_idx], video_output[idx],\
-                                              span_mask[idx, first_idx], video_mask[idx],\
-                                              text_output[idx, second_idx], video_output[idx],\
-                                              span_mask[idx, second_idx], video_mask[idx])
+          clusters, scores = coref_model.module.predict_cluster(text_output[idx], video_output[idx],\
+                                                                first_idx, second_idx)
           all_scores.append(scores.squeeze(1))             
           all_labels.append(pairwise_labels.to(torch.int)) 
           
           global_idx = i * test_loader.batch_size + idx
           doc_id = test_loader.dataset.doc_ids[global_idx] 
           origin_tokens = [token[2] for token in test_loader.dataset.origin_tokens[global_idx]]
-          candidate_start_ends = test_loader.dataset.candidate_start_ends[global_idx]
+          candidate_start_ends = test_loader.dataset.origin_candidate_start_ends[global_idx]
+          # print(doc_id, clusters.values(), candidate_start_ends.tolist())
           doc_name = doc_id
-          write_output_file(data.documents, clusters, [doc_id], candidate_start_ends[:, 0].tolist(), candidate_start_ends[:, 1].tolist(), os.path.join(config['save_path'], 'gold_conll'), doc_name)
+          document = {doc_id:test_loader.dataset.documents[doc_id]}
+          write_output_file(document, clusters, [doc_id]*candidate_start_ends.shape[0],
+                            candidate_start_ends[:, 0].tolist(),
+                            candidate_start_ends[:, 1].tolist(),
+                            os.path.join(config['model_path'], 'pred_conll'),
+                            doc_name, False, True)
           pred_dicts.append({'doc_id': doc_id,
                              'first_idx': first_idx.cpu().detach().numpy().tolist(),
                              'second_idx': second_idx.cpu().detach().numpy().tolist(),
@@ -309,7 +313,7 @@ if __name__ == '__main__':
   if not os.path.isdir(config['log_path']):
     os.mkdir(config['log_path']) 
   
-  pred_out_dir = os.path.join(config['save_path'], 'pred_conll')
+  pred_out_dir = os.path.join(config['model_path'], 'pred_conll')
   if not os.path.isdir(pred_out_dir):
     os.mkdir(pred_out_dir)
 

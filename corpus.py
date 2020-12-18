@@ -101,14 +101,16 @@ class GroundingFeatureDataset(Dataset):
     # Tokenize documents and extract token spans after bert tokenization
     self.tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
     self.origin_tokens, self.bert_tokens, self.bert_start_ends, clean_start_end_dict = self.tokenize(documents) 
-    json.dump(clean_start_end_dict, open('{}_token_id_after_clean.json'.format(doc_json.split('.')[0]), 'w'), indent=4, sort_keys=True)
 
     # Extract coreference cluster labels
-    self.label_dict = self.create_dict_labels(mentions, clean_start_end_dict)
+    self.label_dict = self.create_dict_labels(mentions)
 
     # Extract original mention spans
-    self.candidate_start_ends = [np.asarray([[start, end] for start, end in sorted(self.label_dict[doc_id]) if end < len(self.origin_tokens[idx])]) for idx, doc_id in enumerate(self.doc_ids)]
-    
+    self.origin_candidate_start_ends = [np.asarray([[start, end] for start, end in sorted(self.label_dict[doc_id])]) for doc_id in self.doc_ids]
+    self.candidate_start_ends = [np.asarray([[clean_start_end_dict[doc_id][start], clean_start_end_dict[doc_id][end]] 
+                                              for start, end in start_ends]) 
+                                 for doc_id, start_ends in zip(self.doc_ids, self.origin_candidate_start_ends)]
+
     # Extract BERT embeddings
     bert_embed_file = '{}_bert_embeddings.npz'.format(doc_json.split('.')[0])
     if not os.path.exists(bert_embed_file):
@@ -133,19 +135,16 @@ class GroundingFeatureDataset(Dataset):
     clean_start_end_dict = {}
 
     for doc_id in sorted(documents): # XXX
-      tokens = documents[doc_id][:self.segment_window]
+      tokens = documents[doc_id]
       bert_tokens_ids, bert_sentence_ids = [], []
       start_bert_idx, end_bert_idx = [], [] # Start and end token indices for each bert token
-      original_tokens = []
+      original_tokens = [] 
       clean_start_end = -1 * np.ones(len(tokens), dtype=np.int)
       bert_cursor = -1
       for i, token in enumerate(tokens):
         sent_id, token_id, token_text, flag_sentence = token
         bert_token = self.tokenizer.encode(token_text, add_special_tokens=True)[1:-1]   
         if bert_token:
-          if bert_cursor + len(bert_token) + 1 > self.segment_window: # Truncate the document if the num. of bert tokens exceeds upper limit
-            # print('doc_id: {}, len(bert_tokens_ids): {}, bert_cursor:{}'.format(doc_id, len(bert_tokens_ids), bert_cursor))
-            break
           bert_start_index = bert_cursor + 1
           bert_tokens_ids.extend(bert_token)
           start_bert_idx.append(bert_start_index)
@@ -158,13 +157,13 @@ class GroundingFeatureDataset(Dataset):
           original_tokens.append([sent_id, token_id, token_text, flag_sentence])
       docs_bert_tokens.append(bert_tokens_ids)
       docs_origin_tokens.append(original_tokens)
-      clean_start_end_dict[doc_id] = clean_start_end.tolist()
+      clean_start_end_dict[doc_id] = clean_start_end.tolist() 
       start_end = np.concatenate((np.expand_dims(start_bert_idx, 1), np.expand_dims(end_bert_idx, 1)), axis=1)
       docs_start_end_bert.append(start_end)
-      
+
     return docs_origin_tokens, docs_bert_tokens, docs_start_end_bert, clean_start_end_dict
 
-  def create_dict_labels(self, mentions, clean_start_end_dict=None):
+  def create_dict_labels(self, mentions):
     '''
     :return label_dict: a mapping from doc id to a dict of (start token, end token) -> cluster id 
     '''
@@ -175,12 +174,6 @@ class GroundingFeatureDataset(Dataset):
       else:
         start = min(m['tokens_ids'])
         end = max(m['tokens_ids'])
-        if not clean_start_end_dict is None:
-          if m['doc_id'] in clean_start_end_dict and end < len(clean_start_end_dict[m['doc_id']]):
-            start = clean_start_end_dict[m['doc_id']][start] 
-            end = clean_start_end_dict[m['doc_id']][end]
-            if start == -1 or end == -1:
-              continue
         label_dict[m['doc_id']][(start, end)] = m['cluster_id']
     return label_dict    
   
@@ -194,13 +187,15 @@ class GroundingFeatureDataset(Dataset):
     :return labels: LongTensor of size (max num. spans,) 
     '''
     # Extract the original spans of the current doc
-    origin_candidate_starts = self.candidate_start_ends[idx][:, 0]
-    origin_candidate_ends = self.candidate_start_ends[idx][:, 1]
+    origin_candidate_starts = self.origin_candidate_start_ends[idx][:, 0]
+    origin_candidate_ends = self.origin_candidate_start_ends[idx][:, 1]
+    candidate_starts = self.candidate_start_ends[idx][:, 0]
+    candidate_ends = self.candidate_start_ends[idx][:, 1]
 
     # Convert the original spans to the bert tokenized spans
     bert_start_ends = self.bert_start_ends[idx]
-    bert_candidate_starts = bert_start_ends[origin_candidate_starts, 0]
-    bert_candidate_ends = bert_start_ends[origin_candidate_ends, 1]
+    bert_candidate_starts = bert_start_ends[candidate_starts, 0]
+    bert_candidate_ends = bert_start_ends[candidate_ends, 1]
     span_num = len(bert_candidate_starts)
 
     # Extract the current doc embedding

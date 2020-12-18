@@ -185,6 +185,9 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
   json.dump(events, codecs.open(out_prefix+'_events.json', 'w', 'utf-8'), indent=4, sort_keys=True)
   json.dump(entities+events, codecs.open(out_prefix+'_mixed.json', 'w', 'utf-8'), indent=4, sort_keys=True)
 
+def get_conll(self): # TODO
+
+  
 if __name__ == '__main__':
   data_dir = 'data/video_m2e2'
   if not os.path.isdir(data_dir):

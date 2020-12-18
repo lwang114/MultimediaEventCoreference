@@ -91,42 +91,48 @@ class GroundedCoreferencer(nn.Module):
       scores = scores + self.text_scorer(first_span_image_emb, second_span_image_emb)
     return scores
 
-  def predict_cluster(self, first_span_embeddings, first_image_embeddings, 
-              first_span_mask, first_image_mask,
-              second_span_embeddings, second_image_embeddings,
-              second_span_mask, second_image_mask):
+  def predict_cluster(self, span_embeddings, image_embeddings, 
+                      first_idx, second_idx):
     '''
-    :param {first, second}_span_embeddings: FloatTensor of size (num. of spans, span embed dim),
-    :param {first, second}_image_embeddings: FloatTensor of size (num. of ROIs, image embed dim),
-    :param {first, second}_span_mask: LongTensor of size (max num. of spans,)
-    :param {first, second}_image_mask: LongTensor of size (max num. of ROIs,)
+    :param span_embeddings: FloatTensor of size (num. of spans, span embed dim),
+    :param image_embeddings: FloatTensor of size (num. of ROIs, image embed dim),
+    :param first_idx: LongTensor of size (num. of mention pairs,)
+    :param second_idx: LongTensor of size (num. of mention pairs,)
     :return scores: FloatTensor of size (batch size, max num. of mention pairs),
-    :return clusters: dict of list of int, mapping from cluster id to mention ids of its members  
+    :return clusters: dict of list of int, mapping from cluster id to mention ids of its members 
     '''
-    thres = -0.5 # TODO Make this a config parameter
-    scores = self.predict(first_span_embeddings, first_image_embeddings, 
-              first_span_mask, first_image_mask,
-              second_span_embeddings, second_image_embeddings,
-              second_span_mask, second_image_mask)
-    span_num = first_span_mask.sum(0).data
-    scores = scores.cpu().detach().numpy()
+    device = span_embeddings.device
+    thres = -0.5 # Make this a config parameter
+    span_num = max(second_idx) + 1
+    span_mask = torch.ones(len(first_idx)).to(device)
+    image_mask = torch.ones(image_embeddings.size(0)).to(device) 
+    first_span_embeddings = span_embeddings[first_idx]
+    second_span_embeddings = span_embeddings[second_idx]
+
+    scores = self.predict(first_span_embeddings, image_embeddings, 
+              span_mask, image_mask,
+              second_span_embeddings, image_embeddings,
+              span_mask, image_mask)
     children = -1 * np.ones(span_num, dtype=np.int64)
+
     # Antecedent prediction
-    for second_idx in range(span_num):
+    for idx2 in range(span_num):
       candidate_scores = []
-      for first_idx in range(second_idx):
-        score_idx = first_idx * (2 * span_num - first_idx + 1) / 2
-        score_idx += second_idx
-        score = scores[i, j]
-        if children[i] == -1:
+      for idx1 in range(idx2):
+        score_idx = idx1 * (2 * span_num - idx1 - 1) // 2 - 1
+        score_idx += (idx2 - idx1)
+        score = scores[score_idx].squeeze().cpu().detach().data.numpy()
+        if children[idx1] == -1:
           candidate_scores.append(score)
         else:
           candidate_scores.append(-np.inf)
-      candidate_scores = np.asarray(candidate_scores)
-      max_score = candidate_scores.max()
-      if max_score > thres:
-        parent = np.argmax(candidate_scores)
-        children[parent] = second_idx
+
+      if len(candidate_scores) > 0:
+        candidate_scores = np.asarray(candidate_scores)
+        max_score = candidate_scores.max()
+        if max_score > thres:
+          parent = np.argmax(candidate_scores)
+          children[parent] = idx2
     
     # Extract clusters from coreference chains
     cluster_id = 0
@@ -138,8 +144,9 @@ class GroundedCoreferencer(nn.Module):
         clusters[cluster_id] = [idx]
         cur_idx = idx
         while children[cur_idx] != -1:
-          clusters[cluster_id].append(cur_idx)
           cur_idx = children[cur_idx]
+          clusters[cluster_id].append(cur_idx)
+          covered_spans.append(cur_idx)
         cluster_id += 1
-    print('Number of non-singleton clusters: {}'.format(cluster_id))
+    # print('Number of non-singleton clusters: {}'.format(cluster_id))
     return clusters, scores
