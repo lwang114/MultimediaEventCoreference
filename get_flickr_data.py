@@ -38,13 +38,13 @@ def get_mention_doc(caption_file, bbox_file, out_prefix):
         for idx, line in enumerate(f):
             parts = line.split()
             doc_id = '{}_{}'.format(parts[0], idx)
-            print('doc id {}'.format(doc_id))
+            # print('doc id {}'.format(doc_id))
             caption = parts[1:]                
 
             sen_dicts[doc_id] = []
             for token_id, token in enumerate(caption):
                 sen_dicts[doc_id].append([0, token_id, token, True])
-    json.dump(sen_dicts, open('{}.json'.format(out_prefix), 'w'), indent=4)
+    # XXX json.dump(sen_dicts, open('{}.json'.format(out_prefix), 'w'), indent=4)
 
     # Match bbox with caption
     mention_dicts = []
@@ -52,41 +52,52 @@ def get_mention_doc(caption_file, bbox_file, out_prefix):
     with open(bbox_file, 'r') as bbox_f:
       idx = -1
       prev_doc_id = ''
-      for line in f:
-        doc_id, phrase, bbox = line.split('\t')
-        if not doc_id != prev_doc_id:
-          idx += 1
-          prev_doc_id = doc_id
+      for line in bbox_f:
+        parts = line.split()
+        doc_id = parts[0]
+        phrase = parts[1:-4] 
+        bbox = parts[-4:]
         bbox[0] = int(bbox[0])
         bbox[1] = int(bbox[1])
         bbox[2] = int(bbox[2])
         bbox[3] = int(bbox[3]) 
-        print(doc_id, phrase, bbox) # XXX
+
+        if doc_id != prev_doc_id:
+          idx += 1
+          prev_doc_id = doc_id
+          # if idx > 10: # XXX
+          #   break
+        # print(doc_id, phrase, bbox) # XXX
         bbox_dicts.append({'doc_id': '{}_{}'.format(doc_id, idx),
                            'subtopic': '0',
                            'm_id': '0',
                            'sentence_id': 0,
                            'bbox': bbox,
-                           'tokens': phrase,
-                           'cluster_id': '{}_{}'.format(doc_id, phrase)
+                           'tokens': ' '.join(phrase),
+                           'cluster_id': '{}_{}'.format(doc_id, '_'.join(phrase))
                            })
 
         tokens = sen_dicts['{}_{}'.format(doc_id, idx)]
         phrase_start, phrase_end = -1, -1 
-        phrase_len = len(phrase.split())
+        phrase_len = len(phrase)
         sent_len = len(tokens)
         for token_id in range(sent_len-phrase_len+1):
           cur_mention = ' '.join([token[2] for token in tokens[token_id:token_id+phrase_len]])
-          if phrase == cur_mention:
+          if ' '.join(phrase) == cur_mention:
+            # print(phrase, cur_mention, token_id) # XXX
+            phrase_start = token_id
+            phrase_end = token_id+phrase_len-1
             mention_dicts.append({'doc_id': '{}_{}'.format(doc_id, idx),
                                   'subtopic': '0',
                                   'm_id': '0',
                                   'sentence_id': 0,
-                                  'tokens_ids': list(range(token_id, token_id+phrase_len-1)),
-                                  'tokens': phrase,
-                                  'cluster_id': '{}_{}'.format(doc_id, phrase)
+                                  'tokens_ids': list(range(phrase_start, phrase_end)),
+                                  'tokens': ' '.join(phrase),
+                                  'cluster_id': '{}_{}'.format(doc_id, '_'.join(phrase))
                                   })
             break
+        if phrase_start == -1:
+          print('bbox not found', doc_id, phrase)
     json.dump(bbox_dicts, open('{}_bboxes.json'.format(out_prefix), 'w'), indent=4)
     json.dump(mention_dicts, open('{}_entities.json'.format(out_prefix), 'w'), indent=4)
 
@@ -143,11 +154,12 @@ def extract_glove_embeddings(config, glove_file, dimension=300, out_prefix='glov
 if __name__ == '__main__':
     config_file = 'configs/config_grounded_mml_flickr.json'
     caption_file = '/ws/ifp-53_2/hasegawa/lwang114/data/flickr30k/flickr30k_text_captions.txt'
+    bbox_file = '/ws/ifp-53_2/hasegawa/lwang114/data/flickr30k/flickr30k_phrases_bboxes.txt'
     glove_file = 'm2e2/data/glove/glove.840B.300d.txt'
     
     config = pyhocon.ConfigFactory.parse_file(config_file)
     if not os.path.isdir(config['data_folder']):
         os.makedirs(config['data_folder'])
 
-    # get_mention_doc(caption_file, os.path.join(config['data_folder'], 'flickr'))
-    extract_glove_embeddings(config, glove_file, out_prefix=os.path.join(config['data_folder'], 'flickr_glove_embeddings'))
+    get_mention_doc(caption_file, bbox_file, os.path.join(config['data_folder'], 'flickr'))
+    # extract_glove_embeddings(config, glove_file, out_prefix=os.path.join(config['data_folder'], 'flickr_glove_embeddings'))

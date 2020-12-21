@@ -62,7 +62,7 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
     sent_id = sen_dict['sentence_id']
     tokens = sen_dict['words']
     entity_mentions = sen_dict['golden-entity-mentions']
-    event_mentions = sen_dict['golden-event-mentions']
+    event_mentions = sen_dict.get('golden-event-mentions', [])
     
     if doc_id != cur_id:
       cur_id = doc_id
@@ -140,5 +140,5 @@ if __name__ == '__main__':
     os.mkdir(os.path.join(data_dir, 'mentions'))
     os.mkdir(os.path.join(data_dir, 'gold'))
   data_json = 'm2e2/data/m2e2_rawdata/article_event.json' # XXX
-  out_prefix = os.path.join(data_dir, 'mentions/test')
+  out_prefix = os.path.join(data_dir, 'mentions/test') # XXX
   get_mention_doc(data_json, out_prefix, inclusive=True)
