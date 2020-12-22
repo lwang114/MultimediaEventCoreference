@@ -64,6 +64,20 @@ def load_video(filename, config, transform=None, image_prefix=None):
     
     return torch.cat(video, dim=0), mask
 
+def save_frame_rate(config):
+  doc_json = os.path.join(config['data_folder'], args.split+'.json')
+  documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
+  doc_ids = sorted(documents)
+  out_fn = os.path.join(config['data_folder'], 'framerates.txt')
+  out_f = open(out_fn, 'w') 
+
+  for idx, doc_id in enumerate(doc_ids):
+    video_file = os.path.join(config['image_dir'], doc_id+'.mp4')
+    cap = cv2.VideoCapture(filename)
+    frame_rate = cap.get(5) 
+    out_f.write('{} {}\n'.format(doc_id, frame_rate))
+  out_f.close()
+
 def extract_glove_embeddings(config, split, glove_file, dimension=300, out_prefix='glove_embedding'):
     ''' Extract glove embeddings for a sentence
     :param doc_json: json metainfo file in m2e2 format
@@ -246,6 +260,8 @@ def main():
     extract_glove_embeddings(config, args.split, glove_file, out_prefix='{}_glove_embeddings'.format(args.split))
   if 2 in tasks:
     extract_bert_embeddings(config, args.split, out_prefix='{}_bert_embeddings'.format(args.split))
-    
+  if 3 in tasks:
+    save_frame_rate(config)
+
 if __name__ == '__main__':
   main()
