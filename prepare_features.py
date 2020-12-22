@@ -8,14 +8,15 @@ import cv2
 import codecs
 import json
 import math
-# import torchvision.transforms as transforms
+# XXX
+import torchvision.transforms as transforms
 import PIL.Image as Image
 from tqdm import tqdm
 from datetime import datetime
-from transformers import AutoTokenizer, AutoModel
-from grounded_coreference import ResNet152
-from coref.model_utils import pad_and_read_bert
-from coref.utils import create_corpus
+# XXX from transformers import AutoTokenizer, AutoModel
+from image_models import ResNet101
+# from coref.model_utils import pad_and_read_bert
+# from coref.utils import create_corpus
 
 logger = logging.getLogger(__name__)
 def load_video(filename, config, transform=None, image_prefix=None):
@@ -50,11 +51,13 @@ def load_video(filename, config, transform=None, image_prefix=None):
       logging.info('Corrupted video file: {}'.format(filename))
       video = [torch.zeros((1, 3, 224, 224)) for _ in range(max_frame_num)]
       return torch.cat(video, dim=0), mask
-    video = [Image.fromarray(video[idx]) for idx in indices]
+
     if not image_prefix is None:
       for idx, img in enumerate(video):
-        img.save('{}_{:03d}.jpg'.format(image_prefix, idx))
+          img = Image.fromarray(img)
+          img.save('{}_{:03d}.jpg'.format(image_prefix, idx))
 
+    video = [Image.fromarray(video[idx]) for idx in indices]
     # Apply transform to each frame
     if transform is not None:
       video = [transform(img).unsqueeze(0) for img in video]
@@ -176,8 +179,8 @@ def extract_bert_embeddings(config, split, out_prefix='bert_embedding'):
     
 def cleanup(documents, config):
     filtered_documents = {}
-    # XXX img_ids = [img_id.split('.')[0] for img_id in os.listdir(config['image_dir'])]
-    config['image_dir'] = os.path.join(config['data_folder'], 'train_resnet152') # XXX
+    img_ids = [img_id.split('.')[0] for img_id in os.listdir(config['image_dir'])]
+    # config['image_dir'] = os.path.join(config['data_folder'], 'train_resnet152') # XXX
     img_ids = ['_'.join(img_id.split('_')[:-1]) for img_id in os.listdir(config['image_dir'])]
     print(img_ids[:10]) # XXX
     
@@ -203,10 +206,10 @@ def main():
   tasks = [args.task]
 
   if 0 in tasks:
-    if not os.path.isdir(os.path.join(config['data_folder'], args.split+'_resnet152/')):
-      os.mkdir(os.path.join(config['data_folder'], args.split+'_resnet152/'))
-    if not os.path.isdir(os.path.join(config['data_folder'], args.split+'_videoframes_20/')):
-      os.mkdir(os.path.join(config['data_folder'], args.split+'_videoframes_20/'))
+    if not os.path.isdir(os.path.join(config['data_folder'], args.split+'_resnet101/')):
+      os.mkdir(os.path.join(config['data_folder'], args.split+'_resnet101/'))
+    if not os.path.isdir(os.path.join(config['data_folder'], args.split+'_video_1fps/')):
+      os.mkdir(os.path.join(config['data_folder'], args.split+'_video_1fps/'))
     logging.basicConfig(filename=os.path.join(config['log_path'],'prep_feat_{}.txt'.format(datetime.now().strftime("%Y_%m_%d_%H_%M_%S"))),\
                         format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO)   
     
@@ -224,13 +227,14 @@ def main():
               transforms.ToTensor(),
               transforms.Normalize((0.485, 0.456, 0.406),
                                    (0.229, 0.224, 0.225))])
-    image_model = ResNet152(device=torch.device('cuda')) 
+    image_model = ResNet101(device=torch.device('cuda')) 
 
     for idx, doc_id in enumerate(doc_ids):
-      embed_file = os.path.join(config['data_folder'], '{}_resnet152/{}_{}.npy'.format(args.split, doc_id, idx))
+      embed_file = os.path.join(config['data_folder'], '{}_resnet101/{}_{}.npy'.format(args.split, doc_id, idx))
       video_file = os.path.join(config['image_dir'], doc_id+'.mp4')
-      image_prefix = os.path.join(config['data_folder'], '{}_videoframes_20/{}'.format(args.split, doc_id))
-      if os.path.exists(embed_file) and os.path.exists(image_prefix+'_0.png'): # XXX
+      image_prefix = os.path.join(config['data_folder'], '{}_video_1fps/{}'.format(args.split, doc_id))
+      # if os.path.exists(embed_file) and os.path.exists(image_prefix+'_0.png'): # XXX
+      if os.path.exists(embed_file):
         print('Skip {}_{}'.format(doc_id, idx))
         continue
       videos, video_mask = load_video(video_file, config, transform, image_prefix)
