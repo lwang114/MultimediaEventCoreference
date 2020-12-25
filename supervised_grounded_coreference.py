@@ -62,8 +62,9 @@ class SupervisedGroundedCoreferencer(nn.Module):
     
     # Compute grounding scores
     scores = self.grounding_scorer(first[first_idxs], second[second_idxs])
+    # mapping = torch.where(mask > 0, mask, torch.tensor(-9e9, device=first.device))
+    # mapping = F.softmax(mapping.view(B, B, N, L), dim=-1)
     scores = (scores * mask).view(B, B, N, L)
-    
     return scores
 
   def calculate_loss(self, span_emb, image_emb, span_mask, image_mask):
@@ -89,7 +90,7 @@ class SupervisedGroundedCoreferencer(nn.Module):
                                  span_mask,
                                  image_mask)
   
-    S = scores.sum(-1).sum(-1)
+    S = scores.sum(-1).max(-1)[0]
     loss = -torch.sum(m(S))-torch.sum(m(S.transpose(0, 1)))
     loss = loss / n
     return loss, scores
@@ -105,29 +106,23 @@ class SupervisedGroundedCoreferencer(nn.Module):
     image_embeddings = image_embeddings.cpu()
     span_mask = span_mask.cpu()
     image_mask = image_mask.cpu()
-    S = torch.zeros((n, n), dtype=torch.float, device=torch.device('cpu'), requires_grad=False)
-    m = nn.LogSoftmax(dim=1)
-    for s_idx in range(n):
-      for v_idx in range(n):
-        score = -self.calculate_loss(span_embeddings[s_idx].unsqueeze(0),
-                                     image_embeddings[v_idx].unsqueeze(0),
-                                     span_mask[s_idx].unsqueeze(0),
-                                     image_mask[v_idx].unsqueeze(0))
-        S[s_idx, v_idx] = score.sum()
+    scores = self.predict(span_embeddings, image_embeddings, span_mask, image_mask)
+    S = scores.sum(-1).max(-1)[0]
     _, I2S_idxs = S.topk(k, 0)
     _, S2I_idxs = S.topk(k, 1) 
     return I2S_idxs.t(), S2I_idxs
     
   def predict(self, span_embeddings, image_embeddings, 
               span_mask, image_mask):
-    span_embeddings = span_embeddings.unsqueeze(0)
-    image_embeddings = image_embeddings.unsqueeze(0)  
-    span_mask = span_mask.unsqueeze(0)
-    image_mask = image_mask.unsqueeze(0)
+    if span_embeddings.ndim == 2:
+      span_embeddings = span_embeddings.unsqueeze(0)
+      image_embeddings = image_embeddings.unsqueeze(0)  
+      span_mask = span_mask.unsqueeze(0)
+      image_mask = image_mask.unsqueeze(0)
 
     self.text_scorer.eval()
     self.grounding_scorer.eval()
     with torch.no_grad():
-      _, scores = self.grounding_scorer(span_embeddings, image_embeddings, span_mask, image_mask)
+      scores = self.score_grounding(span_embeddings, image_embeddings, span_mask, image_mask)
     
     return scores

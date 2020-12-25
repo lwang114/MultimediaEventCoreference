@@ -275,7 +275,8 @@ def test_retrieve(text_model, image_model, coref_model, test_loader, args):
     pred_dicts = []
     for i, batch in enumerate(test_loader):
       start_end_embeddings, continuous_embeddings,\
-      span_mask, width, videos, video_mask, labels = batch
+      width, videos, text_labels,\
+      img_labels, span_mask, video_mask = batch
       
       text_output = text_model(start_end_embeddings, continuous_embeddings, width)
       video_output = image_model(videos)

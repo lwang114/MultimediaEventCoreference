@@ -10,8 +10,9 @@
   "embedding_dimension": 20,
 
   "max_mention_span": 15,
+  "max_span_num": 20,
   "max_frame_num": 20,
-  "max_token_num": 256,
+  "max_token_num": 128,
   "use_gold_mentions": false,
   "mention_type": "mixed",
   "top_k": 0.35,
@@ -21,7 +22,7 @@
 
   "random_seed": 0,
   "epochs": 100,
-  "batch_size": 4,
+  "batch_size": 8,
   "learning_rate": 1e-4,
   "weight_decay": 0,
   "loss": "mml",
