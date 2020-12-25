@@ -74,7 +74,6 @@ class GroundingFeatureDataset(Dataset):
     # Extract doc/image ids
     documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
     mentions = json.load(codecs.open(mention_json, 'r', 'utf-8'))
-    self.documents = documents
     
     # Extract image embeddings
     self.imgs_embeddings = np.load('{}_{}.npz'.format(doc_json.split('.')[0], self.img_feat_type))
@@ -96,6 +95,7 @@ class GroundingFeatureDataset(Dataset):
     self.doc_ids = self.doc_ids # XXX
     self.feat_keys = self.feat_keys # XXX
     documents = {doc_id:documents[doc_id] for doc_id in self.doc_ids}
+    self.documents = documents
     print('Number of documents: {}'.format(len(self.doc_ids)))
     
     # Tokenize documents and extract token spans after bert tokenization
@@ -134,6 +134,7 @@ class GroundingFeatureDataset(Dataset):
     docs_origin_tokens = []
     clean_start_end_dict = {}
 
+    print(len(documents)) # XXX
     for doc_id in sorted(documents): # XXX
       tokens = documents[doc_id]
       bert_tokens_ids, bert_sentence_ids = [], []

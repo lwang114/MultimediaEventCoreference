@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import torch
 import json
 import numpy as np
 import codecs
@@ -6,6 +7,8 @@ import os
 import collections
 import torchvision.transforms as transforms
 import PIL.Image as Image
+import pyhocon
+from image_models import ResNet101
 
 def get_mention_doc(data_json, bbox_json, out_prefix, inclusive=False):
   '''
@@ -77,8 +80,8 @@ def get_mention_doc(data_json, bbox_json, out_prefix, inclusive=False):
       continue
 
     for image_filename in sen_dict['image']:
-      image_id = image_filename.split('.')[0]
-      if not image_id in image_dict:
+      image_id = '.'.join(image_filename.split('.')[:-1])
+      if not image_id in image_dict[doc_id]:
         image_dict[doc_id].append(image_id)
     sent_id = sen_dict['sentence_id']
     tokens = sen_dict['words']
@@ -111,8 +114,8 @@ def get_mention_doc(data_json, bbox_json, out_prefix, inclusive=False):
 
     # Create dict for [out_prefix]_events.json
     for m_id, mention in enumerate(event_mentions): 
-        event_type = mention['event-type']
-        try: # XXX
+        event_type = mention['event_type']
+        try:
           start = mention['trigger']['start']
           end = mention['trigger']['end']
         except:
@@ -139,9 +142,9 @@ def get_mention_doc(data_json, bbox_json, out_prefix, inclusive=False):
     if not doc_id in outs: 
       outs[doc_id] = []
     
-  for idx, token in enumerate(tokens):
-    outs[doc_id].append([sent_id, sen_start+idx, token, entity_mask[idx] > 0 or event_mask[idx] > 0])
-  sen_start += len(tokens)
+    for idx, token in enumerate(tokens):
+      outs[doc_id].append([sent_id, sen_start+idx, token, entity_mask[idx] > 0 or event_mask[idx] > 0])
+    sen_start += len(tokens)
     
   # Create dict for [out_prefix]_bboxes.json
   bboxes = []
@@ -160,21 +163,19 @@ def get_mention_doc(data_json, bbox_json, out_prefix, inclusive=False):
   json.dump(entities, codecs.open(out_prefix+'_entities.json', 'w', 'utf-8'), indent=4, sort_keys=True)
   json.dump(events, codecs.open(out_prefix+'_events.json', 'w', 'utf-8'), indent=4, sort_keys=True)
   json.dump(entities+events, codecs.open(out_prefix+'_mixed.json', 'w', 'utf-8'), indent=4, sort_keys=True)
-
+  json.dump(bboxes, codecs.open(out_prefix+'_bboxes.json', 'w', 'utf-8'), indent=4)
+  
 def extract_image_embeddings(config, prefix):
     img_dir = config['image_dir']
-    doc_json = os.path.join(config['data_folder'], prefix+'.json')
-    bbox_json = os.path.join(config['data_folder'], prefix+'_bboxes.json')
+    doc_json = prefix+'.json'
+    bbox_json = prefix+'_bboxes.json'
     documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))   
     image_mentions = json.load(codecs.open(bbox_json, 'r', 'utf-8'))
     image_label_dict = collections.defaultdict(dict)
-    prev_id = ''
     for m in image_mentions:
-      if prev_id != m['doc_id']:
-        prev_id = m['doc_id']
       image_label_dict[m['doc_id']][m['bbox']] = m['cluster_id']
 
-    doc_ids = sorted(documents)[:20] # XXX
+    doc_ids = sorted(documents) # XXX
     transform = transforms.Compose([
               transforms.Resize(256),
               transforms.RandomHorizontalFlip(),
@@ -184,31 +185,46 @@ def extract_image_embeddings(config, prefix):
                                    (0.229, 0.224, 0.225))])
     image_model = ResNet101(device=torch.device('cuda'))
     image_feats = {}
-    for idx, doc_id in enumerate(doc_ids):
+    for idx, doc_id in enumerate(doc_ids): # XXX
       img_ids = sorted(image_label_dict[doc_id], key=lambda x:int(x.split('_')[-1]))
       for img_id in img_ids:
         # Load image
         img = Image.open('{}/{}.jpg'.format(img_dir, img_id))
+        print(idx, doc_id, img_id, np.asarray(img).shape) # XXX
+        if len(np.asarray(img).shape) == 2:
+          img = Image.fromarray(np.asarray(img)[:, :, np.newaxis].repeat(3, axis=2))
         img = transform(img)
 
         # Extract visual features
-        img_feat = image_model(img.unsqueeze(0)).cpu().detach().numpy()
-        print(img_id, img_feat.shape) 
+        _, img_feat, _ = image_model(img.unsqueeze(0), return_feat=True)
+        img_feat = img_feat.cpu().detach().numpy()
         feat_id = '{}_{}'.format(doc_id, idx)
         if not feat_id in image_feats:
           image_feats[feat_id] = [img_feat]
         else:
           image_feats[feat_id].append(img_feat)
-    image_feats = {k:np.concatenate(v) for k, v in img_feat.items()}
-    np.savez(os.path.join(config['data_folder'], prefix+'resnet101.npz'), **image_feats)
+    image_feats = {k:np.concatenate(v) for k, v in image_feats.items()}
+    np.savez(prefix+'_resnet101.npz', **image_feats)
+
+def train_test_split(config, prefix, ratio=0.8):
+  doc_json = prefix+'.json'
+  documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
+  doc_ids = sorted(documents)
+  test_ids = ['{}_{}'.format(k, i) for i, k in enumerate(doc_ids[int(0.8*len(doc_ids)):])]
+  with codecs.open('test_ids.txt', 'w', 'utf-8') as f:
+    f.write('\n'.join(test_ids))
+
 
 if __name__ == '__main__':
-  data_dir = 'data/m2e2'
+  config_file = 'configs/config_grounded_supervised_m2e2.json'
+
+  config = pyhocon.ConfigFactory.parse_file(config_file) 
+  data_dir = config['data_folder']
   if not os.path.isdir(data_dir):
     os.mkdir(data_dir)
-    os.mkdir(os.path.join(data_dir, 'mentions'))
-    os.mkdir(os.path.join(data_dir, 'gold'))
   data_json = 'm2e2/data/m2e2_rawdata/article_event.json'
   bbox_json = 'm2e2/data/m2e2_rawdata/image_event.json'
-  out_prefix = os.path.join(data_dir, 'mentions/test') # XXX
-  get_mention_doc(data_json, out_prefix, inclusive=True)
+  out_prefix = os.path.join(data_dir, 'test') # XXX
+  # get_mention_doc(data_json, bbox_json, out_prefix, inclusive=False) 
+  # extract_image_embeddings(config, out_prefix)
+  train_test_split(config, out_prefix)

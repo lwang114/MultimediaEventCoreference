@@ -135,6 +135,47 @@ class SimplePairWiseClassifier(nn.Module):
     def forward(self, first, second):
         return self.pairwise_mlp(torch.cat((first, second, first * second), dim=1))
 
+'''
+class BiLSTMSpanEmbedder(nn.Module):
+  def __init__(self, config): # TODO
+    super(BiLSTMSpanEmbedder, self).__init__()
+    
+  def forward(doc_embeddings, candidate_start_ends, width, span_mask): # TODO
+    lstm_embeddings = self.lstm_embedder(doc_embeddings)
+    start_vector = torch.gather(lstm_embeddings, candidate_start_ends[:, :, 0], dim=1)
+    end_vector = torch.gather(lstm_embeddings, candidate_start_ends[:, :, 1], dim=1)
+    vector = torch.cat([start_vector, end_vector], dim=-1)
+    continuous_embeddings = self.get_all_token_embedding(embedding, start, end)
+    if self.use_head_attention:
+        padded_tokens_embeddings, masks = self.pad_continous_embeddings(continuous_embeddings, width)
+        attention_scores = self.self_attention_layer(padded_tokens_embeddings).squeeze(-1)
+        attention_scores *= masks
+        attention_scores = torch.where(attention_scores != 0, attention_scores,
+                                           torch.tensor(-9e9, device=self.device))
+        attention_scores = F.softmax(attention_scores, dim=1)
+        weighted_sum = (attention_scores.unsqueeze(-1) * padded_tokens_embeddings).sum(dim=1)
+        vector = torch.cat((vector, weighted_sum), dim=1)
+
+    if self.with_width_embedding:
+        width = torch.clamp(width, max=4)
+        width_embedding = self.width_feature(width)
+        vector = torch.cat((vector, width_embedding), dim=1)
+
+    vector = vector.view(B, S, -1)
+    return vector
+
+
+  
+  def get_all_token_embedding(embedding, start, end): # TODO
+    span_embeddings, length = [], []
+    for s, e in zip(start, end):
+        indices = torch.tensor(range(s, e + 1))
+        span_embeddings.append(embedding[indices])
+        length.append(len(indices))
+    return span_embeddings, length
+'''
+  
+
 class SymbolicPairWiseClassifier(nn.Module):
   def __init__(self, config):
     super(SymbolicPairWiseClassifier, self).__init__()

@@ -14,10 +14,9 @@ import numpy as np
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
 from models import SpanEmbedder, SimplePairWiseClassifier
-from grounded_coreference import GroundedCoreferencer 
-from mml_grounded_coreference import MMLGroundedCoreferencer
-# from mml_dotproduct_grounded_coreference import MMLDotProductGroundedCoreferencer 
-from corpus import GroundingFeatureDataset
+from supervised_grounded_coreference import SupervisedGroundedCoreferencer
+from corpus_supervised_glove import SupervisedGroundingGloveFeatureDataset
+from corpus_supervised import SupervisedGroundingFeatureDataset
 from evaluator import Evaluation, RetrievalEvaluation
 from utils import make_prediction_readable
 from conll import write_output_file
@@ -43,14 +42,13 @@ def get_optimizer(config, models):
     else:
         return optim.SGD(parameters, momentum=0.9, lr=config.learning_rate, weight_decay=config.weight_decay)
 
-def get_pairwise_labels(labels, is_training, device):
-    if len(labels) <= 1:
-      return None, None, None
-    first, second = zip(*list(combinations(range(len(labels)), 2)))
+def get_pairwise_labels(text_labels, image_labels, is_training, device):
+    first = [first_idx for first_idx in range(len(text_labels)) for second_idx in range(len(image_labels))]
+    second = [second_idx for first_idx in range(len(text_labels)) for second_idx in range(len(image_labels))]
     first = torch.tensor(first)
     second = torch.tensor(second)
-    pairwise_labels = (labels[first] != 0) & (labels[second] != 0) & \
-                      (labels[first] == labels[second])
+    pairwise_labels = (text_labels[first] != 0) & (image_labels[second] != 0) & \
+                      (text_labels[first] == image_labels[second])
 
     if is_training:
         positives = (pairwise_labels == 1).nonzero().squeeze()
@@ -105,6 +103,9 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
     image_model.load_state_dict(torch.load('{}/image_model.{}.pth'.format(args.exp_dir, args.start_epoch)))
     coref_model.load_state_dict(torch.load('{}/text_scorer.{}.pth'.format(args.exp_dir, args.start_epoch)))
 
+  # Define the training criterion
+  criterion = nn.BCEWithLogitsLoss()
+  
   # Set up the optimizer  
   optimizer = get_optimizer(config, [text_model, image_model, coref_model])
    
@@ -120,20 +121,31 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
   for epoch in range(args.start_epoch, config.epochs):
     for i, batch in enumerate(train_loader):
       start_end_embeddings, continuous_embeddings,\
-      span_mask, width, videos, video_mask, _ = batch   
+      width, videos, text_labels,\
+      img_labels, span_mask, video_mask = batch   
 
       B = start_end_embeddings.size(0)
       start_end_embeddings = start_end_embeddings.to(device)
       continuous_embeddings = continuous_embeddings.to(device)
-      span_mask = span_mask.to(device)
       width = width.to(device)
       videos = videos.to(device)
+      text_labels = text_labels.to(device).flatten()
+      img_labels = img_labels.to(device).flatten()
+      span_mask = span_mask.to(device)
+      span_num = span_mask.sum(-1).long()
       video_mask = video_mask.to(device)
+      region_num = video_mask.sum(-1).long()
       optimizer.zero_grad()
 
       text_output = text_model(start_end_embeddings, continuous_embeddings, width)
       video_output = image_model(videos)
-      loss = coref_model(text_output, video_output, span_mask, video_mask).mean()
+      mml_loss, scores = coref_model(text_output, video_output, span_mask, video_mask)
+      first_idx, second_idx, pairwise_labels = get_pairwise_labels(text_labels, img_labels, is_training=False, device=device)
+      if first_idx is None:
+        continue
+      pairwise_labels = pairwise_labels.to(torch.float)
+      bce_loss = criterion(scores.flatten(), pairwise_labels)
+      loss = bce_loss + mml_loss 
       loss.backward()
       optimizer.step()
 
@@ -184,7 +196,8 @@ def test(text_model, image_model, coref_model, test_loader, args):
       pred_dicts = []
       for i, batch in enumerate(test_loader):
         start_end_embeddings, continuous_embeddings,\
-        span_mask, width, videos, video_mask, labels = batch
+        width, videos, text_labels,\
+        img_labels, span_mask, video_mask = batch
         start_end_embeddings = start_end_embeddings.to(device)
         continuous_embeddings = continuous_embeddings.to(device)
         span_mask = span_mask.to(device)
@@ -192,7 +205,9 @@ def test(text_model, image_model, coref_model, test_loader, args):
         width = width.to(device)
         videos = videos.to(device)
         video_mask = video_mask.to(device)
-        labels = labels.to(device)
+        region_num = video_mask.sum(-1).long()
+        text_labels = text_labels.to(device)
+        img_labels = img_labels.to(device)
 
         # Extract span and video embeddings
         text_output = text_model(start_end_embeddings, continuous_embeddings, width)
@@ -201,13 +216,13 @@ def test(text_model, image_model, coref_model, test_loader, args):
         # Compute score for each span pair
         B = start_end_embeddings.size(0) 
         for idx in range(B):
-          # TODO _, _, att_weights = text_output[idx], video_output[idx]
-          first_idx, second_idx, pairwise_labels = get_pairwise_labels(labels[idx, :span_num[idx]], is_training=False, device=device)
+          _, scores = coref_model(text_output[idx, :span_num[idx]].unsqueeze(0), video_output[idx, :region_num[idx]].unsqueeze(0), torch.ones((1, span_num[idx])), torch.ones((1, region_num[idx])))
+          first_idx, second_idx, pairwise_labels = get_pairwise_labels(text_labels[idx, :span_num[idx]], img_labels[idx, :region_num[idx]], is_training=False, device=device)
           if first_idx is None:
             continue
-          clusters, scores = coref_model.module.predict_cluster(text_output[idx], video_output[idx],\
-                                                                first_idx, second_idx)
-          all_scores.append(scores.squeeze(1))             
+          # TODO clusters, scores = coref_model.module.predict_cluster(text_output[idx], video_output[idx],\
+          #                                                      first_idx, second_idx)
+          all_scores.append(scores.flatten())             
           all_labels.append(pairwise_labels.to(torch.int)) 
           
           global_idx = i * test_loader.batch_size + idx
@@ -215,13 +230,13 @@ def test(text_model, image_model, coref_model, test_loader, args):
           origin_tokens = [token[2] for token in test_loader.dataset.origin_tokens[global_idx]]
           candidate_start_ends = test_loader.dataset.origin_candidate_start_ends[global_idx]
           # print(doc_id, clusters.values(), candidate_start_ends.tolist())
-          doc_name = doc_id
+          # TODO doc_name = doc_id
           document = {doc_id:test_loader.dataset.documents[doc_id]}
-          write_output_file(document, clusters, [doc_id]*candidate_start_ends.shape[0],
-                            candidate_start_ends[:, 0].tolist(),
-                            candidate_start_ends[:, 1].tolist(),
-                            os.path.join(config['model_path'], 'pred_conll'),
-                            doc_name, False, True)
+          # write_output_file(document, clusters, [doc_id]*candidate_start_ends.shape[0],
+          #                  candidate_start_ends[:, 0].tolist(),
+          #                  candidate_start_ends[:, 1].tolist(),
+          #                  os.path.join(config['model_path'], 'pred_conll'),
+          #                  doc_name, False, True)
           pred_dicts.append({'doc_id': doc_id,
                              'first_idx': first_idx.cpu().detach().numpy().tolist(),
                              'second_idx': second_idx.cpu().detach().numpy().tolist(),
@@ -323,22 +338,22 @@ if __name__ == '__main__':
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
 
   # Initialize dataloaders
-  train_set = GroundingFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config, split='train')
-  test_set = GroundingFeatureDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), config, split='test')
+  if 'token_file' in config and 'mention_file' in config and 'bbox_file' in config:
+      train_set = SupervisedGroundingGloveFeatureDataset(config['token_file'], config['mention_file'], config['bbox_file'], config, split='train')
+      test_set = SupervisedGroundingGloveFeatureDataset(config['token_file'], config['mention_file'], config['bbox_file'], config, split='test')
+  else:
+      train_set = SupervisedGroundingFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), os.path.join(config['data_folder'], 'train_bboxes.json'), config, split='train') # XXX
+      test_set = SupervisedGroundingFeatureDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), os.path.join(config['data_folder'], 'test_bboxes.json'), config, split='test') # XXX
   train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
   test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
 
   # Initialize models
-  text_model = SpanEmbedder(config, device).to(device)
+  text_model = SpanEmbedder(config, device).to(device) # BiLSTM(embedding_dim, embedding_dim)
   embedding_dim = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2
   if config.with_mention_width:
     embedding_dim += config.embedding_dimension
   image_model = nn.Linear(2048, embedding_dim)
-  if config.loss == 'mml':
-    coref_model = MMLGroundedCoreferencer(config).to(device)
-  else:
-    coref_model = GroundedCoreferencer(config).to(device)
-  
+  coref_model = SupervisedGroundedCoreferencer(config).to(device)
 
   if config['training_method'] in ('pipeline', 'continue'):
       text_model.load_state_dict(torch.load(config['span_repr_path'], map_location=device))
@@ -347,10 +362,3 @@ if __name__ == '__main__':
   
   # Training
   train(text_model, image_model, coref_model, train_loader, test_loader, args)
-
-  # Convert the predictions to readable format
-  # pred_json = '{}_prediction.json'.format(args.config.split('/')[-1].split('.')[0])
-  # make_prediction_readable(os.path.join(args.exp_dir, pred_json),
-  #                          config['image_dir'],
-  #                          os.path.join(config['data_folder'], 'test_mixed.json'),
-  #                          os.path.join(args.exp_dir, pred_json.split('.')[0]+'_readable.txt'))

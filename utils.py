@@ -9,6 +9,8 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from sklearn.metrics import average_precision_score, precision_recall_curve 
 import numpy as np
+import argparse
+import pyhocon
 
 def make_prediction_readable(pred_json, img_dir, mention_json, out_file='prediction_readable.txt'):
   pred_dicts = json.load(open(pred_json))
@@ -46,12 +48,16 @@ def plot_pr_curve(pred_json, model_name='Multimedia Coref.'):
   return df
 
 if __name__ == '__main__':
-  model_dir = 'models/grounded_coref'
-  img_dir = 'm2e2/data/video_m2e2/videos'
-  data_dir = 'data/video_m2e2'
-  exp_dir = model_dir
+  parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+  parser.add_argument('--config', type=str, default='')
+  args = parser.parse_args()
 
-  pred_jsons = ['config_grounded_text_only_decode_prediction.json', 'config_grounded_prediction.json']
+  config = pyhocon.ConfigFactory.parse_file(args.config)
+  model_dir = config['model_path']
+  img_dir = config['image_dir']
+  data_dir = os.path.join(config['data_folder'], '../')
+  exp_dir = model_dir
+  pred_jsons = ['{}_prediction.json'.format(args.config.split('/')[-1].split('.')[0])] # ['config_grounded_text_only_decode_prediction.json', 'config_grounded_prediction.json']
   for pred_json in pred_jsons:
     pred_json = os.path.join(exp_dir, pred_json)
     mention_json = os.path.join(data_dir, 'mentions/test_mixed.json')

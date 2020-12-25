@@ -9,14 +9,14 @@ import codecs
 import json
 import math
 # XXX
-import torchvision.transforms as transforms
+# import torchvision.transforms as transforms
 import PIL.Image as Image
 from tqdm import tqdm
 from datetime import datetime
-# XXX from transformers import AutoTokenizer, AutoModel
+from transformers import AutoTokenizer, AutoModel
 from image_models import ResNet101
-# from coref.model_utils import pad_and_read_bert
-# from coref.utils import create_corpus
+from coref.model_utils import pad_and_read_bert
+from coref.utils import create_corpus
 
 logger = logging.getLogger(__name__)
 def load_video(filename, config, transform=None, image_prefix=None):
@@ -64,17 +64,18 @@ def load_video(filename, config, transform=None, image_prefix=None):
     
     return torch.cat(video, dim=0), mask
 
-def save_frame_rate(config):
-  doc_json = os.path.join(config['data_folder'], args.split+'.json')
+def save_frame_rate(config, split='train'):
+  doc_json = os.path.join(config['data_folder'], split+'.json')
   documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
   doc_ids = sorted(documents)
-  out_fn = os.path.join(config['data_folder'], 'framerates.txt')
+  out_fn = os.path.join(config['data_folder'], '{}_framerates.txt'.format(split))
   out_f = open(out_fn, 'w') 
 
   for idx, doc_id in enumerate(doc_ids):
     video_file = os.path.join(config['image_dir'], doc_id+'.mp4')
-    cap = cv2.VideoCapture(filename)
+    cap = cv2.VideoCapture(video_file)
     frame_rate = cap.get(5) 
+    print(doc_id, frame_rate) # XXX
     out_f.write('{} {}\n'.format(doc_id, frame_rate))
   out_f.close()
 
@@ -150,7 +151,7 @@ def extract_bert_embeddings(config, split, out_prefix='bert_embedding'):
                                        zip(data.topics_list_of_docs[topic_num], data.topics_bert_tokens[topic_num])]
         list_of_doc_id_tokens.extend(list_of_doc_id_tokens_topic)
     
-    if config.test_id_file and split == 'test':
+    if 'test_id_file' in config and split == 'test':
         with open(config.test_id_file, 'r') as f:
             test_ids = f.read().strip().split('\n')
             test_ids = ['_'.join(k.split('_')[:-1]) for k in test_ids]
@@ -181,12 +182,10 @@ def extract_bert_embeddings(config, split, out_prefix='bert_embedding'):
                     print('Skip {}'.format(doc_id))
                     continue
                 emb_id = emb_ids[doc_id]
-                # print(emb_id) # XXX
                 bert_embedding = bert_embeddings[idx][:docs_length[idx]].cpu().detach().numpy()
                 if emb_id in docs_embeddings:
                     print(doc_id, emb_id) # XXX
                     docs_embeddings[emb_id] = np.concatenate([docs_embeddings[emb_id], bert_embedding], axis=0)
-                    print(docs_embeddings[emb_id].shape)
                 else:
                     docs_embeddings[emb_id] = bert_embedding
     np.savez(out_prefix+'.npz', **docs_embeddings)
@@ -195,9 +194,13 @@ def cleanup(documents, config):
     filtered_documents = {}
     img_ids = [img_id.split('.')[0] for img_id in os.listdir(config['image_dir'])]
     # config['image_dir'] = os.path.join(config['data_folder'], 'train_resnet152') # XXX
-    img_ids = ['_'.join(img_id.split('_')[:-1]) for img_id in os.listdir(config['image_dir'])]
-    print(img_ids[:10]) # XXX
-    
+    img_files = os.listdir(config['image_dir'])
+
+    if img_files[0].split('.')[-1] == '.jpg':
+      img_ids = [img_id.split('.jpg')[0] for img_id in img_files]
+    elif img_files[0].split('.')[-1] == '.npy':
+      img_ids = ['_'.join(img_id.split('_')[:-1]) for img_id in os.listdir(config['image_dir'])]     
+
     for doc_id in sorted(documents): 
         filename = os.path.join(config['image_dir'], doc_id+'.mp4')
         if os.path.exists(filename):
