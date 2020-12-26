@@ -97,6 +97,7 @@ class SupervisedGroundingFeatureDataset(Dataset):
     self.origin_candidate_start_ends = [np.asarray(sorted(self.text_label_dict[doc_id])) for doc_id in self.doc_ids]
     self.candidate_start_ends = [np.asarray([[clean_start_end_dict[doc_id][start], clean_start_end_dict[doc_id][end]] for start, end in start_ends])
                                  for doc_id, start_ends in zip(self.doc_ids, self.origin_candidate_start_ends)]
+    self.image_labels = [[self.image_label_dict[doc_id][box_id] for box_id in sorted(self.image_label_dict[doc_id], key=lambda x:x[0])] for doc_id in self.doc_ids]
 
   def tokenize(self, documents):
     '''
