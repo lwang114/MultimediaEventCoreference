@@ -229,6 +229,7 @@ def test(text_model, image_model, coref_model, test_loader, args):
           doc_id = test_loader.dataset.doc_ids[global_idx] 
           origin_tokens = [token[2] for token in test_loader.dataset.origin_tokens[global_idx]]
           candidate_start_ends = test_loader.dataset.origin_candidate_start_ends[global_idx]
+          image_labels = test_loader.dataset.image_labels[global_idx] # TODO
           # print(doc_id, clusters.values(), candidate_start_ends.tolist())
           # TODO doc_name = doc_id
           document = {doc_id:test_loader.dataset.documents[doc_id]}
@@ -240,8 +241,9 @@ def test(text_model, image_model, coref_model, test_loader, args):
           pred_dicts.append({'doc_id': doc_id,
                              'first_idx': first_idx.cpu().detach().numpy().tolist(),
                              'second_idx': second_idx.cpu().detach().numpy().tolist(),
-                             'tokens': origin_tokens, 
-                             'mention_spans': candidate_start_ends.tolist(), 
+                             'tokens': origin_tokens,
+                             'mention_spans': candidate_start_ends.tolist(),
+                             'image_labels': image_labels,
                              'score': scores.squeeze(1).cpu().detach().numpy().tolist(),
                              'pairwise_label': pairwise_labels.cpu().detach().numpy().tolist()})
 

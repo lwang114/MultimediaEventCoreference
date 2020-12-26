@@ -29,6 +29,25 @@ def make_prediction_readable(pred_json, img_dir, mention_json, out_file='predict
       f.write('{}\t{}\t{}\t{:d}\t{:.2f}\n'.format(doc_id, a, b, l, s))
   f.close()
 
+def make_prediction_readable_crossmedia(pred_json, text_mention_json, image_mention_json, out_file='prediction_readable.txt'):
+  pred_dicts = json.load(open(pred_json))
+  text_mention_dicts = json.load(open(text_mention_json)) 
+  image_mention_dicts = json.load(open(image_mention_json))
+  f = codecs.open(out_file, 'w')
+  for doc_idx, pred_dict in enumerate(pred_dicts):
+    doc_id = pred_dict['doc_id']
+    tokens = pred_dict['tokens']
+    spans = pred_dict['mention_spans']
+    image_labels = pred_dict['image_labels'] # TODO
+    mention_texts = [' '.join(tokens[span[0]:span[1]+1]) for span in spans] # [label_dict[doc_id][span] for span in spans]    
+    first = [mention_texts[m_idx] for m_idx in pred_dict['first_idx']]
+    second = [image_labels[m_idx] for m_idx in pred_dict['second_idx']]
+    pairwise_label = pred_dict['pairwise_label']
+    score = pred_dict['score']
+    for a, b, l, s in zip(first, second, pairwise_label, score):
+      f.write('{}\t{}\t{}\t{:d}\t{:.2f}\n'.format(doc_id, a, b, l, s))
+  f.close()
+
 def plot_pr_curve(pred_json, model_name='Multimedia Coref.'):
   pred_dicts = json.load(open(pred_json))
   y_score = []
