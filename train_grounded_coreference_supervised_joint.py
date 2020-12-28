@@ -14,8 +14,7 @@ import numpy as np
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
 from models import SpanEmbedder, SimplePairWiseClassifier
-from supervised_grounded_coreference import SupervisedGroundedCoreferencer
-from corpus_supervised_glove import SupervisedGroundingGloveFeatureDataset
+from joint_supervised_grounded_coreference import JointSupervisedGroundedCoreferencer
 from corpus_supervised import SupervisedGroundingFeatureDataset
 from evaluator import Evaluation, RetrievalEvaluation
 from utils import make_prediction_readable
@@ -73,6 +72,36 @@ def get_pairwise_labels(text_labels, image_labels, is_training, device):
 
 
     return first, second, pairwise_labels    
+
+def get_pairwise_text_labels(labels, is_training, device):
+  first, second = zip(*list(combinations(range(len(labels)), 2))) 
+  first = torch.tensor(first)
+  second = torch.tensor(second)
+  pairwise_labels = (labels[first] != 0) & (labels[second] != 0) & \
+                    (labels[first] == labels[second])
+
+  if is_training:
+      positives = (pairwise_labels == 1).nonzero().squeeze()
+      positive_ratio = len(positives) / len(first)
+      negatives = (pairwise_labels != 1).nonzero().squeeze()
+      rands = torch.rand(len(negatives))
+      rands = (rands < positive_ratio * 20).to(torch.long)
+      sampled_negatives = negatives[rands.nonzero().squeeze()]
+      new_first = torch.cat((first[positives], first[sampled_negatives]))
+      new_second = torch.cat((second[positives], second[sampled_negatives]))
+      new_labels = torch.cat((pairwise_labels[positives], pairwise_labels[sampled_negatives]))
+      first, second, pairwise_labels = new_first, new_second, new_labels
+
+
+  pairwise_labels = pairwise_labels.to(torch.long).to(device)
+
+  if config['loss'] == 'hinge':
+      pairwise_labels = torch.where(pairwise_labels == 1, pairwise_labels, torch.tensor(-1, device=device))
+  else:
+      pairwise_labels = torch.where(pairwise_labels == 1, pairwise_labels, torch.tensor(0, device=device))
+  torch.cuda.empty_cache()
+
+  return first, second, pairwise_labels    
 
 
 def train(text_model, image_model, coref_model, train_loader, test_loader, args):
@@ -139,13 +168,16 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
 
       text_output = text_model(start_end_embeddings, continuous_embeddings, width)
       video_output = image_model(videos)
-      mml_loss, scores = coref_model(text_output, video_output, span_mask, video_mask)
-      first_idx, second_idx, pairwise_labels = get_pairwise_labels(text_labels, img_labels, is_training=False, device=device)
-      if first_idx is None:
+      mml_loss, grounding_scores, text_scores = coref_model(text_output, video_output, span_mask, video_mask)
+      first_grounding_idx, second_grounding_idx, pairwise_grounding_labels = get_pairwise_labels(text_labels, img_labels, is_training=False, device=device)
+      first_text_idx, second_text_idx, pairwise_text_labels = get_pairwise_text_labels(text_labels, is_training=False, device=device)
+
+      if first_grounding_idx is None or first_text_idx is None:
         continue
-      pairwise_labels = pairwise_labels.to(torch.float)
-      bce_loss = criterion(scores.flatten(), pairwise_labels)
-      loss = bce_loss # + mml_loss 
+      pairwise_grounding_labels = pairwise_grounding_labels.to(torch.float)
+      bce_grounding_loss = criterion(grounding_scores.flatten(), pairwise_grounding_labels)
+      bce_text_loss = criterion(text_scores.flatten(), pairwise_text_labels)
+      loss = bce_grounding_loss + bce_text_loss # + mml_loss 
       loss.backward()
       optimizer.step()
 
@@ -173,7 +205,6 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
       elif task == 'both':
         test_retrieve(text_model, image_model, coref_model, test_loader, args)
         test(text_model, image_model, coref_model, test_loader, args)
-
   if args.evaluate_only:
     task = config.get('task', 'coreference')
     print(task)
@@ -188,13 +219,16 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
 def test(text_model, image_model, coref_model, test_loader, args):
     config = pyhocon.ConfigFactory.parse_file(args.config)
     documents = test_loader.dataset.documents
-    all_scores = []
-    all_labels = []
+    all_grounding_scores = []
+    all_grounding_labels = []
+    all_text_scores = []
+    all_text_labels = []
     text_model.eval()
     image_model.eval()
     coref_model.eval()
     with torch.no_grad(): 
-      pred_dicts = []
+      pred_text_dicts = []
+      pred_grounding_dicts = []
       for i, batch in enumerate(test_loader):
         start_end_embeddings, continuous_embeddings,\
         width, videos, text_labels,\
@@ -217,14 +251,23 @@ def test(text_model, image_model, coref_model, test_loader, args):
         # Compute score for each span pair
         B = start_end_embeddings.size(0) 
         for idx in range(B):
-          _, scores = coref_model(text_output[idx, :span_num[idx]].unsqueeze(0), video_output[idx, :region_num[idx]].unsqueeze(0), torch.ones((1, span_num[idx])), torch.ones((1, region_num[idx])))
-          first_idx, second_idx, pairwise_labels = get_pairwise_labels(text_labels[idx, :span_num[idx]], img_labels[idx, :region_num[idx]], is_training=False, device=device)
-          if first_idx is None:
+          _, grounding_scores, text_scores = coref_model(text_output[idx, :span_num[idx]].unsqueeze(0), 
+                                                         video_output[idx, :region_num[idx]].unsqueeze(0), 
+                                                         torch.ones((1, span_num[idx])), 
+                                                         torch.ones((1, region_num[idx])))
+          first_grounding_idx, second_grounding_idx, pairwise_grounding_labels = get_pairwise_labels(text_labels[idx, :span_num[idx]], 
+                                                                                                     img_labels[idx, :region_num[idx]], 
+                                                                                                     is_training=False, device=device)
+          first_text_idx, second_text_idx, pairwise_text_labels = get_pairwise_text_labels(text_labels[idx, :span_num[idx]], 
+                                                                                           is_training=False, device=device) # TODO
+          if first_grounding_idx is None or first_text_idx is None:
             continue
           # TODO clusters, scores = coref_model.module.predict_cluster(text_output[idx], video_output[idx],\
           #                                                      first_idx, second_idx)
-          all_scores.append(scores.flatten())             
-          all_labels.append(pairwise_labels.to(torch.int)) 
+          all_text_scores.append(text_scores.flatten())
+          all_text_labels.append(pairwise_text_labels.to(torch.int))
+          all_grounding_scores.append(grounding_scores.flatten())             
+          all_grounding_labels.append(pairwise_grounding_labels.to(torch.int)) 
           
           global_idx = i * test_loader.batch_size + idx
           doc_id = test_loader.dataset.doc_ids[global_idx] 
@@ -239,31 +282,54 @@ def test(text_model, image_model, coref_model, test_loader, args):
           #                  candidate_start_ends[:, 1].tolist(),
           #                  os.path.join(config['model_path'], 'pred_conll'),
           #                  doc_name, False, True)
-          pred_dicts.append({'doc_id': doc_id,
-                             'first_idx': first_idx.cpu().detach().numpy().tolist(),
-                             'second_idx': second_idx.cpu().detach().numpy().tolist(),
+          pred_text_dicts.append({'doc_id': doc_id,
+                             'first_idx': first_text_idx.cpu().detach().numpy().tolist(),
+                             'second_idx': second_text_idx.cpu().detach().numpy().tolist(),
+                             'tokens': origin_tokens,
+                             'mention_spans': candidate_start_ends.tolist(),
+                             'score': text_scores.flatten().cpu().detach().numpy().tolist(),
+                             'pairwise_label': pairwise_text_labels.cpu().detach().numpy().tolist()})
+
+          pred_grounding_dicts.append({'doc_id': doc_id,
+                             'first_idx': first_grounding_idx.cpu().detach().numpy().tolist(),
+                             'second_idx': second_grounding_idx.cpu().detach().numpy().tolist(),
                              'tokens': origin_tokens,
                              'mention_spans': candidate_start_ends.tolist(),
                              'image_labels': image_labels,
-                             'score': scores.flatten().cpu().detach().numpy().tolist(),
-                             'pairwise_label': pairwise_labels.cpu().detach().numpy().tolist()})
-
-      all_scores = torch.cat(all_scores)
-      all_labels = torch.cat(all_labels)
-
-      strict_preds = (all_scores > 0).to(torch.int)
-      eval = Evaluation(strict_preds, all_labels.to(device))
-      print('Number of predictions: {}/{}'.format(strict_preds.sum(), len(strict_preds)))
-      print('Number of positive pairs: {}/{}'.format(len((all_labels == 1).nonzero()),
-                                                     len(all_labels)))
+                             'score': grounding_scores.flatten().cpu().detach().numpy().tolist(),
+                             'pairwise_label': pairwise_grounding_labels.cpu().detach().numpy().tolist()})
+      all_grounding_scores = torch.cat(all_grounding_scores)
+      all_grounding_labels = torch.cat(all_grounding_labels)
+      all_text_scores = torch.cat(all_text_scores)
+      all_text_labels = torch.cat(all_text_labels)
+      
+      strict_grounding_preds = (all_grounding_scores > 0).to(torch.int)
+      eval = Evaluation(strict_grounding_preds, all_grounding_labels.to(device))
+      print('Number of predictions: {}/{}'.format(strict_grounding_preds.sum(), len(strict_grounding_preds)))
+      print('Number of positive pairs: {}/{}'.format(len((all_grounding_labels == 1).nonzero()),
+                                                     len(all_grounding_labels)))
       print('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
                                                                 eval.get_precision(), eval.get_f1()))
-      logger.info('Number of predictions: {}/{}'.format(strict_preds.sum(), len(strict_preds)))
-      logger.info('Number of positive pairs: {}/{}'.format(len((all_labels == 1).nonzero()),
-                                                           len(all_labels)))
+      logger.info('Number of predictions: {}/{}'.format(strict_grounding_preds.sum(), len(strict_grounding_preds)))
+      logger.info('Number of positive pairs: {}/{}'.format(len((all_grounding_labels == 1).nonzero()),
+                                                           len(all_grounding_labels)))
       logger.info('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
                                                                       eval.get_precision(), eval.get_f1()))
-      json.dump(pred_dicts, open(os.path.join(args.exp_dir, '{}_prediction.json'.format(args.config.split('.')[0].split('/')[-1])), 'w'), indent=4, sort_keys=True)
+
+      strict_text_preds = (all_text_scores > 0).to(torch.int) # TODO
+      eval = Evaluation(strict_text_preds, all_text_labels.to(device))
+      print('Number of predictions: {}/{}'.format(strict_text_preds.sum(), len(strict_text_preds)))
+      print('Number of positive pairs: {}/{}'.format(len((all_text_labels == 1).nonzero()),
+                                                     len(all_text_labels)))
+      print('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
+                                                                eval.get_precision(), eval.get_f1()))
+      logger.info('Number of predictions: {}/{}'.format(strict_text_preds.sum(), len(strict_text_preds)))
+      logger.info('Number of positive pairs: {}/{}'.format(len((all_text_labels == 1).nonzero()),
+                                                           len(all_text_labels)))
+      logger.info('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
+                                                                      eval.get_precision(), eval.get_f1()))
+      json.dump(pred_text_dicts, open(os.path.join(args.exp_dir, '{}_prediction_text_coref.json'.format(args.config.split('.')[0].split('/')[-1])), 'w'), indent=4)
+      json.dump(pred_grounding_dicts, open(os.path.join(args.exp_dir, '{}_prediction_crossmedia_coref.json'.format(args.config.split('.')[0].split('/')[-1])), 'w'), indent=4)
 
 def test_retrieve(text_model, image_model, coref_model, test_loader, args):
   config = pyhocon.ConfigFactory.parse_file(args.config)
@@ -357,7 +423,7 @@ if __name__ == '__main__':
   if config.with_mention_width:
     embedding_dim += config.embedding_dimension
   image_model = nn.Linear(2048, embedding_dim)
-  coref_model = SupervisedGroundedCoreferencer(config).to(device)
+  coref_model = JointSupervisedGroundedCoreferencer(config).to(device)
 
   if config['training_method'] in ('pipeline', 'continue'):
       text_model.load_state_dict(torch.load(config['span_repr_path'], map_location=device))

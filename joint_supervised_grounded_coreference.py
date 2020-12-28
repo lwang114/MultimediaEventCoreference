@@ -30,9 +30,9 @@ class BiLSTM(nn.Module):
     outputs = torch.stack(outputs, dim=1).transpose(0, 1)
     return outputs
     
-class SupervisedGroundedCoreferencer(nn.Module):
+class JointSupervisedGroundedCoreferencer(nn.Module):
   def __init__(self, config):
-    super(SupervisedGroundedCoreferencer, self).__init__()
+    super(JointSupervisedGroundedCoreferencer, self).__init__()
     self.text_scorer = SimplePairWiseClassifier(config) 
     self.grounding_scorer = SimplePairWiseClassifier(config)
     self.text_only_decode = config.get('text_only_decode', False)
@@ -70,7 +70,7 @@ class SupervisedGroundedCoreferencer(nn.Module):
   def score_text(self, span_embeddings, span_mask):
     B = span_embeddings.size(0)
     N = span_embeddings.size(1)
-    first_idx, second_idx = zip(*list(combinations(N, 2)))
+    first_idx, second_idx = zip(*list(combinations(range(N), 2)))
     first = span_embeddings[:, first_idx].view(B*len(first_idx), -1)
     second = span_embeddings[:, second_idx].view(B*len(second_idx), -1)
     scores = self.text_scorer(first, second)
