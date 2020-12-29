@@ -8,12 +8,13 @@ import json
 import cv2
 import os
 import PIL.Image as Image
+from supervised_grounded_coreference import BiLSTM
 
 SINGLETON = '###SINGLETON###'
 def get_all_token_embedding(embedding, start, end):
     span_embeddings, length = [], []
     for s, e in zip(start, end):
-        indices = torch.tensor(range(s, e + 1))
+        indices = torch.tensor(range(s, e + 1)).to(embedding.device)
         span_embeddings.append(embedding[indices])
         length.append(len(indices))
     return span_embeddings, length
@@ -21,7 +22,7 @@ def get_all_token_embedding(embedding, start, end):
 def fix_embedding_length(emb, L):
   size = emb.size()[1:]
   if emb.size(0) < L:
-    pad = [torch.zeros(size, dtype=emb.dtype).unsqueeze(0) for _ in range(L-emb.size(0))]
+    pad = [torch.zeros(size, dtype=emb.dtype, device=emb.device).unsqueeze(0) for _ in range(L-emb.size(0))]
     emb = torch.cat([emb]+pad, dim=0)
   else:
     emb = emb[:L]
@@ -52,12 +53,12 @@ class SupervisedGroundingGloveFeatureDataset(Dataset):
     self.max_frame_num = config.get('max_frame_num', 20)
     self.max_mention_span = config.get('max_mention_span', 15)
     self.max_region_num = config.get('max_region_num', 20)
-
+    self.img_feat_type = config.get('img_feat_type', 'resnet101')
     test_id_file = config.get('test_id_file', '')
 
     documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
     self.documents = documents
-
+    self.origin_tokens = [documents[doc_id] for doc_id in sorted(documents)]
     text_mentions = json.load(codecs.open(text_mention_json, 'r', 'utf-8'))
     image_mentions = json.load(codecs.open(image_mention_json, 'r', 'utf-8'))
     
@@ -66,38 +67,36 @@ class SupervisedGroundingGloveFeatureDataset(Dataset):
         self.imgs_embeddings = np.load(config.image_feat_file)
     else:
         self.imgs_embeddings = np.load('{}_{}.npz'.format(doc_json.split('.')[0], self.img_feat_type))
-    
-    # Extract doc/image ids
-    self.feat_keys = sorted(self.imgs_embeddings, key=lambda x:int(x.split('_')[-1]))
-    self.doc_ids = ['_'.join(k.split('_')[:-1]) for k in self.feat_keys]
-
-    if test_id_file:
-      with open(test_id_file) as f:
-        test_ids = ['_'.join(k.split('_')[:-1]) for k in f.read().strip().split()]
-
-      if split == 'train':
-        self.doc_ids = [doc_id for doc_id in self.doc_ids if not doc_id in test_ids]
-        self.feat_keys = [k for k in self.feat_keys if not '_'.join(k.split('_')[:-1]) in test_ids]
-      else:
-        self.doc_ids = [doc_id for doc_id in self.doc_ids if doc_id in test_ids]
-        self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in test_ids]
-      assert len(self.doc_ids) == len(self.feat_keys)
-    
-    self.doc_ids = self.doc_ids[:20] # XXX
-    self.feat_keys = self.feat_keys[:20] # XXX
-    print('Number of documents: ', len(self.doc_ids))
-    self.origin_tokens = [documents[doc_id] for doc_id in self.doc_ids]
-
+       
     # Extract word embeddings
     glove_embed_file = '{}_glove_embeddings.npz'.format(doc_json.split('.')[0])
     self.docs_embeddings = np.load(glove_embed_file)
     
     # Extract coreference cluster labels
-    self.text_label_dict, self.image_label_dict = self.create_dict_labels(text_mentions, image_mentions)
-    
+    self.text_label_dict, self.image_label_dict, image_token_dict = self.create_dict_labels(text_mentions, image_mentions)
+
+    # Extract doc/image ids
+    self.feat_keys = sorted(self.imgs_embeddings, key=lambda x:int(x.split('_')[-1])) # XXX
+    self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in self.text_label_dict and '_'.join(k.split('_')[:-1]) in self.image_label_dict]
+    if test_id_file:
+      with open(test_id_file) as f:
+        test_ids = ['_'.join(k.split('_')[:-1]) for k in f.read().strip().split()]
+
+      if split == 'train':
+        self.feat_keys = [k for k in self.feat_keys if not '_'.join(k.split('_')[:-1]) in test_ids]
+      else:
+        self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in test_ids]
+    self.doc_ids = ['_'.join(k.split('_')[:-1]) for k in self.feat_keys]
+    documents = {doc_id:documents[doc_id] for doc_id in self.doc_ids}
+    print('Number of documents: ', len(self.doc_ids))
+
     # Extract spans
     self.candidate_start_ends = [np.asarray(sorted(self.text_label_dict[doc_id])) for doc_id in self.doc_ids]
     self.origin_candidate_start_ends = self.candidate_start_ends
+    self.image_labels = [[image_token_dict[doc_id][box_id] for box_id in sorted(self.image_label_dict[doc_id], key=lambda x:x[0])] for doc_id in self.doc_ids]
+
+    # Initialize BiLSTM encoder
+    self.encoder = BiLSTM(config['glove_dimension'], config['hidden_layer']).to(self.device) 
 
   def create_dict_labels(self, text_mentions, image_mentions, clean_start_end_dict=None):
     '''
@@ -106,7 +105,8 @@ class SupervisedGroundingGloveFeatureDataset(Dataset):
     '''
     cluster_dict = {SINGLETON: 0}
     text_label_dict = collections.defaultdict(dict)
-    image_label_dict = collections.defaultdict(dict)
+    image_label_dict = {}
+    image_token_dict = {} 
     for m in text_mentions:
       if len(m['tokens_ids']) == 0:
         text_label_dict[m['doc_id']][(-1, -1)] = 0
@@ -117,14 +117,17 @@ class SupervisedGroundingGloveFeatureDataset(Dataset):
             cluster_dict[m['cluster_id']] = len(cluster_dict)
         text_label_dict[m['doc_id']][(start, end)] = cluster_dict[m['cluster_id']]
 
-    prev_id = ''
-    bbox_id = 0
     for i, m in enumerate(image_mentions):
-        if prev_id != m['doc_id']:
-            prev_id = m['doc_id']
-            bbox_id = 0
-        image_label_dict[m['doc_id']][tuple([bbox_id]+m['bbox'])] = cluster_dict.get(m['cluster_id'], 0)
-    return text_label_dict, image_label_dict    
+        if not m['doc_id'] in image_label_dict:
+            image_label_dict[m['doc_id']] = {}
+            image_token_dict[m['doc_id']] = {}
+
+        label_keys = [k[1] for k in sorted(image_label_dict[m['doc_id']], key=lambda x:x[0])]
+        if not m['cluster_id'] in label_keys:
+          bbox_id = len(image_label_dict[m['doc_id']])
+          image_label_dict[m['doc_id']][(bbox_id, m['cluster_id'])] = cluster_dict.get(m['cluster_id'], 0)
+          image_token_dict[m['doc_id']][(bbox_id, m['cluster_id'])] = m['tokens']
+    return text_label_dict, image_label_dict, image_token_dict 
   
   def load_text(self, idx):
     '''Load mention span embeddings for the document
@@ -136,53 +139,63 @@ class SupervisedGroundingGloveFeatureDataset(Dataset):
     :return labels: LongTensor of size (max num. spans,) 
     '''
     # Extract the original spans of the current doc
-    candidate_start_ends = self.candidate_start_ends[idx]
-    span_num = candidate_start_ends.shape[0]
-    candidate_start_ends = torch.LongTensor(candidate_start_ends)
+    origin_candidate_start_ends = self.origin_candidate_start_ends[idx]
+    span_num = origin_candidate_start_ends.shape[0]
+    candidate_start_ends = torch.LongTensor(origin_candidate_start_ends)
     candidate_start_ends = fix_embedding_length(candidate_start_ends, self.max_span_num)
+    candidate_start_ends = candidate_start_ends.to(self.device)
 
     # Extract the current doc embedding
     doc_len = len(self.origin_tokens[idx])
-    doc_embeddings = self.docs_embeddings[self.feat_keys[idx]]
-    assert doc_len == doc_embeddings.shape[0]
     
-    doc_embeddings = torch.FloatTensor(doc_embeddings)
-    _, width = get_all_token_embedding(doc_embeddings, 
-                                                                  candidate_starts,
-                                                                  candidate_ends)
+    doc_embeddings = torch.FloatTensor(self.docs_embeddings[self.feat_keys[idx]]).to(self.device)
+    assert doc_len == doc_embeddings.shape[0]
+    doc_embeddings = self.encoder(doc_embeddings).squeeze(0)
+    start_end_embeddings = torch.cat((doc_embeddings[candidate_start_ends[:, 0]],
+                                      doc_embeddings[candidate_start_ends[:, 1]]), dim=1)
+    continuous_tokens_embeddings, width = get_all_token_embedding(doc_embeddings, 
+                                       candidate_start_ends[:, 0],
+                                       candidate_start_ends[:, 1])
+    continuous_tokens_embeddings = torch.stack([fix_embedding_length(emb, self.max_mention_span)
+                                                for emb in continuous_tokens_embeddings], dim=0)
+
+    width = torch.LongTensor([min(w, self.max_mention_span) for w in width]).to(self.device)
+
     # Pad/truncate the outputs to max num. of spans
-    width = torch.LongTensor([min(w, self.max_mention_span) for w in width])
+    start_end_embeddings = fix_embedding_length(start_end_embeddings, self.max_span_num)
+    continuous_tokens_embeddings = fix_embedding_length(continuous_tokens_embeddings, self.max_span_num)
     width = fix_embedding_length(width.unsqueeze(1), self.max_span_num).squeeze(1)
     
     # Extract coreference cluster labels
-    labels = [int(self.text_label_dict[self.doc_ids[idx]][(start, end)]) for start, end in zip(candidate_starts, candidate_ends)]
-    labels = torch.LongTensor(labels)
+    labels = [int(self.text_label_dict[self.doc_ids[idx]][(start, end)]) for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
+    labels = torch.LongTensor(labels).to(self.device)
     labels = fix_embedding_length(labels.unsqueeze(1), self.max_span_num).squeeze(1)
-    mask = torch.FloatTensor([1. if i < span_num else 0 for i in range(self.max_span_num)])
-    return doc_embeddings, candidate_start_ends, width, labels, mask
+    mask = torch.FloatTensor([1. if i < span_num else 0 for i in range(self.max_span_num)]).to(self.device)
+    return start_end_embeddings, continuous_tokens_embeddings, width, labels, mask
 
-  def load_video(self, idx):
+  def load_video(self, idx): # TODO
     '''Load video
     :param filename: str, video filename
     :return video_frames: FloatTensor of size (batch size, max num. of regions, image embed dim)
     :return mask: LongTensor of size (batch size, max num. of frames)
     '''    
+    doc_id = self.doc_ids[idx]
     img_embeddings = self.imgs_embeddings[self.feat_keys[idx]]
-    img_embeddings = torch.FloatTensor(img_embeddings)
+    img_embeddings = torch.FloatTensor(img_embeddings).to(self.device)
     img_embeddings = img_embeddings.permute(1, 0, 2, 3).flatten(start_dim=1).t()
     img_embeddings = fix_embedding_length(img_embeddings, self.max_region_num)
 
-    labels = [int(self.image_label_dict[self.doc_ids[idx]][box_id]) for box_id in sorted(self.image_label_dict, key=lambda x:int(x[0]))]
+    labels = [int(self.image_label_dict[doc_id][box_id]) for box_id in sorted(self.image_label_dict[doc_id], key=lambda x:int(x[0]))]
     region_num = len(labels)
-    labels = torch.LongTensor(labels)
+    labels = torch.LongTensor(labels).to(self.device).to(self.device)
     labels = fix_embedding_length(labels.unsqueeze(1), self.max_region_num).squeeze(1)
-    mask = torch.FloatTensor([1. if i < region_num else 0 for i in range(self.max_region_num)])
+    mask = torch.FloatTensor([1. if i < region_num else 0 for i in range(self.max_region_num)]).to(self.device)
     return img_embeddings, labels, mask
 
   def __getitem__(self, idx):
     img_embeddings, img_labels, video_mask = self.load_video(idx)
-    doc_embeddings, candidate_start_ends, width, text_labels, span_mask = self.load_text(idx)
-    return doc_embeddings, candidate_start_ends, width, img_embeddings, text_labels, img_labels, span_mask, video_mask
+    start_end_embeddings, continuous_embeddings, width, text_labels, span_mask = self.load_text(idx)
+    return start_end_embeddings, continuous_embeddings, width, img_embeddings, text_labels, img_labels, span_mask, video_mask
 
   def __len__(self):
     return len(self.doc_ids)

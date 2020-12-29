@@ -72,8 +72,8 @@ class SupervisedGroundingFeatureDataset(Dataset):
     self.docs_embeddings = np.load(bert_embed_file)
     
     # Extract coreference cluster labels
-    self.text_label_dict, self.image_label_dict = self.create_dict_labels(text_mentions, image_mentions)
-    
+    self.text_label_dict, self.image_label_dict, image_token_dict = self.create_dict_labels(text_mentions, image_mentions)
+
     # Extract doc/image ids
     self.feat_keys = sorted(self.imgs_embeddings, key=lambda x:int(x.split('_')[-1])) # XXX
     self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in self.text_label_dict and '_'.join(k.split('_')[:-1]) in self.image_label_dict]
@@ -97,7 +97,7 @@ class SupervisedGroundingFeatureDataset(Dataset):
     self.origin_candidate_start_ends = [np.asarray(sorted(self.text_label_dict[doc_id])) for doc_id in self.doc_ids]
     self.candidate_start_ends = [np.asarray([[clean_start_end_dict[doc_id][start], clean_start_end_dict[doc_id][end]] for start, end in start_ends])
                                  for doc_id, start_ends in zip(self.doc_ids, self.origin_candidate_start_ends)]
-    self.image_labels = [[self.image_label_dict[doc_id][box_id] for box_id in sorted(self.image_label_dict[doc_id], key=lambda x:x[0])] for doc_id in self.doc_ids]
+    self.image_labels = [[image_token_dict[doc_id][box_id] for box_id in sorted(self.image_label_dict[doc_id], key=lambda x:x[0])] for doc_id in self.doc_ids]
 
   def tokenize(self, documents):
     '''
@@ -145,6 +145,7 @@ class SupervisedGroundingFeatureDataset(Dataset):
     cluster_dict = {SINGLETON: 0}
     text_label_dict = {} # collections.defaultdict(dict)
     image_label_dict = {} # collections.defaultdict(dict)
+    image_token_dict = {}
     for m in text_mentions:
       if len(m['tokens_ids']) == 0:
         text_label_dict[m['doc_id']][(-1, -1)] = 0
@@ -152,7 +153,7 @@ class SupervisedGroundingFeatureDataset(Dataset):
         start = min(m['tokens_ids'])
         end = max(m['tokens_ids'])
         if not m['cluster_id'] in cluster_dict:
-            cluster_dict[m['cluster_id']] = len(cluster_dict)
+          cluster_dict[m['cluster_id']] = len(cluster_dict)
         if not m['doc_id'] in text_label_dict:
           text_label_dict[m['doc_id']] = {}
         text_label_dict[m['doc_id']][(start, end)] = cluster_dict[m['cluster_id']]
@@ -160,6 +161,7 @@ class SupervisedGroundingFeatureDataset(Dataset):
     for i, m in enumerate(image_mentions):
         if not m['doc_id'] in image_label_dict:
           image_label_dict[m['doc_id']] = {}
+          image_token_dict[m['doc_id']] = {} 
 
         if isinstance(m['bbox'], str):
           bbox_id = int(m['bbox'].split('_')[-1])
@@ -168,9 +170,10 @@ class SupervisedGroundingFeatureDataset(Dataset):
           label_keys = [k[1] for k in sorted(image_label_dict[m['doc_id']], key=lambda x:x[0])]
           if not m['cluster_id'] in label_keys:
             bbox_id = len(image_label_dict[m['doc_id']])
-            image_label_dict[m['doc_id']][(bbox_id, m['cluster_id'])] = cluster_dict[m['cluster_id']]
+            image_label_dict[m['doc_id']][(bbox_id, m['cluster_id'])] = cluster_dict.get(m['cluster_id'], 0)
+            image_token_dict[m['doc_id']][(bbox_id, m['cluster_id'])] = m['tokens']
 
-    return text_label_dict, image_label_dict    
+    return text_label_dict, image_label_dict, image_token_dict 
   
   def load_text(self, idx):
     '''Load mention span embeddings for the document
@@ -203,7 +206,7 @@ class SupervisedGroundingFeatureDataset(Dataset):
                                                                   bert_candidate_starts,
                                                                   bert_candidate_ends)
     continuous_tokens_embeddings = torch.stack([fix_embedding_length(emb, self.max_mention_span)
-                                                for emb in continuous_tokens_embeddings], axis=0)
+                                                for emb in continuous_tokens_embeddings], dim=0)
     width = torch.LongTensor([min(w, self.max_mention_span) for w in width])
        
     # Pad/truncate the outputs to max num. of spans

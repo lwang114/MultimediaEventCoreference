@@ -16,6 +16,7 @@ from transformers import AdamW, get_linear_schedule_with_warmup
 from models import SpanEmbedder, SimplePairWiseClassifier
 from joint_supervised_grounded_coreference import JointSupervisedGroundedCoreferencer
 from corpus_supervised import SupervisedGroundingFeatureDataset
+from corpus_supervised_glove import SupervisedGroundingGloveFeatureDataset
 from evaluator import Evaluation, RetrievalEvaluation
 from utils import make_prediction_readable
 from conll import write_output_file
@@ -41,13 +42,62 @@ def get_optimizer(config, models):
     else:
         return optim.SGD(parameters, momentum=0.9, lr=config.learning_rate, weight_decay=config.weight_decay)
 
-def get_pairwise_labels(text_labels, image_labels, is_training, device):
-    first = [first_idx for first_idx in range(len(text_labels)) for second_idx in range(len(image_labels))]
-    second = [second_idx for first_idx in range(len(text_labels)) for second_idx in range(len(image_labels))]
+def get_pairwise_labels(text_labels_batch, image_labels_batch, is_training, device):
+    B = text_labels_batch.size(0)
+    first_batch = []
+    second_batch = []
+    pairwise_labels_batch = []
+    for idx in range(B):
+      image_labels = image_labels_batch[idx]
+      text_labels = text_labels_batch[idx]
+      first = [first_idx for first_idx in range(len(text_labels)) for second_idx in range(len(image_labels))]
+      second = [second_idx for first_idx in range(len(text_labels)) for second_idx in range(len(image_labels))]
+      first = torch.tensor(first)
+      second = torch.tensor(second)
+      pairwise_labels = (text_labels[first] != 0) & (image_labels[second] != 0) & \
+                        (text_labels[first] == image_labels[second])
+
+      if is_training:
+        positives = (pairwise_labels == 1).nonzero().squeeze()
+        positive_ratio = len(positives) / len(first)
+        negatives = (pairwise_labels != 1).nonzero().squeeze()
+        rands = torch.rand(len(negatives))
+        rands = (rands < positive_ratio * 20).to(torch.long)
+        sampled_negatives = negatives[rands.nonzero().squeeze()]
+        new_first = torch.cat((first[positives], first[sampled_negatives]))
+        new_second = torch.cat((second[positives], second[sampled_negatives]))
+        new_labels = torch.cat((pairwise_labels[positives], pairwise_labels[sampled_negatives]))
+        first, second, pairwise_labels = new_first, new_second, new_labels
+
+      pairwise_labels = pairwise_labels.to(torch.long).to(device)
+      
+
+      if config['loss'] == 'hinge':
+        pairwise_labels = torch.where(pairwise_labels == 1, pairwise_labels, torch.tensor(-1, device=device))
+      else:
+        pairwise_labels = torch.where(pairwise_labels == 1, pairwise_labels, torch.tensor(0, device=device))
+      torch.cuda.empty_cache()
+      first_batch.append(first)
+      second_batch.append(second)
+      pairwise_labels_batch.append(pairwise_labels)
+
+    first_batch = torch.stack(first_batch, dim=0)
+    second_batch = torch.stack(second_batch, dim=0)
+    pairwise_labels_batch = torch.stack(pairwise_labels_batch, dim=0)
+    return first_batch, second_batch, pairwise_labels_batch
+
+def get_pairwise_text_labels(labels_batch, is_training, device):
+  B = labels_batch.size(0)
+  first_batch = []
+  second_batch = []
+  pairwise_labels_batch = []
+  for idx in range(B):
+    labels = labels_batch[idx]
+    first, second = zip(*list(combinations(range(len(labels)), 2))) 
     first = torch.tensor(first)
     second = torch.tensor(second)
-    pairwise_labels = (text_labels[first] != 0) & (image_labels[second] != 0) & \
-                      (text_labels[first] == image_labels[second])
+    pairwise_labels = (labels[first] != 0) & (labels[second] != 0) & \
+                      (labels[first] == labels[second])
 
     if is_training:
         positives = (pairwise_labels == 1).nonzero().squeeze()
@@ -61,7 +111,6 @@ def get_pairwise_labels(text_labels, image_labels, is_training, device):
         new_labels = torch.cat((pairwise_labels[positives], pairwise_labels[sampled_negatives]))
         first, second, pairwise_labels = new_first, new_second, new_labels
 
-
     pairwise_labels = pairwise_labels.to(torch.long).to(device)
 
     if config['loss'] == 'hinge':
@@ -69,39 +118,14 @@ def get_pairwise_labels(text_labels, image_labels, is_training, device):
     else:
         pairwise_labels = torch.where(pairwise_labels == 1, pairwise_labels, torch.tensor(0, device=device))
     torch.cuda.empty_cache()
+    first_batch.append(first)
+    second_batch.append(second)
+    pairwise_labels_batch.append(pairwise_labels)
 
-
-    return first, second, pairwise_labels    
-
-def get_pairwise_text_labels(labels, is_training, device):
-  first, second = zip(*list(combinations(range(len(labels)), 2))) 
-  first = torch.tensor(first)
-  second = torch.tensor(second)
-  pairwise_labels = (labels[first] != 0) & (labels[second] != 0) & \
-                    (labels[first] == labels[second])
-
-  if is_training:
-      positives = (pairwise_labels == 1).nonzero().squeeze()
-      positive_ratio = len(positives) / len(first)
-      negatives = (pairwise_labels != 1).nonzero().squeeze()
-      rands = torch.rand(len(negatives))
-      rands = (rands < positive_ratio * 20).to(torch.long)
-      sampled_negatives = negatives[rands.nonzero().squeeze()]
-      new_first = torch.cat((first[positives], first[sampled_negatives]))
-      new_second = torch.cat((second[positives], second[sampled_negatives]))
-      new_labels = torch.cat((pairwise_labels[positives], pairwise_labels[sampled_negatives]))
-      first, second, pairwise_labels = new_first, new_second, new_labels
-
-
-  pairwise_labels = pairwise_labels.to(torch.long).to(device)
-
-  if config['loss'] == 'hinge':
-      pairwise_labels = torch.where(pairwise_labels == 1, pairwise_labels, torch.tensor(-1, device=device))
-  else:
-      pairwise_labels = torch.where(pairwise_labels == 1, pairwise_labels, torch.tensor(0, device=device))
-  torch.cuda.empty_cache()
-
-  return first, second, pairwise_labels    
+  first_batch = torch.stack(first_batch, dim=0)
+  second_batch = torch.stack(second_batch, dim=0)
+  pairwise_labels_batch = torch.stack(pairwise_labels_batch, dim=0)
+  return first_batch, second_batch, pairwise_labels_batch
 
 
 def train(text_model, image_model, coref_model, train_loader, test_loader, args):
@@ -158,8 +182,8 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
       continuous_embeddings = continuous_embeddings.to(device)
       width = width.to(device)
       videos = videos.to(device)
-      text_labels = text_labels.to(device).flatten()
-      img_labels = img_labels.to(device).flatten()
+      text_labels = text_labels.to(device)
+      img_labels = img_labels.to(device)
       span_mask = span_mask.to(device)
       span_num = span_mask.sum(-1).long()
       video_mask = video_mask.to(device)
@@ -175,9 +199,10 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
       if first_grounding_idx is None or first_text_idx is None:
         continue
       pairwise_grounding_labels = pairwise_grounding_labels.to(torch.float)
-      bce_grounding_loss = criterion(grounding_scores.flatten(), pairwise_grounding_labels)
-      bce_text_loss = criterion(text_scores.flatten(), pairwise_text_labels)
-      loss = bce_grounding_loss + bce_text_loss # + mml_loss 
+      pairwise_text_labels = pairwise_text_labels.to(torch.float)
+      bce_grounding_loss = criterion(grounding_scores.view(B, -1), pairwise_grounding_labels)
+      bce_text_loss = criterion(text_scores, pairwise_text_labels)
+      loss = bce_grounding_loss + bce_text_loss + mml_loss 
       loss.backward()
       optimizer.step()
 
@@ -233,16 +258,8 @@ def test(text_model, image_model, coref_model, test_loader, args):
         start_end_embeddings, continuous_embeddings,\
         width, videos, text_labels,\
         img_labels, span_mask, video_mask = batch
-        start_end_embeddings = start_end_embeddings.to(device)
-        continuous_embeddings = continuous_embeddings.to(device)
-        span_mask = span_mask.to(device)
         span_num = span_mask.sum(-1).long()
-        width = width.to(device)
-        videos = videos.to(device)
-        video_mask = video_mask.to(device)
         region_num = video_mask.sum(-1).long()
-        text_labels = text_labels.to(device)
-        img_labels = img_labels.to(device)
 
         # Extract span and video embeddings
         text_output = text_model(start_end_embeddings, continuous_embeddings, width)
@@ -255,19 +272,17 @@ def test(text_model, image_model, coref_model, test_loader, args):
                                                          video_output[idx, :region_num[idx]].unsqueeze(0), 
                                                          torch.ones((1, span_num[idx])), 
                                                          torch.ones((1, region_num[idx])))
-          first_grounding_idx, second_grounding_idx, pairwise_grounding_labels = get_pairwise_labels(text_labels[idx, :span_num[idx]], 
-                                                                                                     img_labels[idx, :region_num[idx]], 
+          first_grounding_idx, second_grounding_idx, pairwise_grounding_labels = get_pairwise_labels(text_labels[idx, :span_num[idx]].unsqueeze(0), 
+                                                                                                     img_labels[idx, :region_num[idx]].unsqueeze(0), 
                                                                                                      is_training=False, device=device)
-          first_text_idx, second_text_idx, pairwise_text_labels = get_pairwise_text_labels(text_labels[idx, :span_num[idx]], 
-                                                                                           is_training=False, device=device) # TODO
-          if first_grounding_idx is None or first_text_idx is None:
-            continue
+          first_text_idx, second_text_idx, pairwise_text_labels = get_pairwise_text_labels(text_labels[idx, :span_num[idx]].unsqueeze(0), 
+                                                                                           is_training=False, device=device)
           # TODO clusters, scores = coref_model.module.predict_cluster(text_output[idx], video_output[idx],\
           #                                                      first_idx, second_idx)
           all_text_scores.append(text_scores.flatten())
-          all_text_labels.append(pairwise_text_labels.to(torch.int))
+          all_text_labels.append(pairwise_text_labels.flatten().to(torch.int))
           all_grounding_scores.append(grounding_scores.flatten())             
-          all_grounding_labels.append(pairwise_grounding_labels.to(torch.int)) 
+          all_grounding_labels.append(pairwise_grounding_labels.flatten().to(torch.int)) 
           
           global_idx = i * test_loader.batch_size + idx
           doc_id = test_loader.dataset.doc_ids[global_idx] 
@@ -316,7 +331,7 @@ def test(text_model, image_model, coref_model, test_loader, args):
       logger.info('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
                                                                       eval.get_precision(), eval.get_f1()))
 
-      strict_text_preds = (all_text_scores > 0).to(torch.int) # TODO
+      strict_text_preds = (all_text_scores > 0).to(torch.int)
       eval = Evaluation(strict_text_preds, all_text_labels.to(device))
       print('Number of predictions: {}/{}'.format(strict_text_preds.sum(), len(strict_text_preds)))
       print('Number of positive pairs: {}/{}'.format(len((all_text_labels == 1).nonzero()),
@@ -355,28 +370,24 @@ def test_retrieve(text_model, image_model, coref_model, test_loader, args):
       span_mask = span_mask.cpu().detach()
       video_mask = video_mask.cpu().detach()
 
-      span_embeddings.append(text_output)
-      video_embeddings.append(video_output)
-      span_masks.append(span_mask)
-      video_masks.append(video_mask)
+      span_embeddings.extend(torch.split(text_output, 1))
+      video_embeddings.extend(torch.split(video_output, 1))
+      span_masks.extend(torch.split(span_mask, 1))
+      video_masks.extend(torch.split(video_mask, 1))
 
-  span_embeddings = torch.cat(span_embeddings)
-  video_embeddings = torch.cat(video_embeddings)
-  span_masks = torch.cat(span_masks)
-  video_masks = torch.cat(video_masks) 
-  I2S_idxs, S2I_idxs = coref_model.module.retrieve(span_embeddings, video_embeddings, span_masks, video_masks)
-  I2S_eval = RetrievalEvaluation(I2S_idxs)
-  S2I_eval = RetrievalEvaluation(S2I_idxs)
-  I2S_r1 = I2S_eval.get_recall_at_k(1) 
-  I2S_r5 = I2S_eval.get_recall_at_k(5)
-  I2S_r10 = I2S_eval.get_recall_at_k(10)
-  S2I_r1 = S2I_eval.get_recall_at_k(1) 
-  S2I_r5 = S2I_eval.get_recall_at_k(5)
-  S2I_r10 = S2I_eval.get_recall_at_k(10)
+    I2S_idxs, S2I_idxs = coref_model.module.retrieve(span_embeddings, video_embeddings, span_masks, video_masks)
+    I2S_eval = RetrievalEvaluation(I2S_idxs)
+    S2I_eval = RetrievalEvaluation(S2I_idxs)
+    I2S_r1 = I2S_eval.get_recall_at_k(1) 
+    I2S_r5 = I2S_eval.get_recall_at_k(5)
+    I2S_r10 = I2S_eval.get_recall_at_k(10)
+    S2I_r1 = S2I_eval.get_recall_at_k(1) 
+    S2I_r5 = S2I_eval.get_recall_at_k(5)
+    S2I_r10 = S2I_eval.get_recall_at_k(10)
 
-  print('Number of article-video pairs: {}'.format(I2S_idxs.size(0)))
-  print('I2S recall@1={}\tI2S recall@5={}\tI2S recall@10={}'.format(I2S_r1, I2S_r5, I2S_r10)) 
-  print('S2I recall@1={}\tS2I recall@5={}\tS2I recall@10={}'.format(S2I_r1, S2I_r5, S2I_r10)) 
+    print('Number of article-video pairs: {}'.format(I2S_idxs.size(0)))
+    print('I2S recall@1={}\tI2S recall@5={}\tI2S recall@10={}'.format(I2S_r1, I2S_r5, I2S_r10)) 
+    print('S2I recall@1={}\tS2I recall@5={}\tS2I recall@10={}'.format(S2I_r1, S2I_r5, S2I_r10)) 
 
 if __name__ == '__main__':
   # Set up argument parser
@@ -412,10 +423,18 @@ if __name__ == '__main__':
       train_set = SupervisedGroundingGloveFeatureDataset(config['token_file'], config['mention_file'], config['bbox_file'], config, split='train')
       test_set = SupervisedGroundingGloveFeatureDataset(config['token_file'], config['mention_file'], config['bbox_file'], config, split='test')
   else:
-      train_set = SupervisedGroundingFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), os.path.join(config['data_folder'], 'train_bboxes.json'), config, split='train') # XXX
-      test_set = SupervisedGroundingFeatureDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), os.path.join(config['data_folder'], 'test_bboxes.json'), config, split='test') # XXX
-  train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
-  test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
+      train_set = SupervisedGroundingGloveFeatureDataset(os.path.join(config['data_folder'], 'train.json'), 
+                                                    os.path.join(config['data_folder'], 'train_mixed.json'), 
+                                                    os.path.join(config['data_folder'], 'train_bboxes.json'), 
+                                                    config, split='train')  
+      # XXX SupervisedGroundingFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), os.path.join(config['data_folder'], 'train_bboxes.json'), config, split='train')
+      test_set = SupervisedGroundingGloveFeatureDataset(os.path.join(config['data_folder'], 'test.json'), 
+                                                        os.path.join(config['data_folder'], 'test_mixed.json'), 
+                                                        os.path.join(config['data_folder'], 'test_bboxes.json'), 
+                                                        config, split='test') 
+      # XXX SupervisedGroundingFeatureDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), os.path.join(config['data_folder'], 'test_bboxes.json'), config, split='test') 
+  train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0) # XXX pin_memory=True)
+  test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0) # XXX pin_memory=True)
 
   # Initialize models
   text_model = SpanEmbedder(config, device).to(device) # BiLSTM(embedding_dim, embedding_dim)
