@@ -8,16 +8,20 @@ import json
 import cv2
 import os
 import PIL.Image as Image
-from supervised_grounded_coreference import BiLSTM
 
 SINGLETON = '###SINGLETON###'
-def get_all_token_embedding(embedding, start, end):
-    span_embeddings, length = [], []
-    for s, e in zip(start, end):
-        indices = torch.tensor(range(s, e + 1)).to(embedding.device)
-        span_embeddings.append(embedding[indices])
-        length.append(len(indices))
-    return span_embeddings, length
+def get_all_token_mapping(start, end, max_token_num):
+    span_num = len(start)
+    start_mappings = torch.zeros((span_num, max_token_num), dtype=torch.float) 
+    end_mappings = torch.zeros((span_num, max_token_num), dtype=torch.float) 
+    span_mappings = torch.zeros((span_num, max_token_num), dtype=torch.float)  
+    length = []
+    for span_idx, (s, e) in enumerate(zip(start, end)):
+        start_mappings[span_idx, s] = 1.
+        end_mappings[span_idx, e] = 1.
+        span_mappings[span_idx, s:e+1] = 1. / float(e - s + 1.)
+        length.append(e-s+1)
+    return start_mappings, end_mappings, span_mappings, length
 
 def fix_embedding_length(emb, L):
   size = emb.size()[1:]
@@ -47,7 +51,6 @@ class SupervisedGroundingGloveFeatureDataset(Dataset):
          'singleton': boolean, whether the mention is a singleton}
     '''
     super(SupervisedGroundingGloveFeatureDataset, self).__init__()
-    self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     self.max_token_num = config.get('max_token_num', 512)
     self.max_span_num = config.get('max_span_num', 80)
     self.max_frame_num = config.get('max_frame_num', 20)
@@ -66,6 +69,7 @@ class SupervisedGroundingGloveFeatureDataset(Dataset):
     if 'image_feat_file' in config:
         self.imgs_embeddings = np.load(config.image_feat_file)
     else:
+        print('{}_{}.npz'.format(doc_json.split('.')[0], self.img_feat_type))
         self.imgs_embeddings = np.load('{}_{}.npz'.format(doc_json.split('.')[0], self.img_feat_type))
        
     # Extract word embeddings
@@ -94,9 +98,6 @@ class SupervisedGroundingGloveFeatureDataset(Dataset):
     self.candidate_start_ends = [np.asarray(sorted(self.text_label_dict[doc_id])) for doc_id in self.doc_ids]
     self.origin_candidate_start_ends = self.candidate_start_ends
     self.image_labels = [[image_token_dict[doc_id][box_id] for box_id in sorted(self.image_label_dict[doc_id], key=lambda x:x[0])] for doc_id in self.doc_ids]
-
-    # Initialize BiLSTM encoder
-    self.encoder = BiLSTM(config['glove_dimension'], config['hidden_layer']).to(self.device) 
 
   def create_dict_labels(self, text_mentions, image_mentions, clean_start_end_dict=None):
     '''
@@ -142,38 +143,37 @@ class SupervisedGroundingGloveFeatureDataset(Dataset):
     origin_candidate_start_ends = self.origin_candidate_start_ends[idx]
     span_num = origin_candidate_start_ends.shape[0]
     candidate_start_ends = torch.LongTensor(origin_candidate_start_ends)
-    candidate_start_ends = fix_embedding_length(candidate_start_ends, self.max_span_num)
-    candidate_start_ends = candidate_start_ends.to(self.device)
+    candidate_start_ends = candidate_start_ends
 
     # Extract the current doc embedding
     doc_len = len(self.origin_tokens[idx])
     
-    doc_embeddings = torch.FloatTensor(self.docs_embeddings[self.feat_keys[idx]]).to(self.device)
+    doc_embeddings = torch.FloatTensor(self.docs_embeddings[self.feat_keys[idx]])
     assert doc_len == doc_embeddings.shape[0]
-    doc_embeddings = self.encoder(doc_embeddings).squeeze(0)
-    start_end_embeddings = torch.cat((doc_embeddings[candidate_start_ends[:, 0]],
-                                      doc_embeddings[candidate_start_ends[:, 1]]), dim=1)
-    continuous_tokens_embeddings, width = get_all_token_embedding(doc_embeddings, 
-                                       candidate_start_ends[:, 0],
-                                       candidate_start_ends[:, 1])
-    continuous_tokens_embeddings = torch.stack([fix_embedding_length(emb, self.max_mention_span)
-                                                for emb in continuous_tokens_embeddings], dim=0)
+    doc_embeddings = fix_embedding_length(doc_embeddings, self.max_token_num)
 
-    width = torch.LongTensor([min(w, self.max_mention_span) for w in width]).to(self.device)
+    start_mappings, end_mappings, continuous_mappings, width = get_all_token_mapping( 
+                                       candidate_start_ends[:, 0],
+                                       candidate_start_ends[:, 1],
+                                       self.max_token_num)
+
+    width = torch.LongTensor([min(w, self.max_mention_span) for w in width])
 
     # Pad/truncate the outputs to max num. of spans
-    start_end_embeddings = fix_embedding_length(start_end_embeddings, self.max_span_num)
-    continuous_tokens_embeddings = fix_embedding_length(continuous_tokens_embeddings, self.max_span_num)
+    start_mappings = fix_embedding_length(start_mappings, self.max_span_num)
+    end_mappings = fix_embedding_length(end_mappings, self.max_span_num)
+    continuous_mappings = fix_embedding_length(continuous_mappings, self.max_span_num)
     width = fix_embedding_length(width.unsqueeze(1), self.max_span_num).squeeze(1)
     
     # Extract coreference cluster labels
     labels = [int(self.text_label_dict[self.doc_ids[idx]][(start, end)]) for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
-    labels = torch.LongTensor(labels).to(self.device)
+    labels = torch.LongTensor(labels)
     labels = fix_embedding_length(labels.unsqueeze(1), self.max_span_num).squeeze(1)
-    mask = torch.FloatTensor([1. if i < span_num else 0 for i in range(self.max_span_num)]).to(self.device)
-    return start_end_embeddings, continuous_tokens_embeddings, width, labels, mask
+    mask = torch.FloatTensor([1. if i < span_num else 0 for i in range(self.max_span_num)])
+    # return start_end_embeddings, continuous_tokens_embeddings, width, labels, mask
+    return doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, labels, mask
 
-  def load_video(self, idx): # TODO
+  def load_video(self, idx):
     '''Load video
     :param filename: str, video filename
     :return video_frames: FloatTensor of size (batch size, max num. of regions, image embed dim)
@@ -181,21 +181,21 @@ class SupervisedGroundingGloveFeatureDataset(Dataset):
     '''    
     doc_id = self.doc_ids[idx]
     img_embeddings = self.imgs_embeddings[self.feat_keys[idx]]
-    img_embeddings = torch.FloatTensor(img_embeddings).to(self.device)
-    img_embeddings = img_embeddings.permute(1, 0, 2, 3).flatten(start_dim=1).t()
+    img_embeddings = torch.FloatTensor(img_embeddings)
+    img_embeddings = img_embeddings.squeeze(-1).squeeze(-1)
     img_embeddings = fix_embedding_length(img_embeddings, self.max_region_num)
 
     labels = [int(self.image_label_dict[doc_id][box_id]) for box_id in sorted(self.image_label_dict[doc_id], key=lambda x:int(x[0]))]
     region_num = len(labels)
-    labels = torch.LongTensor(labels).to(self.device).to(self.device)
+    labels = torch.LongTensor(labels)
     labels = fix_embedding_length(labels.unsqueeze(1), self.max_region_num).squeeze(1)
-    mask = torch.FloatTensor([1. if i < region_num else 0 for i in range(self.max_region_num)]).to(self.device)
+    mask = torch.FloatTensor([1. if i < region_num else 0 for i in range(self.max_region_num)])
     return img_embeddings, labels, mask
 
   def __getitem__(self, idx):
     img_embeddings, img_labels, video_mask = self.load_video(idx)
-    start_end_embeddings, continuous_embeddings, width, text_labels, span_mask = self.load_text(idx)
-    return start_end_embeddings, continuous_embeddings, width, img_embeddings, text_labels, img_labels, span_mask, video_mask
+    doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, text_labels, span_mask = self.load_text(idx)
+    return doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, img_embeddings, text_labels, img_labels, span_mask, video_mask
 
   def __len__(self):
     return len(self.doc_ids)
