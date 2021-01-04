@@ -29,7 +29,7 @@ class GroundedCoreferencer(nn.Module):
       att_weights_second = F.softmax(torch.transpose(att_weights, 1, 2), dim=-1) * torch.transpose(mask, 1, 2)
       att_second = torch.matmul(att_weights_second, first)
       score = score + F.mse_loss(second, att_second)   
-    return score, att_first
+    return score, att_first, att_weights
 
   def forward(self, span_embeddings, image_embeddings, span_mask, image_mask): # entity_mappings, trigger_mappings,
     '''
@@ -46,7 +46,7 @@ class GroundedCoreferencer(nn.Module):
   def calculate_loss(self, span_emb, image_emb, span_mask, image_mask):
     B = span_emb.size(0)
     # Compute visual grounding scores   
-    loss, _ = self.image_scorer(span_emb, image_emb, span_mask, image_mask)
+    loss, _, _ = self.image_scorer(span_emb, image_emb, span_mask, image_mask)
     return loss
     
   def predict(self, first_span_embeddings, first_image_embeddings, 
@@ -70,8 +70,8 @@ class GroundedCoreferencer(nn.Module):
     
     self.text_scorer.eval()
     with torch.no_grad():
-      _, first_span_image_emb = self.image_scorer(first_span_embeddings, first_image_embeddings, first_span_mask, first_image_mask)
-      _, second_span_image_emb = self.image_scorer(second_span_embeddings, second_image_embeddings, second_span_mask, second_image_mask)
+      _, first_span_image_emb, _ = self.image_scorer(first_span_embeddings, first_image_embeddings, first_span_mask, first_image_mask)
+      _, second_span_image_emb, _ = self.image_scorer(second_span_embeddings, second_image_embeddings, second_span_mask, second_image_mask)
     
     first_span_embeddings = first_span_embeddings.squeeze(0) 
     first_span_image_emb = first_span_image_emb.squeeze(0)
@@ -79,13 +79,6 @@ class GroundedCoreferencer(nn.Module):
     second_span_image_emb = second_span_image_emb.squeeze(0)
     
     scores = self.text_scorer(first_span_embeddings, second_span_embeddings)
-    # print('first span emb: {}'.format(first_span_embeddings[0][1024:2048])) # XXX
-    # print('first_span_image_emb: {}'.format(first_span_image_emb[:, 1024:2048])) # XXX
-    # first_span_emb = torch.cat([first_span_embeddings[:, :1024], first_span_embeddings[:, :1024], first_span_embeddings[:, :1024], first_span_embeddings[:, -20:]], dim=1) 
-    # self_scores = self.text_scorer(10*first_span_emb, 10*first_span_emb)
-    # print('self score: {}'.format(self_scores))
-    # self_scores2 = self.text_scorer(first_span_image_emb, first_span_image_emb)
-    # print('self score img: {}'.format(self_scores2))
     
     if not self.text_only_decode:
       scores = scores + self.text_scorer(first_span_image_emb, second_span_image_emb)
@@ -102,7 +95,7 @@ class GroundedCoreferencer(nn.Module):
     :return clusters: dict of list of int, mapping from cluster id to mention ids of its members 
     '''
     device = span_embeddings.device
-    thres = -0.5 # Make this a config parameter
+    thres = -0.76 # TODO Make this a config parameter
     span_num = max(second_idx) + 1
     span_mask = torch.ones(len(first_idx)).to(device)
     image_mask = torch.ones(image_embeddings.size(0)).to(device) 

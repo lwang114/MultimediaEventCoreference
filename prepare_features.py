@@ -142,7 +142,8 @@ def extract_bert_embeddings(config, split, out_prefix='bert_embedding'):
     bert_model = AutoModel.from_pretrained(config['bert_model']).to(device)
     data = create_corpus(config, bert_tokenizer, split)
     doc_json = os.path.join(config['data_folder'], split+'.json')
-    filtered_doc_ids = cleanup(json.load(codecs.open(doc_json, 'r', 'utf-8')), config)
+    filtered_doc_ids = json.load(codecs.open(doc_json, 'r', 'utf-8'))
+    # XXX cleanup(json.load(codecs.open(doc_json, 'r', 'utf-8')), config)
     
     list_of_doc_id_tokens = []    
     for topic_num in tqdm(range(len(data.topic_list))):  

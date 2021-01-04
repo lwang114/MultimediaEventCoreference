@@ -6,6 +6,7 @@ import os
 import collections
 from conll import write_output_file
 
+PUNCT = [',', '.', '\'', '\"', ':', ';', '?', '!', '<', '>', '~', '%', '$', '|', '/', '@', '#', '^', '*']
 def get_mention_doc(data_json, out_prefix, inclusive=False):
   '''
   :param data_json: str of filename of the meta info file storing a list of dicts with keys:
@@ -125,11 +126,12 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
     entity_mask = [0]*len(tokens)
     event_mask = [0]*len(tokens)
     # Create dict for [out_prefix]_entities.json
-    for m_id, mention in zip(entity_mention_ids, entity_mentions):
+    for m_idx, mention in enumerate(entity_mentions):
         for pos in range(mention['start'], mention['end']+end_inc):
           entity_mask[pos] = 1
         
         if 'coreference' in sen_dict:
+          m_id = entity_mention_ids[m_idx] 
           cluster_id = entity2coref[m_id]
         else:  
           cluster_id = '0'
@@ -146,7 +148,7 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
                          'singleton': False})
 
     # Create dict for [out_prefix]_events.json
-    for m_id, mention in zip(event_mention_ids, event_mentions): 
+    for m_idx, mention in enumerate(event_mentions): 
         try: # XXX
           start = mention['trigger']['start']
           end = mention['trigger']['end']
@@ -158,6 +160,7 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
           event_mask[pos] = 1
 
         if 'coreference' in sen_dict:
+          m_id = event_mention_ids[m_idx]
           cluster_id = event2coref[m_id]
         else:
           cluster_id = '0'
@@ -199,8 +202,7 @@ def save_gold_conll_files(doc_json, mention_json, dir_path):
       start = min(m['tokens_ids'])
       end = max(m['tokens_ids'])
       label_dict[m['doc_id']][(start, end)] = m['cluster_id']
-
-      
+  
   doc_ids = sorted(documents)
   for doc_id in doc_ids:
     document = documents[doc_id]
@@ -219,15 +221,78 @@ def save_gold_conll_files(doc_json, mention_json, dir_path):
     doc_name = doc_id
     write_output_file({doc_id:document}, non_singletons, [doc_id]*len(cur_label_dict), starts, ends, dir_path, doc_name)
 
+def extract_image_embeddings(data_dir, csv_dir, mapping_file, out_prefix, image_ids=None):
+  # Create a mapping from Youtube id to short description
+  mapping_dict = json.load(open(mapping_file))
+  id2desc = {v['id'].split('v=')[-1]:k for k, v in mapping_dict.items()}
+  doc_ids = sorted(id2desc)
+  is_csv_used = {fn:0 for fn in os.listdir(csv_dir)}
+
+  img_feats = {}
+  for idx, doc_id in enumerate(doc_ids): # XXX
+    print(idx, doc_id)
+    # Convert the .csv file to numpy array 
+    desc = id2desc[doc_id]
+    for punct in PUNCT:
+      desc = desc.replace(punct, '')
+    csv_file = os.path.join(csv_dir, desc+'.csv')
+    if not os.path.exists(csv_file):
+      print('File {} not found'.format(csv_file))
+      continue
+    is_csv_used[desc+'.csv'] = 1 
+
+    img_feat = []
+    skip_header = 1
+    for line in codecs.open(csv_file, 'r', 'utf-8'):
+      if skip_header:
+        skip_header = 0
+        continue
+      segments = line.strip().split(',') 
+      if len(segments) == 0:
+        print('Empty line')
+        break
+      img_feat.append([float(x) for x in segments[-400:]])
+    img_feat = np.asarray(img_feat)
+    img_feats['{}_{}'.format(doc_id, idx)] = img_feat
+
+  json.dump(is_csv_used, open('is_csv_used.json', 'w'), indent=4)
+  np.savez(out_prefix, **img_feats)
+
+def train_test_split(feat_file, test_id_file, mapping_file, out_prefix):
+  mapping_dict = json.load(open(mapping_file)) 
+  id2desc = {v['id'].split('v=')[-1]:k for k, v in mapping_dict.items()}
+  feats = np.load(feat_file)
+  feat_ids = sorted(feats, key=lambda x:int(x.split('_')[-1])) 
+  test_id_dict = json.load(open(test_id_file))
+  train_feats = {}
+  test_feats = {}
   
+  for k in feat_ids:
+    doc_id = '_'.join(k.split('_')[:-1])
+    if doc_id in test_id_dict:
+      test_feats[k] = feats[k] 
+    else:
+      train_feats[k] = feats[k]
+
+  np.savez('{}_train.npz'.format(out_prefix), **train_feats)
+  np.savez('{}_test.npz'.format(out_prefix), **test_feats)
+
 if __name__ == '__main__':
-  data_dir = 'data/video_m2e2'
+  data_dir = 'data/video_m2e2/mentions/'
+  mapping_file = 'm2e2/data/video_m2e2/video_m2e2.json'
+  test_desc_file = 'm2e2/data/video_m2e2/unannotatedVideos_textEventCount.json'
+  csv_dir = os.path.join(data_dir, 'mmaction_feat')
   if not os.path.isdir(data_dir):
     os.mkdir(data_dir)
     os.mkdir(os.path.join(data_dir, 'mentions'))
     os.mkdir(os.path.join(data_dir, 'gold'))
-  data_json = 'm2e2/data/video_m2e2/grounding_video_m2e2_test.json' # XXX
-  out_prefix = os.path.join(data_dir, 'mentions/test') # XXX
-  # get_mention_doc(data_json, out_prefix, inclusive=True) # XXX
-  save_gold_conll_files(out_prefix+'.json', out_prefix+'_mixed.json', os.path.join(data_dir, 'gold'))
-  
+  data_json = 'm2e2/data/video_m2e2/grounding_video_m2e2.json'
+  out_prefix = os.path.join(data_dir, 'train')
+  get_mention_doc(data_json, out_prefix, inclusive=False) 
+  # data_json = 'm2e2/data/video_m2e2/grounding_video_m2e2_test.json'
+  # out_prefix = os.path.join(data_dir, 'test')
+  # get_mention_doc(data_json, out_prefix, inclusive=True)
+  # save_gold_conll_files(out_prefix+'.json', out_prefix+'_mixed.json', os.path.join(data_dir, 'gold')) 
+  out_prefix = '{}/{}'.format(data_dir, csv_dir.split('/')[-1])
+  # extract_image_embeddings(data_dir, csv_dir, mapping_file, out_prefix)
+  # train_test_split('{}/{}.npz'.format(data_dir, csv_dir.split('/')[-1]), os.path.join(data_dir, 'test.json'), mapping_file, out_prefix)

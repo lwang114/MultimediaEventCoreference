@@ -333,7 +333,12 @@ if __name__ == '__main__':
   embedding_dim = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2
   if config.with_mention_width:
     embedding_dim += config.embedding_dimension
-  image_model = nn.Linear(2048, embedding_dim)
+  if config.img_feat_type == 'mmaction_feat':
+    img_feat_dim = 400
+  else:
+    img_feat_dim = 2048
+
+  image_model = nn.Linear(img_feat_dim, embedding_dim)
   if config.loss == 'mml':
     coref_model = MMLGroundedCoreferencer(config).to(device)
   else:
@@ -342,15 +347,8 @@ if __name__ == '__main__':
 
   if config['training_method'] in ('pipeline', 'continue'):
       text_model.load_state_dict(torch.load(config['span_repr_path'], map_location=device))
-      image_model.load_state_dict(torch.load(config['image_repr_path'], map_location=device))
+      # image_model.load_state_dict(torch.load(config['image_repr_path'], map_location=device))
       coref_model.text_scorer.load_state_dict(torch.load(config['pairwise_scorer_path'], map_location=device))
   
   # Training
   train(text_model, image_model, coref_model, train_loader, test_loader, args)
-
-  # Convert the predictions to readable format
-  # pred_json = '{}_prediction.json'.format(args.config.split('/')[-1].split('.')[0])
-  # make_prediction_readable(os.path.join(args.exp_dir, pred_json),
-  #                          config['image_dir'],
-  #                          os.path.join(config['data_folder'], 'test_mixed.json'),
-  #                          os.path.join(args.exp_dir, pred_json.split('.')[0]+'_readable.txt'))

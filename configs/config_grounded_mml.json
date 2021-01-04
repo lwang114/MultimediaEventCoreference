@@ -1,5 +1,5 @@
 {
-  "gpu_num" : [3],
+  "gpu_num" : [0],
   "bert_model": "roberta-large",
   "bert_hidden_size": 1024,
   "hidden_layer": 1024,
@@ -16,25 +16,25 @@
   "training_method": "continue",
   "subtopic": false,
   "use_predicted_topics": false,
+  "text_only_decode": false, 
 
   "random_seed": 0,
-  "epochs": 100,
+  "epochs": 20,
   "batch_size": 16,
-  "learning_rate": 1e-5,
+  "learning_rate": 1e-4,
   "weight_decay": 0,
   "loss": "mml",
-  "optimizer": "sgd",
+  "optimizer": "adam",
   "adam_epsilon": 1e-8,
-  "segment_window": 256,
+  "segment_window": 512,
   "neg_samp": true,
 
-  "task": "retrieval",
   "log_path": "logs/grounded/",
+  "task": "both",
   "data_folder": "data/video_m2e2/mentions",
   "image_dir": "m2e2/data/video_m2e2/videos",
-  "test_id_file": "data/video_m2e2/test_ids.txt",
+  "img_feat_type": "mmaction_feat",
   "span_repr_path": "coref/models/topic_level_predicted_mentions/mixed_0.35/span_repr_9",
-  "image_repr_path": "models/grounded_coref/image_model.9.pth",
   "pairwise_scorer_path": "coref/models/topic_level_predicted_mentions/mixed_0.35/pairwise_scorer_9",
-  "model_path": "models/grounded_coref_mml"
+  "model_path": "models/grounded_coref_mml_mmaction_feat"
 }
