@@ -2,7 +2,7 @@
   "gpu_num" : [0],
   "bert_model": "roberta-large",
   "bert_hidden_size": 1024,
-  "hidden_layer": 1024,
+  "hidden_layer": 200,
   "dropout": 0.3,
   "with_mention_width": true,
   "with_head_attention": true,

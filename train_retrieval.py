@@ -14,7 +14,8 @@ import numpy as np
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
 from models import SpanEmbedder, SimplePairWiseClassifier
-from mml_grounded_coreference import MMLGroundedCoreferencer, NoOp, BiLSTM
+from mml_dotproduct_grounded_coreference import MMLDotProductGroundedCoreferencer, NoOp, BiLSTM
+from corpus import GroundingFeatureDataset
 from corpus_glove import GroundingGloveFeatureDataset
 from evaluator import Evaluation, RetrievalEvaluation
 
@@ -223,21 +224,33 @@ if __name__ == '__main__':
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
 
   # Initialize dataloaders
-  train_set = GroundingGloveFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config, split='train')
-  test_set = GroundingGloveFeatureDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), config, split='test')
+  if not config.get('glove_dimension', None):
+    train_set = GroundingFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config, split='train')
+    test_set = GroundingFeatureDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), config, split='test')
+  else:
+    train_set = GroundingGloveFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config, split='train')
+    test_set = GroundingGloveFeatureDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), config, split='test')
   train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
   test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
 
   # Initialize models
-  embedding_dim = config.glove_dimension
-  text_model = BiLSTM(embedding_dim, embedding_dim)
-  image_model = BiLSTM(2048, embedding_dim)
-  coref_model = MMLGroundedCoreferencer(config).to(device)
+  if not config.get('glove_dimension', None):
+    input_dim = config.bert_hidden_size
+  else:
+    input_dim = config['glove_dimension']
+  embedding_dim = config.hidden_layer
+
+  text_model = BiLSTM(input_dim, embedding_dim)
+  if img_feat_type == 'mmaction_feat':
+    image_model = nn.Linear(400, embedding_dim*2) 
+  else:
+    image_model = BiLSTM(2048, embedding_dim)
+  coref_model = MMLDotProductGroundedCoreferencer(config).to(device)
 
   if config['training_method'] in ('pipeline', 'continue'):
       text_model.load_state_dict(torch.load(config['span_repr_path'], map_location=device))
       image_model.load_state_dict(torch.load(config['image_repr_path'], map_location=device))
-      coref_model.text_scorer.load_state_dict(torch.load(config['pairwise_scorer_path'], map_location=device))
+  coref_model.text_scorer.load_state_dict(torch.load(config['pairwise_scorer_path'], map_location=device))
   
   # Training
   train(text_model, image_model, coref_model, train_loader, test_loader, args)
