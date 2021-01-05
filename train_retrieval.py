@@ -15,6 +15,7 @@ from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
 from models import SpanEmbedder, SimplePairWiseClassifier
 from mml_dotproduct_grounded_coreference import MMLDotProductGroundedCoreferencer, NoOp, BiLSTM
+from adaptive_mml_dotproduct_grounded_coreference import AdaptiveMMLDotProductGroundedCoreferencer
 from corpus import GroundingFeatureDataset
 from corpus_glove import GroundingGloveFeatureDataset
 from evaluator import Evaluation, RetrievalEvaluation
@@ -33,9 +34,6 @@ def get_optimizer(config, models):
     parameters = []
     for model in models:
         parameters += [p for p in model.parameters() if p.requires_grad]
-
-    for p in models[-1].parameters(): # XXX
-      print(p.size(), p.requires_grad)
 
     if config.optimizer == "adam":
         return optim.Adam(parameters, lr=config.learning_rate, weight_decay=config.weight_decay, eps=config.adam_epsilon)
@@ -108,7 +106,15 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
 
   # Set up the optimizer  
   optimizer = get_optimizer(config, [text_model, image_model, coref_model])
-   
+  for p in coref_model.parameters(): # XXX
+    print('coref model: ', p.size(), p.device, p.requires_grad) 
+
+  for p in coref_model.module.span_repr.parameters():
+    print('span embedder: ', p.size(), p.device, p.requires_grad)
+
+  for p in coref_model.module.text_scorer.parameters():
+    print('text scorer: ', p.size(), p.device, p.requires_grad)
+
   # Start training
   total_loss = 0.
   total = 0.
@@ -122,22 +128,33 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
     for i, batch in enumerate(train_loader):
       doc_embeddings, start_mappings, end_mappings,\
       continuous_mappings, width, video_embeddings,\
-      labels, doc_mask, video_mask = batch  # TODO 
+      labels, text_mask, span_mask, video_mask = batch 
 
       B = doc_embeddings.size(0)
       doc_embeddings = doc_embeddings.to(device)
+      start_mappings = start_mappings.to(device)
+      end_mappings = end_mappings.to(device)
+      continuous_mappings = continuous_mappings.to(device)
+      width = width.to(device)
       video_embeddings = video_embeddings.to(device)
-      doc_mask = doc_mask.to(device)
+      labels = labels.to(device)
+      text_mask = text_mask.to(device)
+      span_mask = span_mask.to(device)
       video_mask = video_mask.to(device)
+
       optimizer.zero_grad()
 
       # text_output = text_model(start_end_embeddings, continuous_embeddings, width)
       text_output = text_model(doc_embeddings)
       video_output = image_model(video_embeddings)
       if config.loss == 'adaptive_mml':
-        loss = coref_model(text_output, video_output, doc_mask, video_mask, start_mappings, end_mappings, continuous_mappings, width).mean()
+        start_embeddings = torch.matmul(start_mappings, doc_embeddings)
+        end_embeddings = torch.matmul(end_mappings, doc_embeddings)
+        start_end_embeddings = torch.cat([start_embeddings, end_embeddings], dim=-1)
+        continuous_embeddings = torch.matmul(continuous_mappings, doc_embeddings.unsqueeze(1))
+        loss = coref_model(text_output, video_output, text_mask, video_mask, start_end_embeddings, continuous_embeddings, width, span_mask).mean()
       else:
-        loss = coref_model(text_output, video_output, doc_mask, video_mask).mean()
+        loss = coref_model(text_output, video_output, text_mask, video_mask).mean()
       loss.backward()
       optimizer.step()
 
@@ -168,7 +185,7 @@ def test_retrieve(text_model, image_model, coref_model, test_loader, args):
   config = pyhocon.ConfigFactory.parse_file(args.config)
   doc_embeddings = []
   video_embeddings = []
-  doc_masks = []
+  text_masks = []
   video_masks = []
   text_model.eval()
   image_model.eval()
@@ -176,24 +193,26 @@ def test_retrieve(text_model, image_model, coref_model, test_loader, args):
   with torch.no_grad():
     pred_dicts = []
     for i, batch in enumerate(test_loader):
-      doc_embedding, video_embedding, doc_mask, video_mask = batch
+      doc_embedding, start_mapping, end_mapping,\
+      continuous_mapping, width, video_embedding,\
+      label, text_mask, span_mask, video_mask = batch
       text_output = text_model(doc_embedding)
       video_output = image_model(video_embedding)
 
       text_output = text_output.cpu().detach()
       video_output = video_output.cpu().detach()
-      doc_mask = doc_mask.cpu().detach()
+      text_mask = text_mask.cpu().detach()
       video_mask = video_mask.cpu().detach()
 
       doc_embeddings.append(text_output)
       video_embeddings.append(video_output)
-      doc_masks.append(doc_mask)
+      text_masks.append(text_mask)
       video_masks.append(video_mask)
   doc_embeddings = torch.cat(doc_embeddings)
   video_embeddings = torch.cat(video_embeddings)
-  doc_masks = torch.cat(doc_masks)
+  text_masks = torch.cat(text_masks)
   video_masks = torch.cat(video_masks) 
-  I2S_idxs, S2I_idxs = coref_model.module.retrieve(doc_embeddings, video_embeddings, doc_masks, video_masks)
+  I2S_idxs, S2I_idxs = coref_model.module.retrieve(doc_embeddings, video_embeddings, text_masks, video_masks)
   I2S_eval = RetrievalEvaluation(I2S_idxs)
   S2I_eval = RetrievalEvaluation(S2I_idxs)
   I2S_r1 = I2S_eval.get_recall_at_k(1) 
@@ -249,18 +268,20 @@ if __name__ == '__main__':
   embedding_dim = config.hidden_layer
 
   text_model = BiLSTM(input_dim, embedding_dim)
-  if img_feat_type == 'mmaction_feat':
+  if config['img_feat_type'] == 'mmaction_feat':
     image_model = nn.Linear(400, embedding_dim*2) 
   else:
     image_model = BiLSTM(2048, embedding_dim)
-  coref_model = MMLDotProductGroundedCoreferencer(config).to(device)
 
   if config['training_method'] in ('pipeline', 'continue'):
-      text_model.load_state_dict(torch.load(config['span_repr_path'], map_location=device))
-      image_model.load_state_dict(torch.load(config['image_repr_path'], map_location=device))
+      if config['loss'] != 'adaptive_mml':
+        coref_model = MMLDotProductGroundedCoreferencer(config).to(device)
+        text_model.load_state_dict(torch.load(config['span_repr_path'], map_location=device))
+      else:
+        coref_model = AdaptiveMMLDotProductGroundedCoreferencer(config).to(device)
+        coref_model.span_repr.load_state_dict(torch.load(config['span_repr_path']))
   coref_model.text_scorer.load_state_dict(torch.load(config['pairwise_scorer_path'], map_location=device))
-  if config['loss'] == 'adaptive_mml':
-    coref_model.span_repr.load_state_dict(torch.load(config['span_repr_path']))
+
 
   # Training
   train(text_model, image_model, coref_model, train_loader, test_loader, args)

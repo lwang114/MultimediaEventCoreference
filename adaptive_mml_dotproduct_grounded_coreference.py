@@ -65,11 +65,11 @@ class Davenet(nn.Module):
     return x
  
     
-class MMLDotProductGroundedCoreferencer(nn.Module):
+class AdaptiveMMLDotProductGroundedCoreferencer(nn.Module):
   def __init__(self, config):
-    super(MMLDotProductGroundedCoreferencer, self).__init__()
-    self.span_repr = SpanEmbedder(config) 
+    super(AdaptiveMMLDotProductGroundedCoreferencer, self).__init__()
     self.text_scorer = SimplePairWiseClassifier(config) 
+    self.span_repr = SpanEmbedder(config) 
     self.grounding_scorer = self.score_grounding
     self.text_only_decode = config.get('text_only_decode', False)
 
@@ -96,9 +96,10 @@ class MMLDotProductGroundedCoreferencer(nn.Module):
     return score, att_first
 
   def forward(self, doc_embeddings, image_embeddings, 
-              span_mask, image_mask,
-              start_mappings, end_mappings,
-              continuous_mappings, width): 
+              text_mask, image_mask,
+              start_end_embeddings,
+              continuous_embeddings, 
+              width, span_mask): 
     '''
     :param doc_embeddings: FloatTensor of size (batch size, max num. of frames, doc embed dim),
     :param image_embeddings: FloatTensor of size (batch size, max num. of ROIs, image embed dim), 
@@ -109,11 +110,7 @@ class MMLDotProductGroundedCoreferencer(nn.Module):
     '''
     self.text_scorer.train()
     n = doc_embeddings.size(0)
-    start_embeddings = torch.matmul(start_mappings, doc_embeddings)
-    end_embeddings = torch.matmul(end_mappings, doc_embeddings)
-    continuous_embeddings = torch.matmul(continuous_mappings, doc_embeddings)
-    start_end_embeddings = torch.cat([start_embeddings, end_embeddings], dim=-1)
-    span_embedding = self.span_repr(start_end_embeddings, continuous_embeddings, width)
+    span_embeddings = self.span_repr(start_end_embeddings, continuous_embeddings, width)
 
     S_g = torch.zeros((n, n), dtype=torch.float, device=span_embeddings.device)
     S_c = torch.zeros((n, n), dtype=torch.float, device=span_embeddings.device)
@@ -122,11 +119,11 @@ class MMLDotProductGroundedCoreferencer(nn.Module):
       for v_idx in range(n):
         S_g[s_idx, v_idx] = -self.calculate_loss(doc_embeddings[s_idx].unsqueeze(0),
                                                  image_embeddings[v_idx].unsqueeze(0),
-                                                 span_mask[s_idx].unsqueeze(0),
+                                                 text_mask[s_idx].unsqueeze(0),
                                                  image_mask[v_idx].unsqueeze(0))
         S_c[s_idx, v_idx] = self.calculate_adaptive_weights(span_embeddings[s_idx], span_embeddings[v_idx], span_mask[s_idx], span_mask[v_idx]) 
         # loss = -torch.sum(m(S_g) + m(S_c))-torch.sum(m(S_g.transpose(0, 1)).diag() + m(S_c))
-    loss = -torch.sum(torch.log(m(S_g)*m(S_c)))-torch.sum(torch.log(m(S_g.transpose(0, 1))*m(S_c)))
+    loss = - torch.sum(torch.log(torch.sum(m(S_g)*m(S_c), dim=-1)) + torch.log(torch.sum(m(S_g.transpose(0, 1))*m(S_c), dim=-1)))
 
     loss = loss / n
     return loss
@@ -139,15 +136,13 @@ class MMLDotProductGroundedCoreferencer(nn.Module):
 
   def calculate_adaptive_weights(self, first_emb, second_emb, first_mask, second_mask):
     # Perform negative sampling based on the text similarity
-    first_num = first_mask.sum()
-    second_num = second_mask.sum()
+    first_num = first_mask.to(torch.long).sum()
+    second_num = second_mask.to(torch.long).sum()
     first_idxs = [i for i in range(first_num) for j in range(second_num)]
-    second_idxs = [j for j in range(first_num) for j in range(second_num)]
-        
-    text_scores = self.text_scorer(first_emb[first_idxs].unsqueeze(0),
-                                   second_emb[second_idxs].unsqueeze(0),
-                                   first_mask[first_idxs].unsqueeze(0),
-                                   second_mask[second_idxs].unsqueeze(0)).view(first_num, second_num)
+    second_idxs = [j for i in range(first_num) for j in range(second_num)]
+    text_scores = self.text_scorer(first_emb[first_idxs],
+                                   second_emb[second_idxs])\
+                                   .view(first_num, second_num)
     score = (text_scores.mean(dim=-1).max() + text_scores.mean(dim=-2).max()) / 2.
     return score
 
