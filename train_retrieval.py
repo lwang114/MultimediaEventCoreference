@@ -34,6 +34,9 @@ def get_optimizer(config, models):
     for model in models:
         parameters += [p for p in model.parameters() if p.requires_grad]
 
+    for p in models[-1].parameters(): # XXX
+      print(p.size(), p.requires_grad)
+
     if config.optimizer == "adam":
         return optim.Adam(parameters, lr=config.learning_rate, weight_decay=config.weight_decay, eps=config.adam_epsilon)
     elif config.optimizer == "adamw":
@@ -117,7 +120,9 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
     image_model.train()
     coref_model.train()
     for i, batch in enumerate(train_loader):
-      doc_embeddings, video_embeddings, doc_mask, video_mask = batch   
+      doc_embeddings, start_mappings, end_mappings,\
+      continuous_mappings, width, video_embeddings,\
+      labels, doc_mask, video_mask = batch  # TODO 
 
       B = doc_embeddings.size(0)
       doc_embeddings = doc_embeddings.to(device)
@@ -129,7 +134,10 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
       # text_output = text_model(start_end_embeddings, continuous_embeddings, width)
       text_output = text_model(doc_embeddings)
       video_output = image_model(video_embeddings)
-      loss = coref_model(text_output, video_output, doc_mask, video_mask).mean()
+      if config.loss == 'adaptive_mml':
+        loss = coref_model(text_output, video_output, doc_mask, video_mask, start_mappings, end_mappings, continuous_mappings, width).mean()
+      else:
+        loss = coref_model(text_output, video_output, doc_mask, video_mask).mean()
       loss.backward()
       optimizer.step()
 
@@ -251,6 +259,8 @@ if __name__ == '__main__':
       text_model.load_state_dict(torch.load(config['span_repr_path'], map_location=device))
       image_model.load_state_dict(torch.load(config['image_repr_path'], map_location=device))
   coref_model.text_scorer.load_state_dict(torch.load(config['pairwise_scorer_path'], map_location=device))
-  
+  if config['loss'] == 'adaptive_mml':
+    coref_model.span_repr.load_state_dict(torch.load(config['span_repr_path']))
+
   # Training
   train(text_model, image_model, coref_model, train_loader, test_loader, args)
