@@ -6,6 +6,8 @@ import os
 import collections
 from conll import write_output_file
 
+from nltk.translate import bleu_score
+
 PUNCT = [',', '.', '\'', '\"', ':', ';', '?', '!', '<', '>', '~', '%', '$', '|', '/', '@', '#', '^', '*']
 def get_mention_doc(data_json, out_prefix, inclusive=False):
   '''
@@ -255,7 +257,6 @@ def extract_image_embeddings(data_dir, csv_dir, mapping_file, out_prefix, image_
     img_feat = np.asarray(img_feat)
     img_feats['{}_{}'.format(doc_id, idx)] = img_feat
 
-  json.dump(is_csv_used, open('is_csv_used.json', 'w'), indent=4)
   np.savez(out_prefix, **img_feats)
 
 def train_test_split(feat_file, test_id_file, mapping_file, out_prefix):
@@ -276,6 +277,37 @@ def train_test_split(feat_file, test_id_file, mapping_file, out_prefix):
 
   np.savez('{}_train.npz'.format(out_prefix), **train_feats)
   np.savez('{}_test.npz'.format(out_prefix), **test_feats)
+
+def compute_bleu_similarity(data_dir, mapping_file, out_prefix):
+  mapping_dict = json.load(open(mapping_file))
+  documents = json.load(open(os.path.join(data_dir, 'train'))
+  # Extract mapping from youtube id to short description
+  id2shortdesc = {v['id'].split('v=')[-1]:k for k, v in mapping_dict.items()}
+
+  # Extract mapping from youtube id to long description
+  id2longdesc = {k:[token[2] for token in documents[k]] for k in id2shortdesc} # TODO Confirm
+
+  # Extract a list of document ids
+  doc_ids = sorted(documents)
+  doc_num = len(doc_ids)
+  bleu_scores = np.zeros((doc_num, doc_num))
+  out_f = open('{}_bleu.txt'.format(out_prefix), 'w')
+
+  # Iterate through every pair of documents
+  for i, first_id in enumerate(doc_ids):
+    for j, second_id in enumerate(doc_ids):
+      # Extract the short and long descriptions of the pair 
+      first_short_desc = id2shortdesc[first_id].split()
+      second_short_desc = id2shortdesc[second_id].split()
+      first_long_desc = id2longdesc[first_id]
+      second_long_desc = id2longdesc[second_id]
+
+      # Compute BLEU score
+      bleu_scores[i, j] = bleu_score.sentence_bleu(first_long_desc, second_long_desc) 
+      bleu_score_short = bleu_score.sentence_bleu(first_short_desc, second_short_desc)
+      out_f.write('{} {}: BLEU score={.2f}, BLEU score (short)={.2f}'.format(first_id, second_id, bleu_scores[i, j], bleu_score_short))
+
+  np.save('{}_blue.npy'.format(out_prefix), bleu_scores)
 
 if __name__ == '__main__':
   data_dir = 'data/video_m2e2/mentions/'
