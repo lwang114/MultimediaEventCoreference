@@ -282,6 +282,5 @@ if __name__ == '__main__':
         coref_model.span_repr.load_state_dict(torch.load(config['span_repr_path']))
   coref_model.text_scorer.load_state_dict(torch.load(config['pairwise_scorer_path'], map_location=device))
 
-
   # Training
   train(text_model, image_model, coref_model, train_loader, test_loader, args)

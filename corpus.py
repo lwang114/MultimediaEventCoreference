@@ -11,7 +11,10 @@ import PIL.Image as Image
 from transformers import AutoTokenizer, AutoModel
 
 def get_all_token_mapping(start, end, max_token_num, max_mention_span):
-    span_num = len(start)
+    try:
+      span_num = len(start)
+    except:
+      raise ValueError('Invalid type for start={}, end={}'.format(start, end))
     start_mappings = torch.zeros((span_num, max_token_num), dtype=torch.float) 
     end_mappings = torch.zeros((span_num, max_token_num), dtype=torch.float) 
     span_mappings = torch.zeros((span_num, max_mention_span, max_token_num), dtype=torch.float)  
@@ -57,7 +60,7 @@ class GroundingFeatureDataset(Dataset):
     '''
     super(GroundingFeatureDataset, self).__init__()
     self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    self.max_token_num = config.get('max_token_num', 1000)
+    self.max_token_num = config.get('max_token_num', 512)
     self.max_span_num = config.get('max_span_num', 80)
     self.max_frame_num = config.get('max_frame_num', 500)
     self.max_mention_span = config.get('max_mention_span', 15)
@@ -181,8 +184,8 @@ class GroundingFeatureDataset(Dataset):
     candidate_starts = self.candidate_start_ends[idx][:, 0]
     candidate_ends = self.candidate_start_ends[idx][:, 1]
     span_num = candidate_starts.shape[0]
-    candidate_starts = torch.LongTensor(candidate_starts)
-    candidate_ends = torch.LongTensor(candidate_ends)    
+    # candidate_starts = torch.LongTensor(candidate_starts)
+    # candidate_ends = torch.LongTensor(candidate_ends)    
 
     # Extract the current doc embedding
     doc_len = len(self.bert_tokens[idx])
@@ -197,7 +200,7 @@ class GroundingFeatureDataset(Dataset):
     bert_start_ends = self.bert_start_ends[idx]
     bert_candidate_starts = bert_start_ends[candidate_starts, 0]
     bert_candidate_ends = bert_start_ends[candidate_ends, 1]
-
+    
     start_mappings, end_mappings, continuous_mappings, width =\
      get_all_token_mapping(bert_candidate_starts,
                            bert_candidate_ends,
