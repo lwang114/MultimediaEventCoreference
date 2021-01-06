@@ -7,6 +7,7 @@ import collections
 from conll import write_output_file
 
 from nltk.translate import bleu_score
+from nltk.metrics.scores import precision, recall, f_measure 
 
 PUNCT = [',', '.', '\'', '\"', ':', ';', '?', '!', '<', '>', '~', '%', '$', '|', '/', '@', '#', '^', '*']
 def get_mention_doc(data_json, out_prefix, inclusive=False):
@@ -278,14 +279,14 @@ def train_test_split(feat_file, test_id_file, mapping_file, out_prefix):
   np.savez('{}_train.npz'.format(out_prefix), **train_feats)
   np.savez('{}_test.npz'.format(out_prefix), **test_feats)
 
-def compute_bleu_similarity(data_dir, mapping_file, out_prefix):
+def compute_bleu_similarity(doc_json, mapping_file, out_prefix):
   mapping_dict = json.load(open(mapping_file))
-  documents = json.load(open(os.path.join(data_dir, 'train'))
+  documents = json.load(open(doc_json))
   # Extract mapping from youtube id to short description
   id2shortdesc = {v['id'].split('v=')[-1]:k for k, v in mapping_dict.items()}
 
   # Extract mapping from youtube id to long description
-  id2longdesc = {k:[token[2] for token in documents[k]] for k in id2shortdesc} # TODO Confirm
+  id2longdesc = {k:[token[2] for token in documents[k]] for k in id2shortdesc if k in documents}
 
   # Extract a list of document ids
   doc_ids = sorted(documents)
@@ -293,38 +294,71 @@ def compute_bleu_similarity(data_dir, mapping_file, out_prefix):
   bleu_scores = np.zeros((doc_num, doc_num))
   out_f = open('{}_bleu.txt'.format(out_prefix), 'w')
 
-  # Iterate through every pair of documents
+  # Iterate through every pair of documents  
   for i, first_id in enumerate(doc_ids):
     for j, second_id in enumerate(doc_ids):
       # Extract the short and long descriptions of the pair 
-      first_short_desc = id2shortdesc[first_id].split()
-      second_short_desc = id2shortdesc[second_id].split()
+      first_short_desc = id2shortdesc[first_id].replace('- BBC News', '').split()
+      second_short_desc = id2shortdesc[second_id].replace('- BBC News', '').split()
       first_long_desc = id2longdesc[first_id]
       second_long_desc = id2longdesc[second_id]
 
       # Compute BLEU score
-      bleu_scores[i, j] = bleu_score.sentence_bleu(first_long_desc, second_long_desc) 
-      bleu_score_short = bleu_score.sentence_bleu(first_short_desc, second_short_desc)
-      out_f.write('{} {}: BLEU score={.2f}, BLEU score (short)={.2f}'.format(first_id, second_id, bleu_scores[i, j], bleu_score_short))
+      # bleu_scores[i, j] = round(bleu_score.sentence_bleu([first_long_desc], 
+      #                                              second_long_desc, 
+      #                                              weights=[0.5, 0.5]), 4) 
+      if j > i:
+        bleu_score_short = round(bleu_score.sentence_bleu([first_short_desc], 
+                                                    second_short_desc,
+                                                    weights=[0.5, 0.5]), 4)
+        prec = round(precision(set(first_short_desc), set(second_short_desc)), 4)
+        rec = round(recall(set(first_short_desc), set(second_short_desc)), 4)
+        f1 = round(f_measure(set(first_short_desc), set(second_short_desc)), 4)
+        if bleu_score_short > 0:
+          print(first_id, second_id, bleu_score_short, f1)
+          out_f.write('{}, {}: BLEU score={:.2f}, BLEU score (short)={:.2f}\n'.format(first_id, second_id, bleu_scores[i, j], bleu_score_short))
+          out_f.write('{}, {}: Precision (short)={:.2f}, Recall (short)={:.2f}, F1 (short)={:.2f}\n'.format(first_id, second_id, prec, rec, f1))
+          out_f.write('{}: {}\n'.format(first_id, first_short_desc))
+          out_f.write('{}: {}\n\n'.format(second_id, second_short_desc))
 
-  np.save('{}_blue.npy'.format(out_prefix), bleu_scores)
+  np.save('{}_bleu.npy'.format(out_prefix), bleu_scores)
 
 if __name__ == '__main__':
+  import argparse
+  parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+  parser.add_argument('--task', type=int)
+  args = parser.parse_args()
+
   data_dir = 'data/video_m2e2/mentions/'
   mapping_file = 'm2e2/data/video_m2e2/video_m2e2.json'
   test_desc_file = 'm2e2/data/video_m2e2/unannotatedVideos_textEventCount.json'
+  data_json = 'm2e2/data/video_m2e2/grounding_video_m2e2.json'
   csv_dir = os.path.join(data_dir, 'mmaction_feat')
+  
   if not os.path.isdir(data_dir):
     os.mkdir(data_dir)
     os.mkdir(os.path.join(data_dir, 'mentions'))
     os.mkdir(os.path.join(data_dir, 'gold'))
-  data_json = 'm2e2/data/video_m2e2/grounding_video_m2e2.json'
-  out_prefix = os.path.join(data_dir, 'train')
-  get_mention_doc(data_json, out_prefix, inclusive=False) 
-  # data_json = 'm2e2/data/video_m2e2/grounding_video_m2e2_test.json'
-  # out_prefix = os.path.join(data_dir, 'test')
-  # get_mention_doc(data_json, out_prefix, inclusive=True)
-  # save_gold_conll_files(out_prefix+'.json', out_prefix+'_mixed.json', os.path.join(data_dir, 'gold')) 
-  out_prefix = '{}/{}'.format(data_dir, csv_dir.split('/')[-1])
-  # extract_image_embeddings(data_dir, csv_dir, mapping_file, out_prefix)
-  # train_test_split('{}/{}.npz'.format(data_dir, csv_dir.split('/')[-1]), os.path.join(data_dir, 'test.json'), mapping_file, out_prefix)
+
+  if args.task == 0:  
+    out_prefix = os.path.join(data_dir, 'train')
+    get_mention_doc(data_json, out_prefix, inclusive=False) 
+    data_json = 'm2e2/data/video_m2e2/grounding_video_m2e2_test.json'
+    out_prefix = os.path.join(data_dir, 'test')
+    get_mention_doc(data_json, out_prefix, inclusive=True)
+  elif args.task == 1:
+    save_gold_conll_files(out_prefix+'.json', out_prefix+'_mixed.json', os.path.join(data_dir, 'gold')) 
+  elif args.task == 2:
+    out_prefix = '{}/{}'.format(data_dir, csv_dir.split('/')[-1])
+    extract_image_embeddings(data_dir, csv_dir, mapping_file, out_prefix)
+  elif args.task == 3:
+    train_test_split('{}/{}.npz'.format(data_dir, csv_dir.split('/')[-1]), os.path.join(data_dir, 'test.json'), mapping_file, out_prefix)
+  elif args.task == 4:
+    print('Extract BLEU scores between training document pairs')
+    doc_json = '{}/train.json'.format(data_dir)
+    out_prefix = '{}/train'.format(data_dir)
+    compute_bleu_similarity(doc_json, mapping_file, out_prefix)
+    print('Extract BLEU scores for test document pairs')
+    doc_json = '{}/test.json'.format(data_dir)
+    out_prefix = '{}/test'.format(data_dir)
+    compute_bleu_similarity(doc_json, mapping_file, out_prefix)

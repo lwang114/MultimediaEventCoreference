@@ -1,3 +1,6 @@
+import torch
+import torch.nn as nn
+import json
 from allennlp.predictors.predictor import Predictor
 import allennlp_models.coref
 
@@ -5,7 +8,8 @@ class NeuralCoreferencer(nn.Module):
   def __init__(self):
     super(NeuralCoreferencer, self).__init__()
     # Initialize the coref model
-    self.coref = Predictor.from_path('https://storage.googleapis.com/allennlp-public-models/coref-spanbert-large-2020.02.27.tar.gz')
+    predictor = Predictor.from_path('https://storage.googleapis.com/allennlp-public-models/coref-spanbert-large-2020.02.27.tar.gz')
+    self.coref = predictor._model
 
   def forward(self):
     return # TODO
@@ -15,13 +19,12 @@ class NeuralCoreferencer(nn.Module):
     :param tokens:
     :return score:
     '''
-    for child in self.coref.children():
-      print(child)
+    for child_idx, child in enumerate(self.coref.children()): 
       for p in child.parameters():
-        print(p.size())
-    instance = self.coref._dataset_reader.text_to_instance(tokens)
-    labels = self.coref.predict_batch_instance(instance) 
-
+        print(child_idx, p.size())
+    
+    label_dict = self.coref.predict(tokens)
+    return label_dict
 
 if __name__ == '__main__':
   doc_json = 'data/video_m2e2/mentions/test.json'
@@ -29,5 +32,5 @@ if __name__ == '__main__':
   documents = json.load(open(doc_json))
   for doc_id in sorted(documents)[9:10]:
     tokens = [token[2] for token in documents[doc_id]]
-    print(model.predict(tokens))
+    print(model.predict(tokens).items())
  
