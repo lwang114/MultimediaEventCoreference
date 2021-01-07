@@ -89,8 +89,8 @@ if __name__ == '__main__':
     print(pyhocon.HOCONConverter.convert(config, "hocon"))
     create_folder(config['model_path'])
 
-    pred_out_dir = os.path.join(config['model_path'], 'pred_conll') # XXX
-    gold_out_dir = os.path.join(config['data_folder'], '../gold')
+    pred_out_dir = os.path.join(config['model_path'], 'pred_conll')
+    gold_out_dir = os.path.join(config['data_folder'], '../gold_{}'.format(config['label_type']))
     if not os.path.isdir(pred_out_dir):
         os.mkdir(pred_out_dir)
 
@@ -101,6 +101,7 @@ if __name__ == '__main__':
     doc_ids = ['_'.join(k.split('_')[:-2]) for k in os.listdir(pred_out_dir)]
     metrics = ['bcub', 'ceafm', 'blanc']
     results = {m:[0., 0., 0.] for m in metrics}
+    n = len(doc_ids)
     for doc_id in doc_ids:
         print(doc_id)
         cur_pred = os.path.join(pred_out_dir, doc_id + '_corpus_level.conll')
@@ -108,13 +109,22 @@ if __name__ == '__main__':
         for metric in metrics:
             raw_out = subprocess.run(['perl', 'coref/reference-coreference-scorers/scorer.pl', metric, cur_gold, cur_pred, 'none'], stdout=subprocess.PIPE)
             coref_line = raw_out.stdout.strip().decode('utf-8').split('\n')[-2].split('\t')
-            p = float(coref_line[0].split()[-1].split('%')[0])
-            r = float(coref_line[1].split()[-1].split('%')[0])
+            n_mentions = int(coref_line[0].split()[-2].split()[-1].split(')')[0])
+            if n_mentions == 0:
+              n -= 1
+              break
+            r = float(coref_line[0].split()[-1].split('%')[0])
+            p = float(coref_line[1].split()[-1].split('%')[0])
             f1 = float(coref_line[2].split()[-1].split('%')[0])
             print('p, r, f1: {} {} {}'.format(p, r, f1)) # XXX
-            results[metric][0] += p / len(doc_ids)
-            results[metric][1] += r / len(doc_ids)
-            results[metric][2] += f1 / len(doc_ids)
+            results[metric][0] += p 
+            results[metric][1] += r 
+            results[metric][2] += f1
+
+    for metric in metrics:
+      for i in range(3):
+        print(n)
+        results[metric][i] /= max(n, 1)
 
     for metric in metrics:
         print('{} Precision: {}'.format(metric, results[metric][0]))
