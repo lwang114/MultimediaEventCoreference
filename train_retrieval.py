@@ -109,12 +109,6 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
   for p in coref_model.parameters(): # XXX
     print('coref model: ', p.size(), p.device, p.requires_grad) 
 
-  for p in coref_model.module.span_repr.parameters():
-    print('span embedder: ', p.size(), p.device, p.requires_grad)
-
-  for p in coref_model.module.text_scorer.parameters():
-    print('text scorer: ', p.size(), p.device, p.requires_grad)
-
   # Start training
   total_loss = 0.
   total = 0.
@@ -154,7 +148,7 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
         continuous_embeddings = torch.matmul(continuous_mappings, doc_embeddings.unsqueeze(1))
         loss = coref_model(text_output, video_output, text_mask, video_mask, start_end_embeddings, continuous_embeddings, width, span_mask).mean()
       else:
-        loss = coref_model(text_output, video_output, text_mask, video_mask).mean()
+        loss = coref_model(text_output, video_output, text_mask, video_mask).mean() # topic_labels=topic_labels).mean()
       loss.backward()
       optimizer.step()
 
@@ -269,18 +263,19 @@ if __name__ == '__main__':
 
   text_model = BiLSTM(input_dim, embedding_dim)
   if config['img_feat_type'] == 'mmaction_feat':
-    image_model = nn.Linear(400, embedding_dim*2) 
+    image_model = NoOp() 
   else:
     image_model = BiLSTM(2048, embedding_dim)
 
-  if config['training_method'] in ('pipeline', 'continue'):
-      if config['loss'] != 'adaptive_mml':
-        coref_model = MMLDotProductGroundedCoreferencer(config).to(device)
+  if config['loss'] != 'adaptive_mml':
+      coref_model = MMLDotProductGroundedCoreferencer(config).to(device)
+      if config['training_method'] in ('pipeline', 'continue'):
         text_model.load_state_dict(torch.load(config['span_repr_path'], map_location=device))
-      else:
-        coref_model = AdaptiveMMLDotProductGroundedCoreferencer(config).to(device)
+  else:
+      coref_model = AdaptiveMMLDotProductGroundedCoreferencer(config).to(device)
+      if config['training_method'] in ('pipeline', 'continue'):    
         coref_model.span_repr.load_state_dict(torch.load(config['span_repr_path']))
-  coref_model.text_scorer.load_state_dict(torch.load(config['pairwise_scorer_path'], map_location=device))
+        coref_model.text_scorer.load_state_dict(torch.load(config['pairwise_scorer_path'], map_location=device))
 
   # Training
   train(text_model, image_model, coref_model, train_loader, test_loader, args)
