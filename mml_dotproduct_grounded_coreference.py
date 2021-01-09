@@ -44,11 +44,17 @@ class BiLSTM(nn.Module):
     outputs = torch.stack(outputs, dim=1).transpose(0, 1)
     return outputs
 
- 
-class Davenet(nn.Module):
-  def __init__(self, input_dim, embedding_dim=512):
-    super(Davenet, self).__init__()
+class CharCNN(nn.Module):
+  def __init__(self, char_vec, embedding_dim):
+    super(CharRNN, self).__init__()
+    self.char_size = char_vec.shape[0]
+    self.char_dim = char_vec.shape[1]
     self.embedding_dim = embedding_dim
+
+    # Initialize the character embeddings
+    self.char_emb = nn.Embedding(char_vec.shape[0], char_vec.shape[1])
+    self.char_emb.weight.data.copy_(torch.from_numpy(char_vec))
+
     self.batchnorm1 = nn.BatchNorm2d(1)
     self.conv1 = nn.Conv2d(1, 64, kernel_size=(input_dim, 3), stride=(1,1), padding=(0,0))
     self.conv2 = nn.Conv2d(64, 256, kernel_size=(1,3), stride=(1,1), padding=(0,1))
@@ -60,6 +66,9 @@ class Davenet(nn.Module):
       x = x.unsqueeze(0)
     if x.dim() == 3:
       x = x.unsqueeze(1)
+    
+    B = x.size(0)
+    x = self.char_emb(x)
     x = torch.transpose(x, -2, -1)
     x = self.batchnorm1(x)
     x = F.relu(self.conv1(x))
