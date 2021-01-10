@@ -14,7 +14,7 @@ import numpy as np
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
 from models import SpanEmbedder, SimplePairWiseClassifier
-from joint_supervised_grounded_coreference import JointSupervisedGroundedCoreferencer
+from joint_supervised_grounded_coreference import JointSupervisedGroundedCoreferencer, BiLSTM
 from corpus_supervised import SupervisedGroundingFeatureDataset
 from corpus_supervised_glove import SupervisedGroundingGloveFeatureDataset
 from evaluator import Evaluation, RetrievalEvaluation
@@ -33,6 +33,9 @@ def fix_seed(config):
 def get_optimizer(config, models):
     parameters = []
     for model in models:
+        # XXX
+        for p in model.parameters():
+          print(p.size(), p.requires_grad)
         parameters += [p for p in model.parameters() if p.requires_grad]
 
     if config.optimizer == "adam":
@@ -191,7 +194,9 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
       optimizer.zero_grad()
 
       text_output = text_model(start_end_embeddings, continuous_embeddings, width)
+      text_output = text_output * span_mask.unsqueeze(-1)
       video_output = image_model(videos)
+
       mml_loss, grounding_scores, text_scores = coref_model(text_output, video_output, span_mask, video_mask)
       first_grounding_idx, second_grounding_idx, pairwise_grounding_labels = get_pairwise_labels(text_labels, img_labels, is_training=False, device=device)
       first_text_idx, second_text_idx, pairwise_text_labels = get_pairwise_text_labels(text_labels, is_training=False, device=device)
@@ -202,7 +207,7 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
       pairwise_text_labels = pairwise_text_labels.to(torch.float)
       bce_grounding_loss = criterion(grounding_scores.view(B, -1), pairwise_grounding_labels)
       bce_text_loss = criterion(text_scores, pairwise_text_labels)
-      loss = bce_grounding_loss + bce_text_loss + mml_loss 
+      loss = mml_loss # XXX bce_grounding_loss + bce_text_loss + mml_loss 
       loss.backward()
       optimizer.step()
 
@@ -419,26 +424,23 @@ if __name__ == '__main__':
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
 
   # Initialize dataloaders
-  if 'token_file' in config and 'mention_file' in config and 'bbox_file' in config:
-      train_set = SupervisedGroundingGloveFeatureDataset(config['token_file'], config['mention_file'], config['bbox_file'], config, split='train')
-      test_set = SupervisedGroundingGloveFeatureDataset(config['token_file'], config['mention_file'], config['bbox_file'], config, split='test')
+  if config.get('glove_dimension', None):
+      train_set = SupervisedGroundingGloveFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), os.path.join(config['data_folder'], 'train_bboxes.json'), config, split='train')
+      test_set = SupervisedGroundingGloveFeatureDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), os.path.join(config['data_folder'], 'test_bboxes.json'), config, split='test')   
   else:
-      train_set = SupervisedGroundingGloveFeatureDataset(os.path.join(config['data_folder'], 'train.json'), 
-                                                    os.path.join(config['data_folder'], 'train_mixed.json'), 
-                                                    os.path.join(config['data_folder'], 'train_bboxes.json'), 
-                                                    config, split='train')  
-      # XXX SupervisedGroundingFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), os.path.join(config['data_folder'], 'train_bboxes.json'), config, split='train')
-      test_set = SupervisedGroundingGloveFeatureDataset(os.path.join(config['data_folder'], 'test.json'), 
-                                                        os.path.join(config['data_folder'], 'test_mixed.json'), 
-                                                        os.path.join(config['data_folder'], 'test_bboxes.json'), 
-                                                        config, split='test') 
-      # XXX SupervisedGroundingFeatureDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), os.path.join(config['data_folder'], 'test_bboxes.json'), config, split='test') 
-  train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0) # XXX pin_memory=True)
-  test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0) # XXX pin_memory=True)
+      train_set = SupervisedGroundingFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), os.path.join(config['data_folder'], 'train_bboxes.json'), config, split='train')
+      test_set = SupervisedGroundingFeatureDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), os.path.join(config['data_folder'], 'test_bboxes.json'), config, split='test')  
+            
+  train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
+  test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
 
   # Initialize models
-  text_model = SpanEmbedder(config, device).to(device) # BiLSTM(embedding_dim, embedding_dim)
   embedding_dim = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2
+  if config.get('bert_model', None):
+    text_model = SpanEmbedder(config).to(device)
+  else:
+    text_model = BiLSTM(embedding_dim, embedding_dim)
+
   if config.with_mention_width:
     embedding_dim += config.embedding_dimension
   image_model = nn.Linear(2048, embedding_dim)

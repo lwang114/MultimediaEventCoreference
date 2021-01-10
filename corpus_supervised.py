@@ -11,13 +11,26 @@ import PIL.Image as Image
 from transformers import AutoTokenizer, AutoModel
 
 SINGLETON = '###SINGLETON###'
-def get_all_token_embedding(embedding, start, end):
-    span_embeddings, length = [], []
-    for s, e in zip(start, end):
-        indices = torch.tensor(range(s, e + 1))
-        span_embeddings.append(embedding[indices])
-        length.append(len(indices))
-    return span_embeddings, length
+def get_all_token_mapping(start, end, max_token_num, max_mention_span):
+    try:
+      span_num = len(start)
+    except:
+      raise ValueError('Invalid type for start={}, end={}'.format(start, end))
+    start_mappings = torch.zeros((span_num, max_token_num), dtype=torch.float) 
+    end_mappings = torch.zeros((span_num, max_token_num), dtype=torch.float) 
+    span_mappings = torch.zeros((span_num, max_mention_span, max_token_num), dtype=torch.float)  
+    length = []
+    for span_idx, (s, e) in enumerate(zip(start, end)):
+        if e >= max_token_num:
+          continue
+        start_mappings[span_idx, s] = 1.
+        end_mappings[span_idx, e] = 1.
+        for token_count, token_pos in enumerate(range(s, e+1)):
+          if token_count >= max_mention_span:
+            break
+          span_mappings[span_idx, token_count, token_pos] = 1.
+        length.append(e-s+1)
+    return start_mappings, end_mappings, span_mappings, length
 
 def fix_embedding_length(emb, L):
   size = emb.size()[1:]
@@ -185,41 +198,47 @@ class SupervisedGroundingFeatureDataset(Dataset):
     :return labels: LongTensor of size (max num. spans,) 
     '''
     # Extract the original spans of the current doc
-    origin_candidate_starts = self.origin_candidate_start_ends[idx][:, 0]
-    origin_candidate_ends = self.origin_candidate_start_ends[idx][:, 1]
+    origin_candidate_start_ends = self.origin_candidate_start_ends[idx]
     candidate_starts = self.candidate_start_ends[idx][:, 0]
     candidate_ends = self.candidate_start_ends[idx][:, 1]
-
+    span_num = len(candidate_starts)
+       
+    # Extract the current doc embedding
+    doc_len = len(self.bert_tokens[idx])
+    for k in self.docs_embeddings:
+      if '_'.join(k.split('_')[:-1]) == '_'.join(self.feat_keys[idx].split('_')[:-1]):
+        doc_embeddings = self.docs_embeddings[k][:doc_len]
+        break
+    doc_embeddings = torch.FloatTensor(doc_embeddings)
+    doc_embeddings = fix_embedding_length(doc_embeddings, self.max_token_num)
+ 
     # Convert the original spans to the bert tokenized spans
     bert_start_ends = self.bert_start_ends[idx]
     bert_candidate_starts = bert_start_ends[candidate_starts, 0]
     bert_candidate_ends = bert_start_ends[candidate_ends, 1]
-    span_num = len(bert_candidate_starts)
-    
-    # Extract the current doc embedding
-    doc_len = len(self.bert_tokens[idx])
-    doc_embeddings = self.docs_embeddings[self.feat_keys[idx]][:doc_len]
-    doc_embeddings = torch.FloatTensor(doc_embeddings)
-    start_end_embeddings = torch.cat((doc_embeddings[bert_candidate_starts],
-                                      doc_embeddings[bert_candidate_ends]), dim=1)
-    continuous_tokens_embeddings, width = get_all_token_embedding(doc_embeddings, 
-                                                                  bert_candidate_starts,
-                                                                  bert_candidate_ends)
-    continuous_tokens_embeddings = torch.stack([fix_embedding_length(emb, self.max_mention_span)
-                                                for emb in continuous_tokens_embeddings], dim=0)
+
+    start_mappings, end_mappings, continuous_mappings, width =\
+     get_all_token_mapping(bert_candidate_starts,
+                           bert_candidate_ends,
+                           self.max_token_num,
+                           self.max_mention_span)
     width = torch.LongTensor([min(w, self.max_mention_span) for w in width])
-       
+
     # Pad/truncate the outputs to max num. of spans
-    start_end_embeddings = fix_embedding_length(start_end_embeddings, self.max_span_num)
-    continuous_tokens_embeddings = fix_embedding_length(continuous_tokens_embeddings, self.max_span_num)
+    start_mappings = fix_embedding_length(start_mappings, self.max_span_num)
+    end_mappings = fix_embedding_length(end_mappings, self.max_span_num)
+    continuous_mappings = fix_embedding_length(continuous_mappings, self.max_span_num)
     width = fix_embedding_length(width.unsqueeze(1), self.max_span_num).squeeze(1)
-    
+ 
     # Extract coreference cluster labels
-    labels = [int(self.text_label_dict[self.doc_ids[idx]][(start, end)]) for start, end in zip(candidate_starts, candidate_ends)]
+    labels = [int(self.text_label_dict[self.doc_ids[idx]][(start, end)]) for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
     labels = torch.LongTensor(labels)
     labels = fix_embedding_length(labels.unsqueeze(1), self.max_span_num).squeeze(1)
-    mask = torch.FloatTensor([1. if i < span_num else 0 for i in range(self.max_span_num)])
-    return start_end_embeddings, continuous_tokens_embeddings, width, labels, mask
+    text_mask = torch.FloatTensor([1. if j < doc_len else 0 for j in range(self.max_token_num)])
+    span_mask = torch.FloatTensor([1. if i < span_num else 0 for i in range(self.max_span_num)])
+
+    return doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, labels, text_mask, span_mask
+
 
   def load_video(self, idx):
     '''Load video
@@ -230,20 +249,24 @@ class SupervisedGroundingFeatureDataset(Dataset):
     doc_id = self.doc_ids[idx]
     img_embeddings = self.imgs_embeddings[self.feat_keys[idx]]
     img_embeddings = torch.FloatTensor(img_embeddings)
-    img_embeddings = img_embeddings.permute(1, 0, 2, 3).flatten(start_dim=1).t()
+    if img_embeddings.size(-1) == 1:
+      img_embeddings = img_embeddings.squeeze(-1).squeeze(-1)
     img_embeddings = fix_embedding_length(img_embeddings, self.max_region_num)
-
+    
     labels = [int(self.image_label_dict[doc_id][box_id]) for box_id in sorted(self.image_label_dict[doc_id], key=lambda x:int(x[0]))]
+    mask = torch.zeros(self.max_frame_num, dtype=torch.float)
     region_num = len(labels)
+    mask[:region_num] = 1.
+
     labels = torch.LongTensor(labels)
     labels = fix_embedding_length(labels.unsqueeze(1), self.max_region_num).squeeze(1)
-    mask = torch.FloatTensor([1. if i < region_num else 0 for i in range(self.max_region_num)])
+
     return img_embeddings, labels, mask
 
   def __getitem__(self, idx):
     img_embeddings, img_labels, video_mask = self.load_video(idx)
-    start_end_embeddings, continuous_embeddings, width, text_labels, span_mask = self.load_text(idx)
-    return start_end_embeddings, continuous_embeddings, width, img_embeddings, text_labels, img_labels, span_mask, video_mask
+    doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, text_labels, text_mask, span_mask = self.load_text(idx)
+    return doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, img_embeddings, text_labels, img_labels, text_mask, span_mask, video_mask
 
   def __len__(self):
     return len(self.doc_ids)

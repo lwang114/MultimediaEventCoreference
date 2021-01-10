@@ -10,16 +10,24 @@ import os
 import PIL.Image as Image
 
 SINGLETON = '###SINGLETON###'
-def get_all_token_mapping(start, end, max_token_num):
-    span_num = len(start)
+def get_all_token_mapping(start, end, max_token_num, max_mention_span):
+    try:
+      span_num = len(start)
+    except:
+      raise ValueError('Invalid type for start={}, end={}'.format(start, end))
     start_mappings = torch.zeros((span_num, max_token_num), dtype=torch.float) 
     end_mappings = torch.zeros((span_num, max_token_num), dtype=torch.float) 
-    span_mappings = torch.zeros((span_num, max_token_num), dtype=torch.float)  
+    span_mappings = torch.zeros((span_num, max_mention_span, max_token_num), dtype=torch.float)  
     length = []
     for span_idx, (s, e) in enumerate(zip(start, end)):
+        if e >= max_token_num:
+          continue
         start_mappings[span_idx, s] = 1.
         end_mappings[span_idx, e] = 1.
-        span_mappings[span_idx, s:e+1] = 1. / float(e - s + 1.)
+        for token_count, token_pos in enumerate(range(s, e+1)):
+          if token_count >= max_mention_span:
+            break
+          span_mappings[span_idx, token_count, token_pos] = 1.
         length.append(e-s+1)
     return start_mappings, end_mappings, span_mappings, length
 
@@ -80,7 +88,7 @@ class SupervisedGroundingGloveFeatureDataset(Dataset):
     self.text_label_dict, self.image_label_dict, image_token_dict = self.create_dict_labels(text_mentions, image_mentions)
 
     # Extract doc/image ids
-    self.feat_keys = sorted(self.imgs_embeddings, key=lambda x:int(x.split('_')[-1])) # XXX
+    self.feat_keys = sorted(self.imgs_embeddings, key=lambda x:int(x.split('_')[-1]))[:20] # XXX
     self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in self.text_label_dict and '_'.join(k.split('_')[:-1]) in self.image_label_dict]
     if test_id_file:
       with open(test_id_file) as f:
@@ -155,7 +163,8 @@ class SupervisedGroundingGloveFeatureDataset(Dataset):
     start_mappings, end_mappings, continuous_mappings, width = get_all_token_mapping( 
                                        candidate_start_ends[:, 0],
                                        candidate_start_ends[:, 1],
-                                       self.max_token_num)
+                                       self.max_token_num,
+                                       self.max_mention_span)
 
     width = torch.LongTensor([min(w, self.max_mention_span) for w in width])
 
@@ -169,9 +178,10 @@ class SupervisedGroundingGloveFeatureDataset(Dataset):
     labels = [int(self.text_label_dict[self.doc_ids[idx]][(start, end)]) for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
     labels = torch.LongTensor(labels)
     labels = fix_embedding_length(labels.unsqueeze(1), self.max_span_num).squeeze(1)
-    mask = torch.FloatTensor([1. if i < span_num else 0 for i in range(self.max_span_num)])
+    text_mask = torch.FloatTensor([1. if i < doc_len else 0 for i in range(self.max_token_num)])
+    span_mask = torch.FloatTensor([1. if i < span_num else 0 for i in range(self.max_span_num)])
     # return start_end_embeddings, continuous_tokens_embeddings, width, labels, mask
-    return doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, labels, mask
+    return doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, labels, text_mask, span_mask
 
   def load_video(self, idx):
     '''Load video
@@ -181,12 +191,15 @@ class SupervisedGroundingGloveFeatureDataset(Dataset):
     '''    
     doc_id = self.doc_ids[idx]
     img_embeddings = self.imgs_embeddings[self.feat_keys[idx]]
+    labels = [int(self.image_label_dict[doc_id][box_id]) for box_id in sorted(self.image_label_dict[doc_id], key=lambda x:int(x[0]))]
+    region_num = len(labels)
+    if not region_num == img_embeddings.shape[0] and region_num != 0:
+      print('Number of labels not equal to the number of embeddings for {}: {} != {}'.format(doc_id, region_num, img_embeddings.shape[0])) 
+
     img_embeddings = torch.FloatTensor(img_embeddings)
     img_embeddings = img_embeddings.squeeze(-1).squeeze(-1)
     img_embeddings = fix_embedding_length(img_embeddings, self.max_region_num)
 
-    labels = [int(self.image_label_dict[doc_id][box_id]) for box_id in sorted(self.image_label_dict[doc_id], key=lambda x:int(x[0]))]
-    region_num = len(labels)
     labels = torch.LongTensor(labels)
     labels = fix_embedding_length(labels.unsqueeze(1), self.max_region_num).squeeze(1)
     mask = torch.FloatTensor([1. if i < region_num else 0 for i in range(self.max_region_num)])
@@ -194,8 +207,8 @@ class SupervisedGroundingGloveFeatureDataset(Dataset):
 
   def __getitem__(self, idx):
     img_embeddings, img_labels, video_mask = self.load_video(idx)
-    doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, text_labels, span_mask = self.load_text(idx)
-    return doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, img_embeddings, text_labels, img_labels, span_mask, video_mask
+    doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, text_labels, text_mask, span_mask = self.load_text(idx)
+    return doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, img_embeddings, text_labels, img_labels, text_mask, span_mask, video_mask
 
   def __len__(self):
     return len(self.doc_ids)
