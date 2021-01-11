@@ -135,46 +135,129 @@ class SimplePairWiseClassifier(nn.Module):
     def forward(self, first, second):
         return self.pairwise_mlp(torch.cat((first, second, first * second), dim=1))
 
-'''
-class BiLSTMSpanEmbedder(nn.Module):
-  def __init__(self, config): # TODO
-    super(BiLSTMSpanEmbedder, self).__init__()
+    def predict_cluster(self, span_embeddings, first_idx, second_idx): # TODO
+      '''
+      :param span_embeddings: FloatTensor of size (num. of spans, span embed dim),
+      :param image_embeddings: FloatTensor of size (num. of ROIs, image embed dim),
+      :param first_idx: LongTensor of size (num. of mention pairs,)
+      :param second_idx: LongTensor of size (num. of mention pairs,)
+      :return scores: FloatTensor of size (batch size, max num. of mention pairs),
+      :return clusters: dict of list of int, mapping from cluster id to mention ids of its members 
+      '''
+      device = span_embeddings.device
+      thres = -0.76 # TODO Make this a config parameter
+      span_num = max(second_idx) + 1
+      span_mask = torch.ones(len(first_idx)).to(device)
+      first_span_embeddings = span_embeddings[first_idx]
+      second_span_embeddings = span_embeddings[second_idx]
+
+      scores = self(first_span_embeddings, second_span_embeddings)
+      children = -1 * np.ones(span_num, dtype=np.int64)
+
+      # Antecedent prediction
+      for idx2 in range(span_num):
+        candidate_scores = []
+        for idx1 in range(idx2):
+          score_idx = idx1 * (2 * span_num - idx1 - 1) // 2 - 1
+          score_idx += (idx2 - idx1)
+          score = scores[score_idx].squeeze().cpu().detach().data.numpy()
+          if children[idx1] == -1:
+            candidate_scores.append(score)
+          else:
+            candidate_scores.append(-np.inf)
+
+        if len(candidate_scores) > 0:
+          candidate_scores = np.asarray(candidate_scores)
+          max_score = candidate_scores.max()
+          if max_score > thres:
+            parent = np.argmax(candidate_scores)
+            children[parent] = idx2
+      
+      # Extract clusters from coreference chains
+      cluster_id = 0
+      clusters = {}
+      covered_spans = []
+      for idx in range(span_num):
+        if not idx in covered_spans and children[idx] != -1:
+          covered_spans.append(idx)
+          clusters[cluster_id] = [idx]
+          cur_idx = idx
+          while children[cur_idx] != -1:
+            cur_idx = children[cur_idx]
+            clusters[cluster_id].append(cur_idx)
+            covered_spans.append(cur_idx)
+          cluster_id += 1
+      # print('Number of non-singleton clusters: {}'.format(cluster_id))
+      return clusters, scores
+
+class SelfAttentionPairWiseClassifier(nn.Module):
+  def __init__(self, config):
+    super(SelfAttentionPairWiseClassifier, self).__init__()  
+    self.input_layer = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2 
+    if config.with_mention_width:
+        self.input_layer += config.embedding_dimension
+
+    self.transformer = torch.nn.Transformer(d_model=self.input_layer, 
+                                            nhead=1, 
+                                            num_encoder_layers=1, 
+                                            num_decoder_layers=1)
+  
+  def forward(self, first, second):
+    '''
+    :param first: FloatTensor of size (batch size, num. of span pairs, span embed dim)
+    :param second: FloatTensor of size (batch size, num. of span pairs, span embed dim)
+    '''
+    d = first.size(-1)
+    first_c = self.transformer(second, second)
+    sq_dist = (first - first_c)**2 
+    sq_dist = sq_dist.sum(dim=-1) / d
+    return -sq_dist
+
+  def predict_cluster(self, span_embeddings, first_idxs, second_idxs):
+    span_num = span_embeddings.size(0)
+
+    # Compute pairwise scores for mention pairs specified
+    scores = self(span_embeddings[first_idxs], span_embeddings[second_idxs])
     
-  def forward(doc_embeddings, candidate_start_ends, width, span_mask): # TODO
-    lstm_embeddings = self.lstm_embedder(doc_embeddings)
-    start_vector = torch.gather(lstm_embeddings, candidate_start_ends[:, :, 0], dim=1)
-    end_vector = torch.gather(lstm_embeddings, candidate_start_ends[:, :, 1], dim=1)
-    vector = torch.cat([start_vector, end_vector], dim=-1)
-    continuous_embeddings = self.get_all_token_embedding(embedding, start, end)
-    if self.use_head_attention:
-        padded_tokens_embeddings, masks = self.pad_continous_embeddings(continuous_embeddings, width)
-        attention_scores = self.self_attention_layer(padded_tokens_embeddings).squeeze(-1)
-        attention_scores *= masks
-        attention_scores = torch.where(attention_scores != 0, attention_scores,
-                                           torch.tensor(-9e9, device=self.device))
-        attention_scores = F.softmax(attention_scores, dim=1)
-        weighted_sum = (attention_scores.unsqueeze(-1) * padded_tokens_embeddings).sum(dim=1)
-        vector = torch.cat((vector, weighted_sum), dim=1)
+    # Compute the pairwise score matrix
+    row_idxs = [i for i in range(span_num) for j in range(span_num)]
+    col_idxs = [j for i in range(span_num) for j in range(span_num)]
+    S = self(span_embeddings[row_idxs], span_embeddings[col_idxs])
+    S = S.cpu().detach().numpy()
 
-    if self.with_width_embedding:
-        width = torch.clamp(width, max=4)
-        width_embedding = self.width_feature(width)
-        vector = torch.cat((vector, width_embedding), dim=1)
-
-    vector = vector.view(B, S, -1)
-    return vector
-
-
+    # Compute the adjacency matrix
+    A = np.eye(span_num, dtype=np.float)
+    for row_idx in row_idxs:
+      col_idx = np.argmax(S[row_idx]) 
+      A[row_idx, col_idx] = 1.
+      A[col_idx, row_idx] = 1.
   
-  def get_all_token_embedding(embedding, start, end): # TODO
-    span_embeddings, length = [], []
-    for s, e in zip(start, end):
-        indices = torch.tensor(range(s, e + 1))
-        span_embeddings.append(embedding[indices])
-        length.append(len(indices))
-    return span_embeddings, length
-'''
-  
+    # Find the connected components of the graph
+    clusters = find_connected_components(A)
+    print('Number of clusters={}'.format(len(components)))
+
+def find_connected_components(A)
+  def _dfs(v, c):
+    c.append(v)
+    for u in range(n):
+      if A[v, u] and visited[u] < 0:
+        visited[u] = 1
+        c = _dfs(u, c)
+    return c
+
+  n = A.shape[0]
+  visited = -1 * np.ones(n)
+  v = 0
+  components = []
+  for v in range(n):
+    if visited[v] < 0:
+      c = _dfs(v, [])
+      components.append(c)
+  return components
+
+
+    
+    
 
 class SymbolicPairWiseClassifier(nn.Module):
   def __init__(self, config):
