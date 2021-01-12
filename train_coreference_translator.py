@@ -14,6 +14,7 @@ import numpy as np
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
 from models import SpanEmbedder, SimplePairWiseClassifier
+from text_models import NoOp
 from corpus_text import TextFeatureDataset
 from evaluator import Evaluation, RetrievalEvaluation
 from conll import write_output_file
@@ -46,11 +47,11 @@ def get_pairwise_labels(labels, is_training, device):
     second_idxs = []
     for idx in range(B):
       first, second = zip(*list(combinations(range(len(labels[idx])), 2)))
-      first = torch.tensor(first)
-      second = torch.tensor(second)
+      # first = torch.tensor(first)
+      # second = torch.tensor(second)
   
-      pairwise_labels = (text_labels[first] != 0) & (image_labels[second] != 0) & \
-                      (text_labels[first] == image_labels[second])    
+      pairwise_labels = (labels[idx, first] != 0) & (labels[idx, second] != 0) & \
+                      (labels[idx, first] == labels[idx, second])    
       # first = [first_idx for first_idx in range(len(text_labels)) for second_idx in range(len(image_labels))]
       # second = [second_idx for first_idx in range(len(text_labels)) for second_idx in range(len(image_labels))]
       if is_training:
@@ -75,8 +76,8 @@ def get_pairwise_labels(labels, is_training, device):
       pairwise_labels_all.append(pairwise_labels)
 
     pairwise_labels_all = torch.stack(pairwise_labels_all)
-    first_idxs = torch.stack(first_idxs_all)
-    second_idxs = torch.stack(second_idxs_all)
+    first_idxs = np.stack(first_idxs)
+    second_idxs = np.stack(second_idxs)
     torch.cuda.empty_cache()
 
     return first_idxs, second_idxs, pairwise_labels_all    
@@ -111,7 +112,6 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
   if args.start_epoch != 0:
     text_model.load_state_dict(torch.load('{}/text_model.{}.pth'.format(args.exp_dir, args.start_epoch)))
     # image_model.load_state_dict(torch.load('{}/image_model.{}.pth'.format(args.exp_dir, args.start_epoch)))
-    coref_model.load_state_dict(torch.load('{}/text_scorer.{}.pth'.format(args.exp_dir, args.start_epoch)))
 
   # Define the training criterion
   criterion = nn.BCEWithLogitsLoss()
@@ -141,8 +141,8 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
       continuous_mappings = continuous_mappings.to(device)
       width = width.to(device)
       # videos = videos.to(device)
-      text_labels = text_labels.to(device).flatten()
-      # img_labels = img_labels.to(device).flatten()
+      text_labels = text_labels.to(device)
+      # img_labels = img_labels.to(device)
       span_mask = span_mask.to(device)
       span_num = span_mask.sum(-1).long()
       # video_mask = video_mask.to(device)
@@ -164,12 +164,12 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
       scores = []
       for idx in range(B):
         scores.append(coref_model(mention_output[idx, first_idxs[idx]], 
-                                  mention_output[idx, second_idxs[idx]]))
-      scores = torch.stack(scores)
+                                  mention_output[idx, second_idxs[idx]]).t())
+      scores = torch.cat(scores)
       if config.loss == 'mse':
         loss = - (pairwise_labels * scores).mean()
       else:
-        loss = criterion(scores, pairwise_labels)       
+        loss = criterion(scores, pairwise_labels) 
       
       loss.backward()
       optimizer.step()
@@ -187,7 +187,7 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
 
     torch.save(text_model.module.state_dict(), '{}/text_model.{}.pth'.format(args.exp_dir, epoch))
     torch.save(image_model.module.state_dict(), '{}/image_model.{}.pth'.format(args.exp_dir, epoch))
-    torch.save(coref_model.module.text_scorer.state_dict(), '{}/text_scorer.{}.pth'.format(args.exp_dir, epoch))
+    torch.save(coref_model.module.state_dict(), '{}/coref_model.{}.pth'.format(args.exp_dir, epoch))
  
     if epoch % 5 == 0:
       test(text_model, mention_model, image_model, coref_model, test_loader, args)
@@ -196,7 +196,7 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
     test(text_model, mention_model, image_model, coref_model, test_loader, args)
 
     
-def test(text_model, mention_model, coref_model, test_loader, args): # TODO Beam search
+def test(text_model, mention_model, image_model, coref_model, test_loader, args): 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     config = pyhocon.ConfigFactory.parse_file(args.config)
     documents = test_loader.dataset.documents
@@ -214,7 +214,6 @@ def test(text_model, mention_model, coref_model, test_loader, args): # TODO Beam
         
         token_num = text_mask.sum(-1).long()
         span_num = span_mask.sum(-1).long()
-        region_num = video_mask.sum(-1).long()
         doc_embeddings = doc_embeddings.to(device)
         start_mappings = start_mappings.to(device)
         end_mappings = end_mappings.to(device)
@@ -234,11 +233,12 @@ def test(text_model, mention_model, coref_model, test_loader, args): # TODO Beam
         for idx in range(B):
           # Compute pairwise labels
           first_idx, second_idx, pairwise_labels = get_pairwise_labels(text_labels[idx, :span_num[idx]].unsqueeze(0), is_training=False, device=device)
-          if first_idx is None:
-            continue
-          
-          clusters, scores = coref_model.module.predict_cluster(text_output[idx],\
-                              first_idx, second_idx) # TODO
+          first_idx = first_idx.squeeze(0)
+          second_idx = second_idx.squeeze(0)
+          pairwise_labels = pairwise_labels.squeeze(0)          
+
+          clusters, scores = coref_model.module.predict_cluster(mention_output[idx],\
+                              first_idx, second_idx)
           all_scores.append(scores.squeeze(1))
           all_labels.append(pairwise_labels.to(torch.int))
           global_idx = i * test_loader.batch_size + idx
@@ -288,9 +288,9 @@ if __name__ == '__main__':
     config['model_path'] = args.exp_dir
     
   if not os.path.isdir(config['model_path']):
-    os.mkdir(config['model_path'])
+    os.makedirs(config['model_path'])
   if not os.path.isdir(config['log_path']):
-    os.mkdir(config['log_path']) 
+    os.makedirs(config['log_path']) 
   
   pred_out_dir = os.path.join(config['model_path'], 'pred_conll')
   if not os.path.isdir(pred_out_dir):
@@ -300,8 +300,8 @@ if __name__ == '__main__':
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
 
   # Initialize dataloaders
-  train_set = TextFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config, split='train') # TODO
-  test_set = TextFeatureDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), config, split='test') # TODO
+  train_set = TextFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config, split='train')
+  test_set = TextFeatureDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), config, split='test')
   train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
   test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
 
@@ -311,7 +311,7 @@ if __name__ == '__main__':
   embedding_dim = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2
   image_model = NoOp()
   coref_model = SimplePairWiseClassifier(config).to(device)
-  # coref_model = SelfAttentionPairWiseClassifier(config).to(device) # TODO
+  # coref_model = SelfAttentionPairWiseClassifier(config).to(device)
 
   if config['training_method'] in ('pipeline', 'continue'):
       text_model.load_state_dict(torch.load(config['span_repr_path'], map_location=device))

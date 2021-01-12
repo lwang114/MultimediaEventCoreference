@@ -1,7 +1,7 @@
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
-
+import numpy as np
 
 
 def init_weights(m):
@@ -135,7 +135,7 @@ class SimplePairWiseClassifier(nn.Module):
     def forward(self, first, second):
         return self.pairwise_mlp(torch.cat((first, second, first * second), dim=1))
 
-    def predict_cluster(self, span_embeddings, first_idx, second_idx): # TODO
+    def predict_cluster(self, span_embeddings, first_idx, second_idx):
       '''
       :param span_embeddings: FloatTensor of size (num. of spans, span embed dim),
       :param image_embeddings: FloatTensor of size (num. of ROIs, image embed dim),
@@ -236,7 +236,7 @@ class SelfAttentionPairWiseClassifier(nn.Module):
     clusters = find_connected_components(A)
     print('Number of clusters={}'.format(len(components)))
 
-def find_connected_components(A)
+def find_connected_components(A):
   def _dfs(v, c):
     c.append(v)
     for u in range(n):

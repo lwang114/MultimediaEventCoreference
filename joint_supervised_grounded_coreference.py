@@ -5,33 +5,13 @@ import numpy as np
 import torchvision.models as models
 from itertools import combinations
 from models import SimplePairWiseClassifier, BilinearPairWiseClassifier 
-
-class BiLSTM(nn.Module):
-  def __init__(self, input_dim, embedding_dim, num_layers=1):
-    super(BiLSTM, self).__init__()
-    self.embedding_dim = embedding_dim
-    self.n_layers = num_layers
-    self.rnn = nn.LSTM(input_size=input_dim, hidden_size=embedding_dim, num_layers=num_layers, batch_first=True, bidirectional=True)
-
-  def forward(self, x, save_features=False):
-    if x.dim() < 3:
-      x = x.unsqueeze(0)
-    B = x.size(0)
-    T = x.size(1)
-    h0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim)).to(x.device)
-    c0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim)).to(x.device)
-    embed, _ = self.rnn(x, (h0, c0))
-    outputs = []
-    for b in range(B):
-      outputs.append(embed[b])
-    outputs = torch.stack(outputs, dim=1).transpose(0, 1)
-    return outputs
-    
+import json
+  
 class JointSupervisedGroundedCoreferencer(nn.Module):
   def __init__(self, config):
     super(JointSupervisedGroundedCoreferencer, self).__init__()
     self.text_scorer = SimplePairWiseClassifier(config) 
-    self.grounding_scorer = BilinearPairWiseClassifier(config)
+    # self.grounding_scorer = BilinearPairWiseClassifier(config)
     self.text_only_decode = config.get('text_only_decode', False)
 
   def score_grounding(self, first, second, first_mask, second_mask, score_type='both'):
@@ -50,23 +30,29 @@ class JointSupervisedGroundedCoreferencer(nn.Module):
     sent_scores = torch.zeros((B, B), dtype=torch.float, device=first.device)
     for idx in range(B):
       # Compute index pairs for all combinations between first and second
-      first_idxs = [i for i in range(N) for j in range(L)] 
-      second_idxs = [j for i in range(N) for j in range(L)] 
-      first_idxs = torch.LongTensor(first_idxs)
-      second_idxs = torch.LongTensor(second_idxs)
-      # Compute mention-level scores
-      mention_scores[idx] = self.grounding_scorer(first[idx, first_idxs], second[idx, second_idxs]).view(N, L)
-  
+      # first_idxs = [i for i in range(N) for j in range(L)] 
+      # second_idxs = [j for i in range(N) for j in range(L)] 
+      # first_idxs = torch.LongTensor(first_idxs)
+      # second_idxs = torch.LongTensor(second_idxs)
+
       # Compute sentence-level scores
       for jdx in range(B):
-        mask = first_mask[idx, first_idxs] * second_mask[jdx, second_idxs]
-        mask = torch.where(mask != 0, mask, torch.tensor(-9e9, device=first.device))
-        mask = F.softmax(mask.view(N*L), dim=-1).view(N, L)
-        if idx == jdx:
-          sent_scores[idx, idx] = (mention_scores[idx] * mask).sum()
-        else:
-          score = self.grounding_scorer(first[idx, first_idxs], second[idx, second_idxs]).view(N, L)
-          sent_scores[idx, jdx] = (score * mask).sum()
+        mask = first_mask[idx].unsqueeze(-1) * second_mask[jdx].unsqueeze(0)
+        avg_mask = torch.where(mask != 0, mask, torch.tensor(-9e9, device=first.device))
+        avg_mask_first = F.softmax(avg_mask, dim=0)
+        avg_mask_second = F.softmax(avg_mask, dim=1)
+
+        att_weights = torch.matmul(first[idx], second[jdx].t()) * mask
+        att_weights = torch.where(att_weights * mask != 0, att_weights, torch.tensor(-9e9, device=first.device))
+        att_weights_first = F.softmax(att_weights, dim=-1) * mask
+        score = (att_weights_first * att_weights * avg_mask_first).sum()
+
+        att_weights_second = F.softmax(att_weights.t(), dim=-1) * mask.t()
+        score = score + (att_weights_second.t() * att_weights * avg_mask_second).sum()
+        sent_scores[idx, jdx] = score
+
+        if idx == jdx: # Compute mention-level scores
+          mention_scores[idx] = att_weights
 
     return sent_scores, mention_scores
   
@@ -86,14 +72,17 @@ class JointSupervisedGroundedCoreferencer(nn.Module):
     scores = scores / norm_factor
     return scores
 
-  def calculate_loss(self, span_emb, image_emb, span_mask, image_mask):
-    B = span_emb.size(0)
+  def calculate_loss(self, text_emb, span_emb, image_emb, text_mask, span_mask, image_mask):
+    B = text_emb.size(0) 
+    D = text_emb.size(-1)
+    N = span_emb.size(1)
     # Compute visual grounding scores
-    S, grounding_scores = self.score_grounding(span_emb, image_emb, span_mask, image_mask)
+    S, _ = self.score_grounding(text_emb, image_emb, text_mask, image_mask)
+    _, grounding_scores = self.score_grounding(span_emb.view(B, N, -1, D).mean(dim=2), image_emb, span_mask, image_mask)
     text_scores = self.score_text(span_emb, span_mask)
     return S, grounding_scores, text_scores 
   
-  def forward(self, span_embeddings, image_embeddings, span_mask, image_mask):
+  def forward(self, text_embeddings, span_embeddings, image_embeddings, text_mask, span_mask, image_mask):
     '''
     :param span_embeddings: FloatTensor of size (batch size, max num. of spans, span embed dim),
     :param image_embeddings: FloatTensor of size (batch size, max num. of ROIs, image embed dim), 
@@ -102,14 +91,17 @@ class JointSupervisedGroundedCoreferencer(nn.Module):
     :return score: FloatTensor of size (batch size,),
     '''
     self.text_scorer.train()
-    self.grounding_scorer.train()
     n = span_embeddings.size(0)
     m = nn.LogSoftmax(dim=1)
-    S, grounding_scores, text_scores = self.calculate_loss(span_embeddings,
+    S, grounding_scores, text_scores = self.calculate_loss(
+                                 text_embeddings,
+                                 span_embeddings,
                                  image_embeddings,
+                                 text_mask,
                                  span_mask,
                                  image_mask)
-    loss = -torch.sum(m(S))-torch.sum(m(S.transpose(0, 1)))
+    loss = -torch.sum(m(S).diag())-torch.sum(m(S.transpose(0, 1)).diag())
+    
     loss = loss / n
     return loss, grounding_scores, text_scores
     

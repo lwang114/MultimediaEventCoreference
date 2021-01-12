@@ -58,12 +58,13 @@ class TextFeatureDataset(Dataset):
          'cluster_desc': '',
          'singleton': boolean, whether the mention is a singleton}
     '''
-    super(GroundingFeatureDataset, self).__init__()
+    super(TextFeatureDataset, self).__init__()
     self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     self.max_token_num = config.get('max_token_num', 512)
     self.max_span_num = config.get('max_span_num', 80)
     self.max_frame_num = config.get('max_frame_num', 500)
     self.max_mention_span = config.get('max_mention_span', 15)
+    self.is_one_indexed = config.get('is_one_indexed', False)
     test_id_file = config.get('test_id_file', '')
     self.split = split
     self.config = config
@@ -108,7 +109,11 @@ class TextFeatureDataset(Dataset):
 
     # Extract original mention spans
     self.origin_candidate_start_ends = [np.asarray([[start, end] for start, end in sorted(self.label_dict[doc_id])]) for doc_id in self.doc_ids]
-    self.candidate_start_ends = [np.asarray([[clean_start_end_dict[doc_id][start], clean_start_end_dict[doc_id][end]] 
+    for idx, doc_id in enumerate(self.doc_ids):
+      for start_end in self.origin_candidate_start_ends[idx]:
+        if np.max(start_end) >= len(clean_start_end_dict[doc_id]):
+          print(doc_id, max(start_end), len(clean_start_end_dict[doc_id]))
+    self.candidate_start_ends = [np.asarray([[clean_start_end_dict[doc_id][start-self.is_one_indexed], clean_start_end_dict[doc_id][end-self.is_one_indexed]] 
                                               for start, end in start_ends]) 
                                  for doc_id, start_ends in zip(self.doc_ids, self.origin_candidate_start_ends)]
   
@@ -128,21 +133,20 @@ class TextFeatureDataset(Dataset):
       original_tokens = [] 
       clean_start_end = -1 * np.ones(len(tokens), dtype=np.int)
       bert_cursor = -1
-
       for i, token in enumerate(tokens):
         sent_id, token_id, token_text, flag_sentence = token
         bert_token = self.tokenizer.encode(token_text, add_special_tokens=True)[1:-1]   
-
         if bert_token:
-          bert_tokens_ids.extend(bert_token)
           bert_start_index = bert_cursor + 1
+          bert_tokens_ids.extend(bert_token)
           start_bert_idx.append(bert_start_index)
           bert_cursor += len(bert_token)
+
           bert_end_index = bert_cursor
           end_bert_idx.append(bert_end_index)
+          
           clean_start_end[i] = len(original_tokens)
           original_tokens.append([sent_id, token_id, token_text, flag_sentence])
-
       docs_bert_tokens.append(bert_tokens_ids)
       docs_origin_tokens.append(original_tokens)
       clean_start_end_dict[doc_id] = clean_start_end.tolist() 
@@ -161,7 +165,7 @@ class TextFeatureDataset(Dataset):
         label_dict[m['doc_id']][(-1, -1)] = m['cluster_id']
       else:
         start = min(m['tokens_ids'])
-        end = max(m['tokens_ids'])
+        end = max(m['tokens_ids']) 
         label_dict[m['doc_id']][(start, end)] = m['cluster_id']
     return label_dict    
   

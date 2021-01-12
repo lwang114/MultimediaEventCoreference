@@ -5,79 +5,6 @@ import numpy as np
 import torchvision.models as models
 from models import SimplePairWiseClassifier  
 import json
-
-class NoOp(nn.Module):
-  def __init__(self):
-    super(NoOp, self).__init__()
-
-  def forward(self, x):
-    return x
-
-class BiLSTM(nn.Module):
-  def __init__(self, input_dim, embedding_dim, num_layers=1):
-    super(BiLSTM, self).__init__()
-    self.embedding_dim = embedding_dim
-    self.n_layers = num_layers
-    self.batchnorm1 = nn.BatchNorm2d(1) 
-    self.cnn = nn.Conv2d(1, input_dim, kernel_size=(input_dim, 3), stride=(1,1), padding=(0,1))
-    self.rnn = nn.LSTM(input_size=input_dim, hidden_size=embedding_dim, num_layers=num_layers, batch_first=True, bidirectional=True)
-
-  def forward(self, x, save_features=False):
-    if x.dim() < 3:
-      x = x.unsqueeze(0)
-    B = x.size(0)
-    T = x.size(1)
-    
-    x = x.unsqueeze(1)
-    x = torch.transpose(x, -2, -1)
-    x = self.batchnorm1(x)
-    x = F.relu(self.cnn(x)).squeeze(2).transpose(-2, -1)
-    h0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim))
-    c0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim))
-    if torch.cuda.is_available():
-      h0 = h0.cuda()
-      c0 = c0.cuda()
-    embed, _ = self.rnn(x, (h0, c0))
-    outputs = []
-    for b in range(B):
-      outputs.append(embed[b])
-    outputs = torch.stack(outputs, dim=1).transpose(0, 1)
-    return outputs
-
-class CharCNN(nn.Module):
-  def __init__(self, char_vec, embedding_dim):
-    super(CharRNN, self).__init__()
-    self.char_size = char_vec.shape[0]
-    self.char_dim = char_vec.shape[1]
-    self.embedding_dim = embedding_dim
-
-    # Initialize the character embeddings
-    self.char_emb = nn.Embedding(char_vec.shape[0], char_vec.shape[1])
-    self.char_emb.weight.data.copy_(torch.from_numpy(char_vec))
-
-    self.batchnorm1 = nn.BatchNorm2d(1)
-    self.conv1 = nn.Conv2d(1, 64, kernel_size=(input_dim, 3), stride=(1,1), padding=(0,0))
-    self.conv2 = nn.Conv2d(64, 256, kernel_size=(1,3), stride=(1,1), padding=(0,1))
-    self.conv3 = nn.Conv2d(256, embedding_dim, kernel_size=(1,3), stride=(1,1), padding=(0,2))
-    self.pool = nn.MaxPool2d(kernel_size=(1,3), stride=(1,2), padding=(0,1))
-    
-  def forward(self, x):
-    if x.ndim < 3:
-      x = x.unsqueeze(0)
-    if x.dim() == 3:
-      x = x.unsqueeze(1)
-    
-    B = x.size(0)
-    x = self.char_emb(x)
-    x = torch.transpose(x, -2, -1)
-    x = self.batchnorm1(x)
-    x = F.relu(self.conv1(x))
-    x = F.relu(self.conv2(x))
-    x = F.relu(self.conv3(x))
-    x = x.squeeze(2)
-    x = torch.transpose(x, -2, -1)
-    return x
- 
     
 class MMLDotProductGroundedCoreferencer(nn.Module):
   def __init__(self, config):
@@ -93,11 +20,15 @@ class MMLDotProductGroundedCoreferencer(nn.Module):
     :param score_type: str from {'first', 'both'}
     :return scores: FloatTensor of size (batch size, max num. of [score_type] spans, span embed dim)
     '''
-    mask = first_mask.unsqueeze(-1) * second_mask.unsqueeze(1)
+    mask = first_mask.unsqueeze(2) * second_mask.unsqueeze(1)
+    avg_mask = torch.where(mask != 0, mask, torch.tensor(-1e10, device=first.device))
+    # avg_mask_first = F.softmax(avg_mask, dim=1)
+    # avg_mask_second = F.softmax(avg_mask, dim=2)
+
     att_weights = torch.matmul(first, second.permute(0, 2, 1)) * mask
     att_weights = torch.where(att_weights != 0, att_weights, torch.tensor(-1e10, device=first.device))
 
-    att_weights_first = F.softmax(att_weights * second_mask.unsqueeze(1), dim=-1) * mask
+    att_weights_first = F.softmax(att_weights, dim=-1) * mask
     att_first = torch.matmul(att_weights_first, second)
     score = - (att_weights_first * att_weights).sum(dim=2).mean() # F.mse_loss(first, att_first)
 
