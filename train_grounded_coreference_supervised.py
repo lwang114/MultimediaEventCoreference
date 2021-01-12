@@ -302,12 +302,10 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
         # Compute score for each span pair
         B = doc_embeddings.size(0) 
         for idx in range(B):
-          _, grounding_scores, text_scores = coref_model(text_output[idx, :token_num[idx]].unsqueeze(0), 
-                                                         mention_output[idx, :span_num[idx]].unsqueeze(0),
-                                                         video_output[idx, :region_num[idx]].unsqueeze(0), 
-                                                         torch.ones((1, token_num[idx])),
-                                                         torch.ones((1, span_num[idx])), 
-                                                         torch.ones((1, region_num[idx])))
+          grounded_text_scores, text_scores, grounding_scores = coref_model.module.predict(text_output[idx, :token_num[idx]], 
+                                                         mention_output[idx, :span_num[idx]],
+                                                         video_output[idx, :region_num[idx]],
+                                                         continuous_mappings)
           first_grounding_idx, second_grounding_idx, pairwise_grounding_labels = get_pairwise_labels(text_labels[idx, :span_num[idx]].unsqueeze(0), 
                                                                                                      img_labels[idx, :region_num[idx]].unsqueeze(0), 
                                                                                                      is_training=False, device=device)
@@ -315,8 +313,8 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
                                                                                            is_training=False, device=device)
           # TODO clusters, scores = coref_model.module.predict_cluster(text_output[idx], video_output[idx],\
           #                                                      first_idx, second_idx)
-          all_text_scores.append(text_scores.flatten())
-          all_text_labels.append(pairwise_text_labels.flatten().to(torch.int))
+          all_text_scores.append(text_scores)
+          all_text_labels.append(pairwise_text_labels.to(torch.int))
           all_grounding_scores.append(grounding_scores.flatten())             
           all_grounding_labels.append(pairwise_grounding_labels.flatten().to(torch.int)) 
           
