@@ -14,7 +14,8 @@ import numpy as np
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
 from models import SpanEmbedder, SimplePairWiseClassifier
-from joint_supervised_grounded_coreference import JointSupervisedGroundedCoreferencer, BiLSTM
+from joint_supervised_grounded_coreference import JointSupervisedGroundedCoreferencer
+from text_models import BiLSTM, NoOp
 from corpus_supervised import SupervisedGroundingFeatureDataset
 from corpus_supervised_glove import SupervisedGroundingGloveFeatureDataset
 from evaluator import Evaluation, RetrievalEvaluation
@@ -137,6 +138,9 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
   if not isinstance(text_model, torch.nn.DataParallel):
     text_model = nn.DataParallel(text_model)
 
+  if not isinstance(mention_model, torch.nn.DataParallel):
+    mention_model = nn.DataParallel(mention_model)
+
   if not isinstance(image_model, torch.nn.DataParallel):
     image_model = nn.DataParallel(image_model)
   
@@ -166,6 +170,9 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
   # Start training
   total_loss = 0.
   total = 0.
+  best_text_f1 = 0.
+  best_grounding_f1 = 0.
+  best_retrieval_recall = 0.
   begin_time = time.time()
   if args.evaluate_only:
     config.epochs = 0
@@ -233,152 +240,177 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
 
     torch.save(text_model.module.state_dict(), '{}/text_model.{}.pth'.format(args.exp_dir, epoch))
     torch.save(image_model.module.state_dict(), '{}/image_model.{}.pth'.format(args.exp_dir, epoch))
+    torch.save(mention_model.module.state_dict(), '{}/mention_model.{}.pth'.format(args.exp_dir, epoch))
     torch.save(coref_model.module.text_scorer.state_dict(), '{}/text_scorer.{}.pth'.format(args.exp_dir, epoch))
  
     if epoch % 5 == 0:
       task = config.get('task', 'coreference')
-      if task == 'coreference':
-        test(text_model, mention_model, image_model, coref_model, test_loader, args)
-      elif task == 'retrieval':
-        test_retrieve(text_model, image_model, coref_model, test_loader, args)
-      elif task == 'both':
-        test_retrieve(text_model, image_model, coref_model, test_loader, args)
-        test(text_model, mention_model, image_model, coref_model, test_loader, args)
+      if task in ('coreference', 'both'):
+        text_f1, weight = test(text_model, mention_model, image_model, coref_model, test_loader, args)
+        if text_f1 > best_text_f1:
+          best_text_f1 = text_f1
+          torch.save(text_model.module.state_dict(), '{}/best_text_model.pth'.format(args.exp_dir))
+          torch.save(image_model.module.state_dict(), '{}/best_image_model.pth'.format(args.exp_dir))
+          torch.save(mention_model.module.state_dict(), '{}/best_mention_model.pth'.format(args.exp_dir))
+          torch.save(coref_model.module.text_scorer.state_dict(), '{}/best_text_scorer.pth'.format(args.exp_dir))
+        print('Best text coreference F1={}'.format(best_text_f1))
+      elif task in ('retrieval', 'both'):
+        I2S_r10, S2I_r10 = test_retrieve(text_model, image_model, coref_model, test_loader, args)
+        if (I2S_r10 + S2I_r10) / 2 > best_retrieval_recall:
+          best_retrieval_recall = (I2S_r10 + S2I_r10) / 2 
+        print('Best avg. Recall@10={}'.format((I2S_r10 + S2I_r10) / 2))
+
   if args.evaluate_only:
     task = config.get('task', 'coreference')
     print(task)
     task = config.get('task', 'coreference')
-    if task == 'coreference':
-      test(text_model, mention_model, image_model, coref_model, test_loader, args)
-    elif task == 'retrieval':
-      test_retrieve(text_model, image_model, coref_model, test_loader, args)
-    elif task == 'both':
-      test_retrieve(text_model, image_model, coref_model, test_loader, args)
-      test(text_model, mention_model, image_model, coref_model, test_loader, args)
+    if task in ('coreference', 'both'):
+      text_f1, weight = test(text_model, mention_model, image_model, coref_model, test_loader, args)
+    if task in ('retrieval', 'both'):
+      I2S_r10, S2I_r10 = test_retrieve(text_model, image_model, coref_model, test_loader, args)
+
 
 def test(text_model, mention_model, image_model, coref_model, test_loader, args):
     config = pyhocon.ConfigFactory.parse_file(args.config)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     documents = test_loader.dataset.documents
-    all_grounding_scores = []
-    all_grounding_labels = []
-    all_text_scores = []
-    all_text_labels = []
+    best_f1 = 0.
+    best_weight = 0.
+
     text_model.eval()
     image_model.eval()
     coref_model.eval()
-    with torch.no_grad(): 
-      pred_text_dicts = []
-      pred_grounding_dicts = []
-      for i, batch in enumerate(test_loader):
-        doc_embeddings, start_mappings, end_mappings, continuous_mappings,\
-        width, videos,\
-        text_labels, img_labels,\
-        text_mask, span_mask, video_mask = batch   
+    with torch.no_grad():
+      for w in [i / 10 for i in range(10)]:
+        all_grounding_scores = []
+        all_grounding_labels = []
+        all_text_only_scores = []
+        all_text_scores = []
+        all_text_labels = []
 
-        token_num = text_mask.sum(-1).long()
-        span_num = span_mask.sum(-1).long()
-        region_num = video_mask.sum(-1).long()
-        doc_embeddings = doc_embeddings.to(device)
-        start_mappings = start_mappings.to(device)
-        end_mappings = end_mappings.to(device)
-        continuous_mappings = continuous_mappings.to(device)
-        width = width.to(device)
-        videos = videos.to(device)
-        text_labels = text_labels.to(device)
-        img_labels = img_labels.to(device)
-        span_mask = span_mask.to(device)
-        video_mask = video_mask.to(device)
+        print('Image-text tradeoff weight={}'.format(w)) 
+        pred_text_dicts = []
+        pred_grounding_dicts = []
+        for i, batch in enumerate(test_loader):
+          doc_embeddings, start_mappings, end_mappings, continuous_mappings,\
+          width, videos,\
+          text_labels, img_labels,\
+          text_mask, span_mask, video_mask = batch   
 
-        # Extract span and video embeddings
-        text_output = text_model(doc_embeddings)
-        video_output = image_model(videos)
+          token_num = text_mask.sum(-1).long()
+          span_num = span_mask.sum(-1).long()
+          region_num = video_mask.sum(-1).long()
+          doc_embeddings = doc_embeddings.to(device)
+          start_mappings = start_mappings.to(device)
+          end_mappings = end_mappings.to(device)
+          continuous_mappings = continuous_mappings.to(device)
+          width = width.to(device)
+          videos = videos.to(device)
+          text_labels = text_labels.to(device)
+          img_labels = img_labels.to(device)
+          span_mask = span_mask.to(device)
+          video_mask = video_mask.to(device)
 
-        start_embeddings = torch.matmul(start_mappings, text_output)
-        end_embeddings = torch.matmul(end_mappings, text_output)
-        start_end_embeddings = torch.cat([start_embeddings, end_embeddings], dim=-1)
-        continuous_embeddings = torch.matmul(continuous_mappings, text_output.unsqueeze(1))
-        mention_output = mention_model(start_end_embeddings, continuous_embeddings, width)
+          # Extract span and video embeddings
+          text_output = text_model(doc_embeddings)
+          video_output = image_model(videos)
 
-        # Compute score for each span pair
-        B = doc_embeddings.size(0) 
-        for idx in range(B):
-          grounded_text_scores, text_scores, grounding_scores = coref_model.module.predict(text_output[idx, :token_num[idx]], 
-                                                         mention_output[idx, :span_num[idx]],
-                                                         video_output[idx, :region_num[idx]],
-                                                         continuous_mappings)
-          first_grounding_idx, second_grounding_idx, pairwise_grounding_labels = get_pairwise_labels(text_labels[idx, :span_num[idx]].unsqueeze(0), 
-                                                                                                     img_labels[idx, :region_num[idx]].unsqueeze(0), 
-                                                                                                     is_training=False, device=device)
-          first_text_idx, second_text_idx, pairwise_text_labels = get_pairwise_text_labels(text_labels[idx, :span_num[idx]].unsqueeze(0), 
-                                                                                           is_training=False, device=device)
-          # TODO clusters, scores = coref_model.module.predict_cluster(text_output[idx], video_output[idx],\
-          #                                                      first_idx, second_idx)
-          all_text_scores.append(text_scores)
-          all_text_labels.append(pairwise_text_labels.to(torch.int))
-          all_grounding_scores.append(grounding_scores.flatten())             
-          all_grounding_labels.append(pairwise_grounding_labels.flatten().to(torch.int)) 
-          
-          global_idx = i * test_loader.batch_size + idx
-          doc_id = test_loader.dataset.doc_ids[global_idx] 
-          origin_tokens = [token[2] for token in test_loader.dataset.origin_tokens[global_idx]]
-          candidate_start_ends = test_loader.dataset.origin_candidate_start_ends[global_idx]
-          image_labels = test_loader.dataset.image_labels[global_idx]
-          # print(doc_id, clusters.values(), candidate_start_ends.tolist())
-          # TODO doc_name = doc_id
-          document = {doc_id:test_loader.dataset.documents[doc_id]}
-          # write_output_file(document, clusters, [doc_id]*candidate_start_ends.shape[0],
-          #                  candidate_start_ends[:, 0].tolist(),
-          #                  candidate_start_ends[:, 1].tolist(),
-          #                  os.path.join(config['model_path'], 'pred_conll'),
-          #                  doc_name, False, True)
-          pred_text_dicts.append({'doc_id': doc_id,
-                             'first_idx': first_text_idx.cpu().detach().numpy().tolist(),
-                             'second_idx': second_text_idx.cpu().detach().numpy().tolist(),
-                             'tokens': origin_tokens,
-                             'mention_spans': candidate_start_ends.tolist(),
-                             'score': text_scores.flatten().cpu().detach().numpy().tolist(),
-                             'pairwise_label': pairwise_text_labels.cpu().detach().numpy().tolist()})
+          start_embeddings = torch.matmul(start_mappings, text_output)
+          end_embeddings = torch.matmul(end_mappings, text_output)
+          start_end_embeddings = torch.cat([start_embeddings, end_embeddings], dim=-1)
+          continuous_embeddings = torch.matmul(continuous_mappings, text_output.unsqueeze(1))
+          mention_output = mention_model(start_end_embeddings, continuous_embeddings, width)
 
-          pred_grounding_dicts.append({'doc_id': doc_id,
-                             'first_idx': first_grounding_idx.cpu().detach().numpy().tolist(),
-                             'second_idx': second_grounding_idx.cpu().detach().numpy().tolist(),
-                             'tokens': origin_tokens,
-                             'mention_spans': candidate_start_ends.tolist(),
-                             'image_labels': image_labels,
-                             'score': grounding_scores.flatten().cpu().detach().numpy().tolist(),
-                             'pairwise_label': pairwise_grounding_labels.cpu().detach().numpy().tolist()})
-      all_grounding_scores = torch.cat(all_grounding_scores)
-      all_grounding_labels = torch.cat(all_grounding_labels)
-      all_text_scores = torch.cat(all_text_scores)
-      all_text_labels = torch.cat(all_text_labels)
-      
-      strict_grounding_preds = (all_grounding_scores > 0).to(torch.int)
-      eval = Evaluation(strict_grounding_preds, all_grounding_labels.to(device))
-      print('Number of crossmedia predictions: {}/{}'.format(strict_grounding_preds.sum(), len(strict_grounding_preds)))
-      print('Number of crossmedia positive pairs: {}/{}'.format(len((all_grounding_labels == 1).nonzero()),
-                                                     len(all_grounding_labels)))
-      print('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
-                                                                eval.get_precision(), eval.get_f1()))
-      logger.info('Number of crossmedia predictions: {}/{}'.format(strict_grounding_preds.sum(), len(strict_grounding_preds)))
-      logger.info('Number of crossmedia positive pairs: {}/{}'.format(len((all_grounding_labels == 1).nonzero()),
-                                                           len(all_grounding_labels)))
-      logger.info('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
-                                                                      eval.get_precision(), eval.get_f1()))
+          # Compute score for each span pair
+          B = doc_embeddings.size(0) 
+          for idx in range(B):
+            if span_num[idx] <= 1:
+              print('No coref labels for doc {} with {} spans'.format(idx, span_num[idx]))
+              continue
+            grounded_text_scores, text_scores, grounding_scores = coref_model.module.predict(text_output[idx, :token_num[idx]], 
+                                                             mention_output[idx, :span_num[idx]],
+                                                             video_output[idx, :region_num[idx]],
+                                                             continuous_mappings[idx, :span_num[idx], :, :token_num[idx]],
+                                                             w=w)
+            first_grounding_idx, second_grounding_idx, pairwise_grounding_labels = get_pairwise_labels(text_labels[idx, :span_num[idx]].unsqueeze(0), 
+                                                                                                       img_labels[idx, :region_num[idx]].unsqueeze(0), 
+                                                                                                       is_training=False, device=device)
+            first_text_idx, second_text_idx, pairwise_text_labels = get_pairwise_text_labels(text_labels[idx, :span_num[idx]].unsqueeze(0), 
+                                                                                             is_training=False, device=device)
+            # TODO clusters, scores = coref_model.module.predict_cluster(text_output[idx], video_output[idx],\
+            #                                                      first_idx, second_idx)
+            all_text_only_scores.append(text_scores.cpu())
+            all_text_scores.append(grounded_text_scores.cpu())
+            all_text_labels.append(pairwise_text_labels.flatten().to(torch.int).cpu())
+            all_grounding_scores.append(grounding_scores.flatten().cpu())             
+            all_grounding_labels.append(pairwise_grounding_labels.flatten().to(torch.int).cpu()) 
+            
+            global_idx = i * test_loader.batch_size + idx
+            doc_id = test_loader.dataset.doc_ids[global_idx] 
+            origin_tokens = [token[2] for token in test_loader.dataset.origin_tokens[global_idx]]
+            candidate_start_ends = test_loader.dataset.origin_candidate_start_ends[global_idx]
+            image_labels = test_loader.dataset.image_labels[global_idx]
+            # print(doc_id, clusters.values(), candidate_start_ends.tolist())
+            # TODO doc_name = doc_id
+            document = {doc_id:test_loader.dataset.documents[doc_id]}
+            # write_output_file(document, clusters, [doc_id]*candidate_start_ends.shape[0],
+            #                  candidate_start_ends[:, 0].tolist(),
+            #                  candidate_start_ends[:, 1].tolist(),
+            #                  os.path.join(config['model_path'], 'pred_conll'),
+            #                  doc_name, False, True)
+            pred_text_dicts.append({'doc_id': doc_id,
+                               'first_idx': first_text_idx.cpu().detach().numpy().tolist(),
+                               'second_idx': second_text_idx.cpu().detach().numpy().tolist(),
+                               'tokens': origin_tokens,
+                               'mention_spans': candidate_start_ends.tolist(),
+                               'score': text_scores.flatten().cpu().detach().numpy().tolist(),
+                               'pairwise_label': pairwise_text_labels.cpu().detach().numpy().tolist()})
 
-      strict_text_preds = (all_text_scores > 0).to(torch.int)
-      eval = Evaluation(strict_text_preds, all_text_labels.to(device))
-      print('Number of text predictions: {}/{}'.format(strict_text_preds.sum(), len(strict_text_preds)))
-      print('Number of text positive pairs: {}/{}'.format(len((all_text_labels == 1).nonzero()),
-                                                     len(all_text_labels)))
-      print('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
-                                                                eval.get_precision(), eval.get_f1()))
-      logger.info('Number of text predictions: {}/{}'.format(strict_text_preds.sum(), len(strict_text_preds)))
-      logger.info('Number of text positive pairs: {}/{}'.format(len((all_text_labels == 1).nonzero()),
-                                                           len(all_text_labels)))
-      logger.info('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
-                                                                      eval.get_precision(), eval.get_f1()))
-      json.dump(pred_text_dicts, open(os.path.join(args.exp_dir, '{}_prediction_text_coref.json'.format(args.config.split('.')[0].split('/')[-1])), 'w'), indent=4)
-      json.dump(pred_grounding_dicts, open(os.path.join(args.exp_dir, '{}_prediction_crossmedia_coref.json'.format(args.config.split('.')[0].split('/')[-1])), 'w'), indent=4)
+            pred_grounding_dicts.append({'doc_id': doc_id,
+                               'first_idx': first_grounding_idx.cpu().detach().numpy().tolist(),
+                               'second_idx': second_grounding_idx.cpu().detach().numpy().tolist(),
+                               'tokens': origin_tokens,
+                               'mention_spans': candidate_start_ends.tolist(),
+                               'image_labels': image_labels,
+                               'score': grounding_scores.flatten().cpu().detach().numpy().tolist(),
+                               'pairwise_label': pairwise_grounding_labels.cpu().detach().numpy().tolist()})
+        all_grounding_scores = torch.cat(all_grounding_scores)
+        all_grounding_labels = torch.cat(all_grounding_labels)
+        all_text_scores = torch.cat(all_text_scores)
+        all_text_labels = torch.cat(all_text_labels)
+        
+        strict_grounding_preds = (all_grounding_scores > 0).to(torch.int)
+        eval = Evaluation(strict_grounding_preds, all_grounding_labels)
+        print('Number of crossmedia predictions: {}/{}'.format(strict_grounding_preds.sum(), len(strict_grounding_preds)))
+        print('Number of crossmedia positive pairs: {}/{}'.format(len((all_grounding_labels == 1).nonzero()),
+                                                       len(all_grounding_labels)))
+        print('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
+                                                                  eval.get_precision(), eval.get_f1()))
+        logger.info('Number of crossmedia predictions: {}/{}'.format(strict_grounding_preds.sum(), len(strict_grounding_preds)))
+        logger.info('Number of crossmedia positive pairs: {}/{}'.format(len((all_grounding_labels == 1).nonzero()),
+                                                             len(all_grounding_labels)))
+        logger.info('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
+                                                                        eval.get_precision(), eval.get_f1()))
+
+        strict_text_preds = (all_text_scores > 0).to(torch.int)
+        eval = Evaluation(strict_text_preds, all_text_labels)
+        print('Number of text predictions: {}/{}'.format(strict_text_preds.sum(), len(strict_text_preds)))
+        print('Number of text positive pairs: {}/{}'.format(len((all_text_labels == 1).nonzero()),
+                                                       len(all_text_labels)))
+        print('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
+                                                                  eval.get_precision(), eval.get_f1()))
+        logger.info('Number of text predictions: {}/{}'.format(strict_text_preds.sum(), len(strict_text_preds)))
+        logger.info('Number of text positive pairs: {}/{}'.format(len((all_text_labels == 1).nonzero()),
+                                                             len(all_text_labels)))
+        logger.info('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
+                                                                        eval.get_precision(), eval.get_f1()))
+        if eval.get_f1() > best_f1:
+          best_f1 = eval.get_f1()
+          best_weight = w
+          json.dump(pred_text_dicts, open(os.path.join(args.exp_dir, '{}_prediction_text_coref.json'.format(args.config.split('.')[0].split('/')[-1])), 'w'), indent=4)
+          json.dump(pred_grounding_dicts, open(os.path.join(args.exp_dir, '{}_prediction_crossmedia_coref.json'.format(args.config.split('.')[0].split('/')[-1])), 'w'), indent=4)
+ 
+    return best_f1, best_weight
 
 def test_retrieve(text_model, image_model, coref_model, test_loader, args):
   config = pyhocon.ConfigFactory.parse_file(args.config)
@@ -425,23 +457,47 @@ def test_retrieve(text_model, image_model, coref_model, test_loader, args):
       text_masks.extend(torch.split(text_mask, 1))
       video_masks.extend(torch.split(video_mask, 1))
 
-    I2S_idxs, S2I_idxs = coref_model.module.retrieve(text_embeddings, video_embeddings, text_masks, video_masks)
+    I2S_idxs, S2I_idxs = coref_model.module.retrieve(text_embeddings, video_embeddings, text_masks, video_masks, k=50)
+    with open(os.path.join(args.exp_dir, 'I2S.txt'), 'w') as f_i2s,\
+         open(os.path.join(args.exp_dir, 'S2I.txt'), 'w') as f_s2i:
+      for idx, (i2s_idxs, s2i_idxs) in enumerate(zip(I2S_idxs.cpu().detach().numpy().tolist(), S2I_idxs.cpu().detach().numpy().tolist())):
+        doc_id = test_loader.dataset.doc_ids[idx]
+        tokens = [t[2] for t in test_loader.dataset.origin_tokens[idx]]
+        f_i2s.write('Query: {}, {}\n'.format(doc_id, ' '.join(tokens)))
+        f_s2i.write('Query: {}, {}\n'.format(doc_id, ' '.join(tokens)))
+        for i2s_idx in i2s_idxs:
+          doc_id = test_loader.dataset.doc_ids[i2s_idx]
+          tokens = [t[2] for t in test_loader.dataset.origin_tokens[i2s_idx]]
+          f_i2s.write('Key: {}, {}\n'.format(doc_id, ' '.join(tokens)))
+        f_i2s.write('\n')
+
+        for s2i_idx in s2i_idxs:
+          doc_id = test_loader.dataset.doc_ids[s2i_idx]
+          tokens = [t[2] for t in test_loader.dataset.origin_tokens[s2i_idx]]
+          f_s2i.write('Key: {}, {}\n'.format(doc_id, ' '.join(tokens)))
+        f_s2i.write('\n')
+
     I2S_eval = RetrievalEvaluation(I2S_idxs)
     S2I_eval = RetrievalEvaluation(S2I_idxs)
     I2S_r1 = I2S_eval.get_recall_at_k(1) 
     I2S_r5 = I2S_eval.get_recall_at_k(5)
     I2S_r10 = I2S_eval.get_recall_at_k(10)
+    I2S_r30 = I2S_eval.get_recall_at_k(30)
+    I2S_r50 = I2S_eval.get_recall_at_k(50)
+
     S2I_r1 = S2I_eval.get_recall_at_k(1) 
     S2I_r5 = S2I_eval.get_recall_at_k(5)
     S2I_r10 = S2I_eval.get_recall_at_k(10)
+    S2I_r30 = S2I_eval.get_recall_at_k(30)
+    S2I_r50 = S2I_eval.get_recall_at_k(50)
 
     print('Number of article-video pairs: {}'.format(I2S_idxs.size(0)))
-    print('I2S recall@1={}\tI2S recall@5={}\tI2S recall@10={}'.format(I2S_r1, I2S_r5, I2S_r10)) 
-    print('S2I recall@1={}\tS2I recall@5={}\tS2I recall@10={}'.format(S2I_r1, S2I_r5, S2I_r10)) 
+    print('I2S recall@1={}\tI2S recall@5={}\tI2S recall@10={}\tI2S recall@30={}\tI2S recall@50={}'.format(I2S_r1, I2S_r5, I2S_r10, I2S_r30, I2S_r50)) 
+    print('S2I recall@1={}\tS2I recall@5={}\tS2I recall@10={}\tS2I recall@30={}\tS2I recall@50={}'.format(S2I_r1, S2I_r5, S2I_r10, S2I_r30, S2I_r50)) 
     logger.info('Number of article-video pairs: {}'.format(I2S_idxs.size(0)))
-    logger.info('I2S recall@1={}\tI2S recall@5={}\tI2S recall@10={}'.format(I2S_r1, I2S_r5, I2S_r10)) 
-    logger.info('S2I recall@1={}\tS2I recall@5={}\tS2I recall@10={}'.format(S2I_r1, S2I_r5, S2I_r10)) 
-
+    logger.info('I2S recall@1={}\tI2S recall@5={}\tI2S recall@10={}\tI2S recall@30={}\tI2S recall@50={}'.format(I2S_r1, I2S_r5, I2S_r10, I2S_r30, I2S_r50)) 
+    logger.info('S2I recall@1={}\tS2I recall@5={}\tS2I recall@10={}\tS2I recall@30={}\tS2I recall@50={}'.format(S2I_r1, S2I_r5, S2I_r10, S2I_r30, S2I_r50)) 
+  return I2S_r10, S2I_r10
 
 
 if __name__ == '__main__':
@@ -506,18 +562,26 @@ if __name__ == '__main__':
   else:
     text_model = BiLSTM(1024, embedding_dim // 2)
 
-
   if config['img_feat_type'] == 'resnet34':
     image_model = nn.Linear(512, embedding_dim)
-  else: 
+  elif config['img_feat_type'] == 'mmaction_feat': 
+    image_model = nn.Linear(400, 400)
+  else:
     image_model = nn.Linear(2048, embedding_dim)
-  mention_model = SpanEmbedder(config)
+  mention_model = SpanEmbedder(config, device)
   coref_model = JointSupervisedGroundedCoreferencer(config).to(device)
 
   if config['training_method'] in ('pipeline', 'continue'):
-      text_model.load_state_dict(torch.load(config['span_repr_path'], map_location=device))
-      image_model.load_state_dict(torch.load(config['image_repr_path'], map_location=device))
-      coref_model.text_scorer.load_state_dict(torch.load(config['pairwise_scorer_path'], map_location=device))
-  
+      text_model.load_state_dict(torch.load(config['text_model_path'], map_location=device))
+      for p in text_model.parameters():
+        p.requires_grad = False
+      # image_model.load_state_dict(torch.load(config['image_model_path'], map_location=device))
+      mention_model.load_state_dict(torch.load(config['mention_model_path']))
+      for p in mention_model.parameters():
+        p.requires_grad = False
+      coref_model.text_scorer.load_state_dict(torch.load(config['coref_model_path'], map_location=device))
+      for p in coref_model.parameters():
+        p.requires_grad = False
+
   # Training
   train(text_model, mention_model, image_model, coref_model, train_loader, test_loader, args)
