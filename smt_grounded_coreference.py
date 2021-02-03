@@ -1,172 +1,218 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import numpy as np
-import torchvision.models as models
-from models import SimplePairWiseClassifier, SymbolicPairWiseClassifier 
+import os
+import json
+import logging
+from itertools import combinations
+from evaluator import Evaluation
+from conll import write_output_file
 
-class ResNet152(nn.Module):
-  def __init__(self, embedding_dim=1024, device=torch.device('cpu')):
-    super(ResNet152, self).__init__()
-    net = getattr(models, 'resnet152')(pretrained=True)
-    b = list(net.children())
-    self.backbone = nn.Sequential(*b[:-2])
-    self.pooler = nn.Sequential(*[b[-2]])
-    self.embedder = nn.Linear(2048, embedding_dim)
-    
-    for p in self.backbone.parameters():
-      p.requires_grad = False
-    for p in self.pooler.parameters():
-      p.requires_grad = False
-     
-    self.device = device
-    self.to(device)
-     
-  def forward(self, images, mask=None, return_feat=False):    
-    images = images.to(self.device)
-    if mask is not None:
-      mask = mask.to(self.device)
-    
-    ndim = images.ndim
-    B, L = images.size(0), images.size(1)
-    if ndim == 5:
-      H, W, C = images.size(2), images.size(3), images.size(4)
-      images = images.view(B*L, H, W, C)
+EPS = 1e-40
+logger = logging.getLogger(__name__)
+console = logging.StreamHandler()
+logger.addHandler(console)
+logger.setLevel(logging.INFO)
+format_str = '%(asctime)s\t%(message)s'
+console.setFormatter(logging.Formatter(format_str))
 
-    fmap = self.backbone(images)
-    fmap = self.pooler(fmap)
-    emb = self.embedder(fmap.permute(0, 2, 3, 1))
-
-    _, He, We, D = emb.size()
-    if ndim == 5:
-      emb = emb.view(B, L*He*We, D)
-      fmap = fmap.view(B, L, -1, He, We)
-      if mask is not None:
-        mask = mask.unsqueeze(-1).repeat(1, 1, He*We).flatten(start_dim=1)
-    else:
-      emb = emb.view(B, He*We, D)
-    
-    if return_feat:
-      return emb, fmap, mask
-    else: 
-      return emb, mask
-
-class NoOp(nn.Module):
-  def __init__(self):
-    super(NoOp, self).__init__()
-
-  def forward(self, x, mask=None, return_feat=False)
-    if return_feat:
-      return x, x, mask
-    else:
-      return x, mask
-
-class GaussianSoftmax(nn.Module):
-  def __init__(self, in_features, out_features):
-    super(GaussianSoftmax, self).__init__()
-    self.K = out_features
-    self.d = in_features
-    self.codebook = nn.Parameter(torch.empty(in_features, out_features, requires_grad=True))
-    nn.init.xavier_uniform_(self.codebook)
-
-  def forward(self, x):
-    if x.ndim() <= 2:
-      x = x.unsqueeze(0) 
-    score = - torch.mean((x.unsqueeze(-2) - self.codebook) ** 2, dim=-1) 
-    out = F.softmax(score)
-    return out
-
-
-class SMTGroundedCoreferencer(nn.Module):
-  def __init__(self, config):
-    super(GroundedCoreferencer, self).__init__()
-    self.coref_scorer = SymbolicPairWiseClassifier(config) 
-    self.input_layer = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2 
-    if config.with_mention_width:
-      self.input_layer += config.embedding_dimension
-    
-    self.text_scorer = self.GaussianSoftmax(self.input_layer, config.n_text_clusters)
-    self.image_scorer = self.GaussianSoftmax(self.input_layer, config.n_image_clusters)
-    self.grounding_scorer = self.score_grounding
-    self.translate_logits = nn.Parameter(torch.empty(config.n_text_clusters, config.n_image_clusters, ), requires_grad=True)
-    nn.init.xavier_uniform_(self.translate_logits)
-    
-    self.text_only_decode = config.get('text_only_decode', False)
-
-  def score_image(self, first, second, first_mask, second_mask, score_type='both'):
+class SMTCoreferencer:
+  def __init__(self, doc_path, mention_path, out_path):
     '''
-    :param first: FloatTensor of size (batch size, max num. of first spans, span embed dim)
-    :param second: FloatTensor of size (batch size, max num. of second spans, span embed dim)
-    :param score_type: str from {'first', 'both'}
-    :return scores: FloatTensor of size (batch size, max num. of [score_type] spans, span embed dim)
-    '''
-    translate_prob = F.softmax(self.translate_logits)
-    concept_probs = torch.matmul(first, translate_prob)
-    aligns_probs = torch.matmul(concept_probs, second.permute(0, 2, 1)))
-    first_map = F.softmax(1e14*first_mask)
-    align_probs = torch.matmul(first_map.unsqueeze(-2), aligns_probs, dim=1)
-    nll = -torch.matmul(torch.log(align_probs), second_mask.unsqueeze(-1)).squeeze(-1)
-    return nll, concept_probs
-
-  def forward(self, span_embeddings, image_embeddings, span_mask, image_mask): # entity_mappings, trigger_mappings,
-    '''
-    :param span_embeddings: FloatTensor of size (batch size, max num. of spans, span embed dim),
-    :param image_embeddings: FloatTensor of size (batch size, max num. of ROIs, image embed dim), 
-    :param entity_mappings: LongTensor of size (batch size, max num. of entities, num. of head entity mentions for coreference),
-    :param event_mappings: LongTensor of size (batch size, max num. of head event mentions for coreference),
-    :return score: FloatTensor of size (batch size,),
-    '''
-    self.image_scorer.train()
-    self.text_scorer.train()
-    self.coref_scorer.train()
-    n = span_embeddings.size(0)
-    S = torch.zeros((n, n), dtype=torch.float, device=span_embeddings.device)
-    for s_idx in range(n):
-      for v_idx in range(n):
-        S[s_idx, v_idx] = self.calculate_loss(span_embeddings[s_idx].unsqueeze(0),
-                                              image_embeddings[v_idx].unsqueeze(0),
-                                              span_mask[s_idx].unsqueeze(0),
-                                              image_mask[v_idx].unsqueeze(0))
-    loss = torch.mean(S.diag().unsqueeze(-1) - S) + torch.mean(S.diag().unsqueeze(-1) - S.t())
-    return loss
-
-  def calculate_loss(self, span_emb, image_emb, span_mask, image_mask):
-    B = span_emb.size(0)
-    # Compute visual grounding scores   
-    losses , _ = self.grounding_scorer(span_emb, image_emb, span_mask, image_mask) 
-    return torch.mean(losses)
+    Unsupervised coreference system based on 
+    ``Unsupervised Ranking Model for Entity Coreference Resolution``, 
+    X. Ma, Z. Liu and E. Hovy, NAACL, 2016.
     
-  def predict(self, first_span_embeddings, first_image_embeddings, 
-              first_span_mask, first_image_mask,
-              second_span_embeddings, second_image_embeddings,
-              second_span_mask, second_image_mask):
+    :param doc_path: path to the mapping of
+            [doc_id]: list of [sent id, token id, token, is entity/event]
+    :param mention_path: path to the list of dicts of:
+            {'doc_id': str,
+             'sentence_id': str,
+             'tokens_ids': list of ints,
+             'cluster_id': '0',
+             'tokens': str, tokens concatenated with space} 
     '''
-    :param span_embeddings: FloatTensor of size (num. of spans, span embed dim),
-    :param image_embeddings: FloatTensor of size (num. of ROIs, image embed dim),
-    '''
-    first_span_embeddings = first_span_embeddings.unsqueeze(0)
-    first_image_embeddings = first_image_embeddings.unsqueeze(0)  
-    first_span_mask = first_span_mask.unsqueeze(0)
-    first_image_mask = first_image_mask.unsqueeze(0)
-    second_span_embeddings = second_span_embeddings.unsqueeze(0)
-    second_image_embeddings = second_image_embeddings.unsqueeze(0)
-    second_span_mask = second_span_mask.unsqueeze(0)
-    second_image_mask = second_image_mask.unsqueeze(0)
-    
-    self.coref_scorer.eval()
-    self.image_scorer.eval()
-    self.text_scorer.eval()
-    with torch.no_grad(): # TODO
-      first_concept_probs = self.text_scorer(first_span_embeddings)
-      second_concept_probs = self.text_scorer(second_span_embeddings)
+    self.doc_path = doc_path
+    self.mention_path = mention_path
+    self.out_path = out_path
+    if not os.path.exists(self.out_path):
+      os.makedirs(self.out_path)
 
-      first_span_embeddings = first_span_embeddings.squeeze(0) 
-      first_concept_probs = first_concept_probs.squeeze(0)
-      second_span_embeddings = second_span_embeddings.squeeze(0)
-      second_concept_probs = second_concept_probs.squeeze(0)
+    self.mentions,\
+    self.tokens_ids,\
+    self.cluster_ids,\
+    self.vocabs = self.load_corpus(doc_path, mention_path)
+    self.mention_probs = 1./len(self.vocabs) * np.ones((len(self.vocabs), len(self.vocabs)))
+
+  def load_corpus(self, doc_path, mention_path): # TODO Find head words of each mention
+    '''
+    :returns doc_ids: list of str
+    :returns mentions: list of list of str
+    :returns tokens_ids: [[[tokens_ids[s][i][j] for j in range(L_mention)] 
+                          for i in range(N_mentions)] for s in range(N_sents)]
+    :returns cluster_ids: list of list of ints
+    :returns vocabs: mapping from word to int
+    '''
+    documents = json.load(open(doc_path))
+    mention_list = json.load(open(mention_path))
+    mention_dict = {} 
+    mentions = []
+    spans = []
+    cluster_ids = []
+    vocabs = {'###UNK###': 0}
+
+    for m in mention_list:
+      # Create a mapping from span to a tuple of (token, cluster_id) 
+      tokens_ids = m['tokens_ids']
+      span = (min(tokens_ids), max(tokens_ids))
+      cluster_id = m['cluster_id']
+      if not m['doc_id'] in mention_dict:
+        mention_dict[m['doc_id']] = {}
+      mention_dict[m['doc_id']][span] = cluster_id  
+        
+    for doc_id in sorted(documents): # XXX
+      mentions.append([])
+      spans.append([])
+      cluster_ids.append([])
+
+      tokens = [t[2] for t in documents[doc_id]]
+      for span in sorted(mention_dict[doc_id]):
+        cluster_id = mention_dict[doc_id][span]
+        mention_token = tokens[span[0]:span[1]+1]
+        for t in mention_token:
+          if not t in vocabs:
+            vocabs[t] = len(vocabs)
+        mentions[-1].append(mention_token)
+        spans[-1].append(span)
+        cluster_ids[-1].append(cluster_id)
     
-      scores = self.coref_scorer(first_span_embeddings, 
-                                 second_span_embeddings, 
-                                 first_concept_probs, 
-                                 second_concept_probs)
-    return scores
+    logger.info('Number of documents = {}'.format(len(mentions)))
+    return mentions, spans, cluster_ids, vocabs
+
+
+  def fit(self, n_epochs=10):
+    for epoch in range(n_epochs):
+      N_c = [np.zeros((len(sent), len(sent))) for sent in self.mentions]
+      N_m = np.zeros((len(self.vocabs), len(self.vocabs)))
+
+      # Compute counts
+      for sent_idx, sent in enumerate(self.mentions):
+        for first_idx in range(len(sent)):
+          for second_idx in range(first_idx + 1):
+            first = self.vocabs[sent[first_idx][-1]]
+            second = self.vocabs[sent[second_idx][-1]]
+            N_c[sent_idx][first_idx, second_idx] += self.mention_probs[first][second]
+        N_c[sent_idx] /= N_c[sent_idx].sum(axis=0) + EPS
+        
+        for first_idx in range(len(sent)):
+          for second_idx in range(first_idx + 1):
+            first = self.vocabs[sent[first_idx][-1]]
+            second = self.vocabs[sent[second_idx][-1]]
+            N_m[first, second] += N_c[sent_idx][first_idx, second_idx]
+
+      # Update mention probs     
+      self.mention_probs = N_m / (N_m.sum(axis=-1, keepdims=True) + EPS)
+
+      # Log stats
+      logger.info('Epoch {}, log likelihood = {:.3f}'.format(epoch, self.log_likelihood()))
+
+      # Compute pairwise coreference scores
+      pairwise_f1 = self.evaluate(self.doc_path,
+                                  self.mention_path, 
+                                  self.out_path)
+  
+  def log_likelihood(self):
+    ll = -np.inf 
+    N = len(self.mentions)
+    for sent_idx, mentions in enumerate(self.mentions): 
+      if sent_idx == 0:
+        ll = 0.
+      
+      for m_idx, second in enumerate(mentions):
+        p = 0.
+        for _, first in enumerate(mentions[:m_idx+1]):
+          first_idx = self.vocabs.get(first[-1], 0) # TODO Use head word
+          second_idx = self.vocabs.get(second[-1], 0)
+          p += self.mention_probs[first_idx][second_idx] 
+        ll += 1. / N * np.log(p + EPS)
+    return ll
+
+  def predict(self, mentions, spans): 
+    '''
+    :param mentions: a list of list of str,
+    :param spans: a list of tuple of (start idx, end idx)
+    :returns clusters:   
+    '''
+    clusters = {}
+    cluster_labels = {}
+    for m_idx, (mention, span) in enumerate(zip(mentions, spans)):
+      if m_idx == 0:   
+        cluster_labels[m_idx] = 0
+      
+      firsts = [self.vocabs.get(mentions[i][-1], 0) for i in range(m_idx+1)]
+      second = self.vocabs.get(mention[-1], 0)
+      scores = np.asarray([self.mention_probs[first][second] for first in firsts])  # TODO Use head word
+      a_idx = np.argmax(scores)
+
+      # If antecedent is itself, create a new cluster; otherwise
+      # assign to antecedent's cluster
+      if a_idx == m_idx:
+        c_idx = len(clusters)
+        clusters[c_idx] = [m_idx]
+        cluster_labels[m_idx] = c_idx 
+      else:      
+        c_idx = cluster_labels[a_idx]
+        cluster_labels[m_idx] = c_idx
+        clusters[c_idx].append(m_idx)
+
+    return clusters, cluster_labels
+
+  def evaluate(self, doc_path, mention_path, out_path):
+    if not os.path.exists(out_path):
+      os.makedirs(out_path)
+
+    documents = json.load(open(doc_path, 'r')) 
+    doc_ids = sorted(documents)
+    mentions_all, spans_all, cluster_ids_all, _ = self.load_corpus(doc_path, mention_path)
+    
+    preds = []
+    golds = []
+    for doc_id, mentions, spans, cluster_ids in zip(doc_ids, mentions_all, spans_all, cluster_ids_all):
+      # Compute pairwise F1
+      clusters, cluster_labels = self.predict(mentions, spans)
+      pred = [cluster_labels[f] == cluster_labels[s] for f, s in combinations(range(len(spans)), 2)]
+      pred = np.asarray(pred)
+
+      gold = [cluster_ids[f] == cluster_ids[s] for f, s in combinations(range(len(spans)), 2)]
+      gold = np.asarray(gold)
+      preds.extend(pred)
+      golds.extend(gold)
+
+      # Save output files to CoNLL format
+      document = {doc_id:documents[doc_id]}
+      spans = np.asarray(spans)
+      write_output_file(document, clusters,
+                        [doc_id]*len(spans),
+                        spans[:, 0].tolist(),
+                        spans[:, 1].tolist(),
+                        out_path,
+                        doc_id)
+    
+    preds = np.asarray(preds)
+    golds = np.asarray(golds)
+    pairwise_eval = Evaluation(preds, golds) 
+    
+    precision = pairwise_eval.get_precision()
+    recall = pairwise_eval.get_recall()
+    f1 = pairwise_eval.get_f1()
+    logger.info('Pairwise Recall = {:.3f}, Precision = {:.3f}, F1 = {:.3f}'.format(recall, precision, f1))
+    return f1 
+
+if __name__ == '__main__':
+  doc_path_train = 'data/video_m2e2/mentions/train.json'
+  mention_path_train = 'data/video_m2e2/mentions/train_mixed.json'
+  doc_path_test = 'data/video_m2e2/mentions/test.json'
+  mention_path_test = 'data/video_m2e2/mentions/test_mixed.json'
+  out_path = 'exp/smt/pred_mixed'
+
+  model = SMTCoreferencer(doc_path_train, mention_path_train, out_path=out_path+'_train')
+  model.fit()
+  model.evaluate(doc_path_test, mention_path_test, out_path=out_path+'_test')
