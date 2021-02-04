@@ -37,6 +37,7 @@ class SMTCoreferencer:
     self.doc_path = doc_path
     self.mention_path = mention_path
     self.out_path = out_path
+    self.max_mention_length = 15 # Maximum length of a mention
     if not os.path.exists(self.out_path):
       os.makedirs(self.out_path)
     self.dep_parser = Predictor.from_path('https://storage.googleapis.com/allennlp-public-models/biaffine-dependency-parser-ptb-2020.04.06.tar.gz')
@@ -46,7 +47,8 @@ class SMTCoreferencer:
     self.cluster_ids,\
     self.vocabs = self.load_corpus(doc_path, mention_path)
     self.mention_probs = 1./len(self.vocabs) * np.ones((len(self.vocabs), len(self.vocabs)))
-
+    self.length_probs = 1./len(self.max_mention_length) * np.ones((self.max_mention_length, self.max_mention_length)) # TODO Update this 
+    self.alpha0 = EPS
     
   def load_corpus(self, doc_path, mention_path):
     '''
@@ -83,18 +85,17 @@ class SMTCoreferencer:
       cluster_ids.append([])
       
       tokens = [t[2] for t in documents[doc_id]]
+      '''
       postags = [t[1] for t in nltk.pos_tag(tokens)]
       instance = self.dep_parser._dataset_reader.text_to_instance(tokens, postags)
-      '''
       parse = self.dep_parser.predict_instance(instance)
       dep_head = parse['predicted_heads']
       dep_rel = parse['predicted_dependencies']
       dep_rels.update(dep_rel)
       '''
-      for span in sorted(mention_dict[doc_id]): # TODO Find head words of each mention
+      for span in sorted(mention_dict[doc_id]):
         cluster_id = mention_dict[doc_id][span]
         mention_token = tokens[span[0]:span[1]]
-
         '''
         if span[0] != span[1]:
           mention_heads[-1].append([])
@@ -109,6 +110,8 @@ class SMTCoreferencer:
           mention_token = ['###UNK###']
         if not mention_token[-1] in vocabs:
           vocabs[mention_token[-1]] = len(vocabs)
+
+
         mentions[-1].append(mention_token)
         spans[-1].append(span)
         cluster_ids[-1].append(cluster_id)
@@ -118,30 +121,41 @@ class SMTCoreferencer:
     logger.info('Dependency relations = {}'.format(dep_rels))
     return mentions, spans, cluster_ids, vocabs
 
-
   def fit(self, n_epochs=10):
     for epoch in range(n_epochs):
       N_c = [np.zeros((len(sent), len(sent))) for sent in self.mentions]
-      N_m = EPS * np.ones((len(self.vocabs), len(self.vocabs)))
+      N_mc = [np.zeros((len(sent), len(sent), self.max_mention_length, self.max_mention_length)) for sent in self.mentions]
+      N_m = self.alpha0 * np.ones((len(self.vocabs), len(self.vocabs)))
+      N_l = 0.1 * np.ones((len(self.max_mention_length, self.max_mention_length)))
 
       # Compute counts
       for sent_idx, sent in enumerate(self.mentions):
         for second_idx in range(len(sent)):
           for first_idx in range(second_idx):
-            first = self.vocabs[sent[first_idx][-1]]
-            second = self.vocabs[sent[second_idx][-1]]
-            N_c[sent_idx][first_idx, second_idx] += self.mention_probs[first][second]
-
+            len_prob = self.length_probs[len(sent[first_idx]), len(sent[second_idx])]
+            for second_token_idx, second_token in enumerate(range(sent[second_idx])):
+              for first_token_idx, first_token in enumerate(range(sent[first_idx])): 
+                first = self.vocabs[sent[first_token_idx]]
+                second = self.vocabs[sent[second_token_idx]]
+                N_mc[sent_idx][first_idx, second_idx, first_token_idx, second_token_idx] += self.mention_probs[first][second]
+            N_mc[sent_idx][first_idx, second_idx] /= N_mc[sent_idx][first_idx, second_idx].sum(axis=0) + EPS
+            N_c[sent_idx][first_idx, second_idx] = len_prob * N_mc[sent_idx][first_idx, second_idx].sum(axis=0).prod(axis=-1)
         N_c[sent_idx] /= N_c[sent_idx].sum(axis=0) + EPS
         
         for second_idx in range(len(sent)):
           for first_idx in range(second_idx):
-            first = self.vocabs[sent[first_idx][-1]]
-            second = self.vocabs[sent[second_idx][-1]]
-            N_m[first, second] += N_c[sent_idx][first_idx, second_idx]
+            for first_token_idx, second_token in enumerate(sent[second_idx]):
+              for second_token_idx, first_token in enumerate(sent[first_idx]):
+                first = self.vocabs[first_token]
+                second = self.vocabs[second_token]
+                N_m[first, second] += N_c[sent_idx][first_idx, second_idx] * N_mc[sent_idx][first_idx, second_idx, first_token_idx, second_token_idx]
+            N_l[len(sent[first_idx])][len(sent[second_idx])] += N_c[sent_idx][first_idx, second_idx]
 
       # Update mention probs     
       self.mention_probs = N_m / N_m.sum(axis=-1, keepdims=True)
+      
+      # Update length probs
+      self.length_probs = N_l / N_l.sum(axis=-1, keepdims=True) 
 
       # Log stats
       logger.info('Epoch {}, log likelihood = {:.3f}'.format(epoch, self.log_likelihood()))
@@ -159,12 +173,10 @@ class SMTCoreferencer:
         ll = 0.
       
       for m_idx, second in enumerate(mentions):
-        p = 0.
-        for _, first in enumerate(mentions[:m_idx]):
-          first_idx = self.vocabs.get(first[-1], 0) # TODO Use head word
-          second_idx = self.vocabs.get(second[-1], 0)
-          p += self.mention_probs[first_idx][second_idx] 
-        ll += 1. / N * np.log(p + EPS)
+        p_sent = 0.
+        for m_idx2, first in enumerate(mentions[:m_idx]):
+          p_sent += self.compute_mention_pair_prob(first, second)
+        ll += 1. / N * np.log(p_sent + EPS)
     return ll
 
   def predict(self, mentions, spans): 
@@ -179,9 +191,8 @@ class SMTCoreferencer:
       if m_idx == 0:   
         cluster_labels[m_idx] = 0
       
-      firsts = [self.vocabs.get(mentions[i][-1], 0) for i in range(m_idx+1)]
-      second = self.vocabs.get(mention[-1], 0)
-      scores = np.asarray([self.mention_probs[first][second] for first in firsts])  # TODO Use head word
+      second = mention[-1]
+      scores = np.asarray([self.compute_mention_pair_prob[first][second] for first in mentions[:m_idx+1]])
       a_idx = np.argmax(scores)
 
       # If antecedent is itself, create a new cluster; otherwise
@@ -237,6 +248,18 @@ class SMTCoreferencer:
     f1 = pairwise_eval.get_f1()
     logger.info('Pairwise Recall = {:.3f}, Precision = {:.3f}, F1 = {:.3f}'.format(recall, precision, f1))
     return f1 
+
+  def compute_mention_pair_prob(self, first, second):
+    p_mention = self.length_probs[len(first)][len(second)]
+    for second_token in second:
+      p_token = 0.
+      for first_token in first:
+        first_idx = self.vocabs.get(first_token, 0)
+        second_idx = self.vocabs.get(second_token, 0)
+        p_token += self.mention_probs[first_idx][second_idx]
+      p_mention *= p_token
+    return p_mention
+
 
 if __name__ == '__main__':
   dataset = 'ecb'
