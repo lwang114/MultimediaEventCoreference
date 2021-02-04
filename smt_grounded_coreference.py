@@ -19,7 +19,7 @@ format_str = '%(asctime)s\t%(message)s'
 console.setFormatter(logging.Formatter(format_str))
 
 class SMTCoreferencer:
-  def __init__(self, doc_path, mention_path, out_path):
+  def __init__(self, doc_path, mention_path, out_path, config):
     '''
     Unsupervised coreference system based on 
     ``Unsupervised Ranking Model for Entity Coreference Resolution``, 
@@ -37,7 +37,8 @@ class SMTCoreferencer:
     self.doc_path = doc_path
     self.mention_path = mention_path
     self.out_path = out_path
-    self.max_mention_length = 15 # Maximum length of a mention
+    self.max_mention_length = config.get('max_mention_length', 20) # Maximum length of a mention
+    self.is_one_indexed = config.get('is_one_indexed', False)
     if not os.path.exists(self.out_path):
       os.makedirs(self.out_path)
     self.dep_parser = Predictor.from_path('https://storage.googleapis.com/allennlp-public-models/biaffine-dependency-parser-ptb-2020.04.06.tar.gz')
@@ -46,8 +47,8 @@ class SMTCoreferencer:
     self.tokens_ids,\
     self.cluster_ids,\
     self.vocabs = self.load_corpus(doc_path, mention_path)
-    self.mention_probs = 1./len(self.vocabs) * np.ones((len(self.vocabs), len(self.vocabs)))
-    self.length_probs = 1./len(self.max_mention_length) * np.ones((self.max_mention_length, self.max_mention_length)) # TODO Update this 
+    self.mention_probs = 1. / len(self.vocabs) * np.ones((len(self.vocabs), len(self.vocabs)))
+    self.length_probs = 1. / self.max_mention_length * np.ones((self.max_mention_length, self.max_mention_length))
     self.alpha0 = EPS
     
   def load_corpus(self, doc_path, mention_path):
@@ -72,13 +73,15 @@ class SMTCoreferencer:
     for m in mention_list:
       # Create a mapping from span to a tuple of (token, cluster_id) 
       tokens_ids = m['tokens_ids']
-      span = (min(tokens_ids), max(tokens_ids))
+      span = (min(tokens_ids)-self.is_one_indexed, max(tokens_ids)-self.is_one_indexed)
       cluster_id = m['cluster_id']
       if not m['doc_id'] in mention_dict:
         mention_dict[m['doc_id']] = {}
-      mention_dict[m['doc_id']][span] = cluster_id  
+      mention_dict[m['doc_id']][span] = cluster_id
         
     for doc_id in sorted(documents): # XXX
+      if not doc_id in mention_dict:
+        continue
       mentions.append([])
       mention_heads.append([])
       spans.append([])
@@ -93,9 +96,10 @@ class SMTCoreferencer:
       dep_rel = parse['predicted_dependencies']
       dep_rels.update(dep_rel)
       '''
+      
       for span in sorted(mention_dict[doc_id]):
         cluster_id = mention_dict[doc_id][span]
-        mention_token = tokens[span[0]:span[1]]
+        mention_token = tokens[span[0]:span[1]+1][:self.max_mention_length]
         '''
         if span[0] != span[1]:
           mention_heads[-1].append([])
@@ -106,11 +110,9 @@ class SMTCoreferencer:
         else:
           mention_heads[-1].append([0])
         '''
-        if len(mention_token) == 0:
-          mention_token = ['###UNK###']
-        if not mention_token[-1] in vocabs:
-          vocabs[mention_token[-1]] = len(vocabs)
-
+        for t in mention_token:
+          if not t in vocabs:
+            vocabs[t] = len(vocabs)
 
         mentions[-1].append(mention_token)
         spans[-1].append(span)
@@ -122,24 +124,25 @@ class SMTCoreferencer:
     return mentions, spans, cluster_ids, vocabs
 
   def fit(self, n_epochs=10):
+    best_f1 = 0.
     for epoch in range(n_epochs):
       N_c = [np.zeros((len(sent), len(sent))) for sent in self.mentions]
       N_mc = [np.zeros((len(sent), len(sent), self.max_mention_length, self.max_mention_length)) for sent in self.mentions]
       N_m = self.alpha0 * np.ones((len(self.vocabs), len(self.vocabs)))
-      N_l = 0.1 * np.ones((len(self.max_mention_length, self.max_mention_length)))
+      N_l = 0.1 * np.ones((self.max_mention_length, self.max_mention_length))
 
       # Compute counts
       for sent_idx, sent in enumerate(self.mentions):
         for second_idx in range(len(sent)):
           for first_idx in range(second_idx):
-            len_prob = self.length_probs[len(sent[first_idx]), len(sent[second_idx])]
-            for second_token_idx, second_token in enumerate(range(sent[second_idx])):
-              for first_token_idx, first_token in enumerate(range(sent[first_idx])): 
-                first = self.vocabs[sent[first_token_idx]]
-                second = self.vocabs[sent[second_token_idx]]
-                N_mc[sent_idx][first_idx, second_idx, first_token_idx, second_token_idx] += self.mention_probs[first][second]
+            for second_token_idx, second_token in enumerate(sent[second_idx]):
+              for first_token_idx, first_token in enumerate(sent[first_idx]): 
+                first = self.vocabs[first_token]
+                second = self.vocabs[second_token]
+                N_mc[sent_idx][first_idx, second_idx, first_token_idx, second_token_idx] = self.mention_probs[first][second]
+            N_c[sent_idx][first_idx, second_idx] = self.compute_mention_pair_prob(sent[first_idx], sent[second_idx])
             N_mc[sent_idx][first_idx, second_idx] /= N_mc[sent_idx][first_idx, second_idx].sum(axis=0) + EPS
-            N_c[sent_idx][first_idx, second_idx] = len_prob * N_mc[sent_idx][first_idx, second_idx].sum(axis=0).prod(axis=-1)
+
         N_c[sent_idx] /= N_c[sent_idx].sum(axis=0) + EPS
         
         for second_idx in range(len(sent)):
@@ -149,8 +152,8 @@ class SMTCoreferencer:
                 first = self.vocabs[first_token]
                 second = self.vocabs[second_token]
                 N_m[first, second] += N_c[sent_idx][first_idx, second_idx] * N_mc[sent_idx][first_idx, second_idx, first_token_idx, second_token_idx]
-            N_l[len(sent[first_idx])][len(sent[second_idx])] += N_c[sent_idx][first_idx, second_idx]
-
+            N_l[len(sent[first_idx])-1][len(sent[second_idx])-1] += N_c[sent_idx][first_idx, second_idx]
+            
       # Update mention probs     
       self.mention_probs = N_m / N_m.sum(axis=-1, keepdims=True)
       
@@ -164,7 +167,20 @@ class SMTCoreferencer:
       pairwise_f1 = self.evaluate(self.doc_path,
                                   self.mention_path, 
                                   self.out_path)
-  
+      if pairwise_f1 > best_f1:
+        best_f1 = pairwise_f1
+        np.save(os.path.join(self.out_path, '../translate_probs_{}.npy'.format(epoch)), self.mention_probs)
+        vocabs = sorted(self.vocabs, key=lambda x:int(self.vocabs[x]))
+        with open(os.path.join(self.out_path, '../translate_probs_top200.txt'), 'w') as f:
+          top_idxs = np.argsort(-N_m.sum(axis=-1))[:200]
+          for v_idx in top_idxs:
+            v = vocabs[v_idx]
+            p = self.mention_probs[v_idx] 
+            top_coref_idxs = np.argsort(-p)[:100]
+            for c_idx in top_coref_idxs:
+              f.write('{} -> {}: {}\n'.format(v, vocabs[c_idx], p[c_idx]))
+            f.write('\n')
+              
   def log_likelihood(self):
     ll = -np.inf 
     N = len(self.mentions)
@@ -192,7 +208,7 @@ class SMTCoreferencer:
         cluster_labels[m_idx] = 0
       
       second = mention[-1]
-      scores = np.asarray([self.compute_mention_pair_prob[first][second] for first in mentions[:m_idx+1]])
+      scores = np.asarray([self.compute_mention_pair_prob(first, second) for first in mentions[:m_idx+1]])
       a_idx = np.argmax(scores)
 
       # If antecedent is itself, create a new cluster; otherwise
@@ -250,7 +266,7 @@ class SMTCoreferencer:
     return f1 
 
   def compute_mention_pair_prob(self, first, second):
-    p_mention = self.length_probs[len(first)][len(second)]
+    p_mention = self.length_probs[len(first)-1][len(second)-1]
     for second_token in second:
       p_token = 0.
       for first_token in first:
@@ -263,12 +279,13 @@ class SMTCoreferencer:
 
 if __name__ == '__main__':
   dataset = 'ecb'
+  coref_type = 'events'
   doc_path_train = 'data/{}/mentions/train.json'.format(dataset)
-  mention_path_train = 'data/{}/mentions/train_mixed.json'.format(dataset)
+  mention_path_train = 'data/{}/mentions/train_{}.json'.format(dataset, coref_type)
   doc_path_test = 'data/{}/mentions/test.json'.format(dataset)
-  mention_path_test = 'data/{}/mentions/test_mixed.json'.format(dataset)
-  out_path = 'models/smt_{}/pred_mixed'.format(dataset)
+  mention_path_test = 'data/{}/mentions/test_{}.json'.format(dataset, coref_type)
+  out_path = 'models/smt_{}/pred_{}'.format(dataset, coref_type)
 
-  model = SMTCoreferencer(doc_path_train, mention_path_train, out_path=out_path+'_train')
-  model.fit()
+  model = SMTCoreferencer(doc_path_train, mention_path_train, out_path=out_path+'_train', config={'is_one_indexed': dataset == 'ecb'})
+  model.fit(2)
   model.evaluate(doc_path_test, mention_path_test, out_path=out_path+'_test')
