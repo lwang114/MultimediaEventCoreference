@@ -1,0 +1,36 @@
+{
+  "gpu_num" : [0],
+  "bert_model": "roberta-large",
+  "bert_hidden_size": 1024,
+  "hidden_layer": 1024,
+  "dropout": 0.3,
+  "with_mention_width": false,
+  "with_head_attention": true,
+  "embedding_dimension": 20,
+
+  "max_mention_span": 15,
+  "use_gold_mentions": true,
+  "mention_type": "mixed",
+  "top_k": 0.35,
+  "training_method": "e2e",
+  "subtopic": false,
+  "use_predicted_topics": false,
+
+  "random_seed": 0,
+  "epochs": 21,
+  "batch_size": 4,
+  "learning_rate": 1e-4,
+  "weight_decay": 0,
+  "loss": "mse",
+  "optimizer": "adam",
+  "adam_epsilon": 1e-8,
+  "segment_window": 512,
+  "neg_samp": true,
+
+  "log_path": "logs/coref_translator/",
+  "data_folder": "data/ecb/mentions",
+  "is_one_indexed": true,
+  "span_repr_path": "models/topic_level_predicted_mentions/mixed_0.35/span_repr_9",
+  "span_scorer_path": "models/topic_level_predicted_mentions/mixed_0.35/span_scorer_9",
+  "model_path": "models/coref_translator_ecb/mixed_0.35"
+}
