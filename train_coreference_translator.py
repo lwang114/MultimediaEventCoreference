@@ -13,11 +13,12 @@ import random
 import numpy as np
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
-from models import SpanEmbedder, SimplePairWiseClassifier
-from text_models import NoOp
+from models import SpanEmbedder, SimplePairWiseClassifier, SelfAttentionPairWiseClassifier
+from text_models import NoOp, BiLSTM
 from corpus_text import TextFeatureDataset
 from evaluator import Evaluation, RetrievalEvaluation
 from conll import write_output_file
+from copy import deepcopy
 
 logger = logging.getLogger(__name__)
 def fix_seed(config):
@@ -46,10 +47,9 @@ def get_pairwise_labels(labels, is_training, device):
     first_idxs = []
     second_idxs = []
     for idx in range(B):
+      if len(labels[idx]) <= 1:
+        return None, None, None
       first, second = zip(*list(combinations(range(len(labels[idx])), 2)))
-      # first = torch.tensor(first)
-      # second = torch.tensor(second)
-  
       pairwise_labels = (labels[idx, first] != 0) & (labels[idx, second] != 0) & \
                       (labels[idx, first] == labels[idx, second])    
       # first = [first_idx for first_idx in range(len(text_labels)) for second_idx in range(len(image_labels))]
@@ -89,10 +89,13 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
   torch.set_grad_enabled(True)
   fix_seed(config)
   
+  for p in text_model.parameters():
+    print(p.requires_grad)
+
   if not isinstance(text_model, torch.nn.DataParallel):
     text_model = nn.DataParallel(text_model)
 
-  if not isinstance(text_model, torch.nn.DataParallel):
+  if not isinstance(mention_model, torch.nn.DataParallel):
     mention_model = nn.DataParallel(mention_model)
 
   if not isinstance(image_model, torch.nn.DataParallel):
@@ -120,15 +123,15 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
   optimizer = get_optimizer(config, [text_model, image_model, coref_model])
    
   # Start training
-  text_model.train()
-  image_model.train()
-  coref_model.train()
   total_loss = 0.
   total = 0.
   begin_time = time.time()
   if args.evaluate_only:
     config.epochs = 0
   for epoch in range(args.start_epoch, config.epochs):
+    text_model.train()
+    image_model.train()
+    coref_model.train()
     for i, batch in enumerate(train_loader):
       doc_embeddings,\
       start_mappings, end_mappings, continuous_mappings,\
@@ -155,21 +158,14 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
       optimizer.zero_grad()
 
       text_output = text_model(doc_embeddings)
-      start_embeddings = torch.matmul(start_mappings, text_output)
-      end_embeddings = torch.matmul(end_mappings, text_output)
-      start_end_embeddings = torch.cat([start_embeddings, end_embeddings], dim=-1)
-      continuous_embeddings = torch.matmul(continuous_mappings, text_output.unsqueeze(1))
-      mention_output = mention_model(start_end_embeddings, continuous_embeddings, width)
+      mention_output = mention_model(text_output, start_mappings, end_mappings, continuous_mappings, width)
       # video_output = image_model(videos)
       scores = []
       for idx in range(B):
         scores.append(coref_model(mention_output[idx, first_idxs[idx]], 
                                   mention_output[idx, second_idxs[idx]]).t())
       scores = torch.cat(scores)
-      if config.loss == 'mse':
-        loss = - (pairwise_labels * scores).mean()
-      else:
-        loss = criterion(scores, pairwise_labels) 
+      loss = criterion(scores, pairwise_labels) 
       
       loss.backward()
       optimizer.step()
@@ -187,6 +183,7 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
 
     torch.save(text_model.module.state_dict(), '{}/text_model.{}.pth'.format(args.exp_dir, epoch))
     torch.save(image_model.module.state_dict(), '{}/image_model.{}.pth'.format(args.exp_dir, epoch))
+    torch.save(mention_model.module.state_dict(), '{}/mention_model.{}.pth'.format(args.exp_dir, epoch))
     torch.save(coref_model.module.state_dict(), '{}/coref_model.{}.pth'.format(args.exp_dir, epoch))
  
     if epoch % 5 == 0:
@@ -205,6 +202,7 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
     text_model.eval()
     image_model.eval()
     coref_model.eval()
+
     with torch.no_grad(): 
       pred_dicts = []
       for i, batch in enumerate(test_loader):
@@ -223,29 +221,27 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
         
         # Compute mention embeddings
         text_output = text_model(doc_embeddings)
-        start_embeddings = torch.matmul(start_mappings, text_output)
-        end_embeddings = torch.matmul(end_mappings, text_output)
-        start_end_embeddings = torch.cat([start_embeddings, end_embeddings], dim=-1)
-        continuous_embeddings = torch.matmul(continuous_mappings, text_output.unsqueeze(1))
-        mention_output = mention_model(start_end_embeddings, continuous_embeddings, width)
+        mention_output = mention_model(text_output, start_mappings, end_mappings, continuous_mappings, width)
 
         B = doc_embeddings.size(0)  
         for idx in range(B):
           # Compute pairwise labels
           first_idx, second_idx, pairwise_labels = get_pairwise_labels(text_labels[idx, :span_num[idx]].unsqueeze(0), is_training=False, device=device)
+          if first_idx is None:
+            continue
           first_idx = first_idx.squeeze(0)
           second_idx = second_idx.squeeze(0)
           pairwise_labels = pairwise_labels.squeeze(0)          
 
-          clusters, scores = coref_model.module.predict_cluster(mention_output[idx],\
+          clusters, scores = coref_model.module.predict_cluster(mention_output[idx, :span_num[idx]],\
                               first_idx, second_idx)
+
           all_scores.append(scores.squeeze(1))
           all_labels.append(pairwise_labels.to(torch.int))
           global_idx = i * test_loader.batch_size + idx
           doc_id = test_loader.dataset.doc_ids[global_idx] 
           origin_tokens = [token[2] for token in test_loader.dataset.origin_tokens[global_idx]]
           candidate_start_ends = test_loader.dataset.origin_candidate_start_ends[global_idx]
-          # print(doc_id, clusters.values(), candidate_start_ends.tolist())
           doc_name = doc_id
           document = {doc_id:test_loader.dataset.documents[doc_id]}
           write_output_file(document, clusters, [doc_id]*candidate_start_ends.shape[0],
@@ -301,21 +297,29 @@ if __name__ == '__main__':
 
   # Initialize dataloaders
   train_set = TextFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config, split='train')
-  test_set = TextFeatureDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), config, split='test')
+  config_test = deepcopy(config)
+  config_test['is_one_indexed'] = True
+  test_set = TextFeatureDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), config_test, split='test')
+
   train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
   test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
 
   # Initialize models
-  text_model = NoOp() # BiLSTM(embedding_dim, embedding_dim)
+  embedding_dim = config.hidden_layer # config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2
+  text_model = NoOp() 
+  # text_model = BiLSTM(1024, embedding_dim)
   mention_model = SpanEmbedder(config, device).to(device)
-  embedding_dim = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2
+
   image_model = NoOp()
-  coref_model = SimplePairWiseClassifier(config).to(device)
-  # coref_model = SelfAttentionPairWiseClassifier(config).to(device)
+  coref_model = SelfAttentionPairWiseClassifier(config).to(device)
 
   if config['training_method'] in ('pipeline', 'continue'):
-      text_model.load_state_dict(torch.load(config['span_repr_path'], map_location=device))
-      coref_model.text_scorer.load_state_dict(torch.load(config['pairwise_scorer_path'], map_location=device))
+      text_model.load_state_dict(torch.load(config['text_repr_path'], map_location=device))
+      for p in text_model.parameters():
+        p.requires_grad = False
+
+      mention_model.load_state_dict(torch.load(config['span_repr_path'], map_location=device))  
+      coref_model.load_state_dict(torch.load(config['pairwise_scorer_path'], map_location=device))
   
   # Training
   train(text_model, mention_model, image_model, coref_model, train_loader, test_loader, args)

@@ -21,7 +21,7 @@
   "batch_size": 4,
   "learning_rate": 1e-4,
   "weight_decay": 0,
-  "loss": "mse",
+  "loss": "bce",
   "optimizer": "adam",
   "adam_epsilon": 1e-8,
   "segment_window": 512,
