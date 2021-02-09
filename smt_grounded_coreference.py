@@ -7,6 +7,7 @@ import torch
 from itertools import combinations
 from allennlp.predictors.predictor import Predictor
 import allennlp_models.structured_prediction
+import argparse
 from evaluator import Evaluation
 from conll import write_output_file
 
@@ -199,7 +200,7 @@ class SMTCoreferencer:
   def log_likelihood(self):
     ll = -np.inf 
     N = len(self.mentions)
-    for sent_idx, (mentions, postags) in enumerate(self.mentions, self.postags):
+    for sent_idx, (mentions, postags) in enumerate(zip(self.mentions, self.postags)):
       if sent_idx == 0:
         ll = 0.
       
@@ -248,13 +249,13 @@ class SMTCoreferencer:
 
     documents = json.load(open(doc_path, 'r')) 
     doc_ids = sorted(documents)
-    mentions_all, spans_all, cluster_ids_all, _ = self.load_corpus(doc_path, mention_path)
+    mentions_all, postags_all, spans_all, cluster_ids_all, _ = self.load_corpus(doc_path, mention_path)
     
     preds = []
     golds = []
-    for doc_id, mentions, spans, cluster_ids in zip(doc_ids, mentions_all, spans_all, cluster_ids_all):
+    for doc_id, mentions, postags, spans, cluster_ids in zip(doc_ids, postags_all, mentions_all, spans_all, cluster_ids_all):
       # Compute pairwise F1
-      clusters, cluster_labels = self.predict(mentions, spans)
+      clusters, cluster_labels = self.predict(mentions, spans, postags)
       pred = [cluster_labels[f] == cluster_labels[s] for f, s in combinations(range(len(spans)), 2)]
       pred = np.asarray(pred)
 
@@ -297,8 +298,13 @@ class SMTCoreferencer:
 
 
 if __name__ == '__main__':
-  dataset = 'ecb'
-  coref_type = 'events'
+  parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+  parser.add_argument('--dataset', choices={'ecb', 'video_m2e2'}, default='ecb')
+  parser.add_argument('--mention_type', choices={'events', 'entities', 'mixed'}, default='mixed')
+  args = parser.parse_args()
+  
+  dataset = args.dataset
+  coref_type = args.mention_type
   doc_path_train = 'data/{}/mentions/train.json'.format(dataset)
   mention_path_train = 'data/{}/mentions/train_{}.json'.format(dataset, coref_type)
   doc_path_test = 'data/{}/mentions/test.json'.format(dataset)
@@ -306,5 +312,5 @@ if __name__ == '__main__':
   out_path = 'models/smt_{}/pred_{}'.format(dataset, coref_type)
 
   model = SMTCoreferencer(doc_path_train, mention_path_train, out_path=out_path+'_train', config={'is_one_indexed': dataset == 'ecb'})
-  model.fit(2)
+  model.fit(5)
   model.evaluate(doc_path_test, mention_path_test, out_path=out_path+'_test')
