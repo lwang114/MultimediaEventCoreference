@@ -8,6 +8,8 @@ from conll import write_output_file
 
 from nltk.translate import bleu_score
 from nltk.metrics.scores import precision, recall, f_measure 
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
 
 PUNCT = [',', '.', '\'', '\"', ':', ';', '?', '!', '<', '>', '~', '%', '$', '|', '/', '@', '#', '^', '*']
 def get_mention_doc(data_json, out_prefix, inclusive=False):
@@ -93,8 +95,8 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
       # Create coreference mapping
       for cluster_id in sorted(coreference['events']):
         if not cluster_id in event_cluster2id:
-          event_cluster2id[cluster_id] = n_event_cluster 
           n_event_cluster += 1
+          event_cluster2id[cluster_id] = n_entity_cluster + n_event_cluster 
 
         for mention in coreference['events'][cluster_id]:
           event2coref[mention[1]] = event_cluster2id[cluster_id]
@@ -102,13 +104,14 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
 
       for mention_id in event_mention_ids:
         if not mention_id in event2coref:
-          event2coref[mention_id] = n_event_cluster
           n_event_cluster += 1
+          event2coref[mention_id] = n_entity_cluster + n_event_cluster
+
 
       for cluster_id in sorted(coreference['entities']):
         if not cluster_id in entity_cluster2id:
-          entity_cluster2id[cluster_id] = n_entity_cluster
           n_entity_cluster += 1
+          entity_cluster2id[cluster_id] = n_entity_cluster + n_event_cluster
 
         for mention in coreference['entities'][cluster_id]:
           entity2coref[mention[1]] = entity_cluster2id[cluster_id]
@@ -116,8 +119,9 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
       
       for mention_id in entity_mention_ids:
         if not mention_id in entity2coref:
-          entity2coref[mention_id] = n_entity_cluster 
           n_entity_cluster += 1
+          entity2coref[mention_id] = n_entity_cluster + n_event_cluster 
+
       
     coref2event = collections.defaultdict(list)
     coref2entity = collections.defaultdict(list)
@@ -224,6 +228,99 @@ def save_gold_conll_files(doc_json, mention_json, dir_path):
     doc_name = doc_id
     write_output_file({doc_id:document}, non_singletons, [doc_id]*len(cur_label_dict), starts, ends, dir_path, doc_name)
 
+def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, annotation_file, out_prefix='videom2e2_visual_event', k=5):
+  ''' Extract visual event embeddings
+  :param config: str, config file for the dataset,
+  :param split: str, 'train' or 'test',
+  :param in_feat_file: str, frame-level video feature file,
+  :param mapping_file: str, filename of a mapping from doc id to video id
+  :param annotation_file: str, filename of the visual event annotations of the format
+      {
+        [description_id]: list of mapping of 
+            {'Temporal_Boundary': [float, float],    
+             'Event_Type': int,
+             'Key_Frames': [list of mapping of 
+                 {'Timestamp': float,
+                  'Arguments': [{'Bounding_Box': [x_min, y_min, x_max, y_max],
+                                 'ROLE_TYPE': int,
+                                 'Entity_Type': int,
+                                 'Event_Coreference: null or int'}]}]}
+        } 
+  :return out_prefix: str
+  '''
+  mapping_dict = json.load(open(mapping_file))
+  ann_dict = json.load(open(annotation_file))
+  id2desc = {v['id'].split('v=')[-1]:k for k, v in mapping_dict.items()}
+  doc_ids = sorted(id2desc)
+  is_csv_used = {fn:0 for fn in os.listdir(csv_dir)}
+
+  event_feats = {}
+  event_labels = {}
+  event_frequency = {}
+  for idx, doc_id in enumerate(doc_ids): # XXX
+    print(idx, doc_id)
+    # Convert the .csv file to numpy array
+    desc = id2desc[doc_id]
+    for punct in PUNCT:
+      desc = desc.replace(punct, '')
+    csv_file = os.path.join(csv_dir, desc+'.csv')
+    if not os.path.exists(csv_file):
+      print('File {} not found'.format(csv_file))
+      continue
+    is_csv_used[desc+'.csv'] = 1
+    
+    # Extract frame-level features
+    frame_feats = []
+    skip_header = 1
+    for line in codecs.open(csv_file, 'r', 'utf-8'):
+      if skip_header:
+        skip_header = 0
+        continue
+      segments = line.strip().split(',')
+      if len(segments) == 0:
+        print('Empty line')
+        break
+      frame_feats.append([float(x) for x in segments[-400:]])
+    frame_feats = np.asarray(frame_feats)
+
+    # Extract event features
+    event_label = []
+    event_feat = []
+    
+    for event_dict in ann_dict[desc]:
+      event_type = event_dict['Event_Type']
+      event_label.append(event_type)
+      if not event_type in event_frequency:
+        event_frequency[event_type] = 1
+      else:
+        event_frequency[event_type] += 1 
+      start_time, end_time = event_dict['Temporal_Boundary']
+      start, end = start_time * 24 // 15, end_time * 24 // 15
+
+      # Extract the top k subspace vectors
+      event_feat.append(PCA(n_components=k).fit(frame_feats[start:end+1]).components_.flatten())
+    
+    event_feat = np.stack(event_feat, axis=0)
+    feat_id = '{}_{}'.format(doc_id, idx)
+    event_labels[feat_id] = np.asarray(event_label)
+    event_feats[feat_id] = event_feat
+  np.savez('{}_embeddings.npz'.format(out_prefix), **event_feats)
+
+  # Convert the labels to one-hot
+  n_event_types = max(int(t) for t in event_frequency) + 1
+  event_labels_onehot = {k:np.eye(n_event_types)[l] for k, l in event_labels.items()} 
+  np.savez('{}_labels.npz'.format(out_prefix), **event_labels_onehot)
+  json.dump(event_frequency, open('{}_event_frequency.json'.format(out_prefix), 'w'), indent=4, sort_keys=True)
+
+def visualize_features(embed_file, label_file, freq_file):
+  # Visualize the embeddings with TSNE
+  X = np.load(embed_file)
+  y = np.load(label_file)
+  freq = json.load(open(freq_file))
+
+  top_types = sorted(freq, key=lambda x:freq[x], reverse=True)
+  X_new = TSNE(n_components=5).fit_transform(X) # TODO
+
 def extract_image_embeddings(data_dir, csv_dir, mapping_file, out_prefix, image_ids=None):
   # Create a mapping from Youtube id to short description
   mapping_dict = json.load(open(mapping_file))
@@ -260,7 +357,7 @@ def extract_image_embeddings(data_dir, csv_dir, mapping_file, out_prefix, image_
 
   np.savez(out_prefix, **img_feats)
 
-def train_test_split(feat_file, test_id_file, mapping_file, out_prefix):
+def train_test_split(feat_file, test_id_file, mapping_file, out_prefix): # TODO random split
   mapping_dict = json.load(open(mapping_file)) 
   id2desc = {v['id'].split('v=')[-1]:k for k, v in mapping_dict.items()}
   feats = np.load(feat_file)
@@ -362,3 +459,46 @@ if __name__ == '__main__':
     doc_json = '{}/test.json'.format(data_dir)
     out_prefix = '{}/test'.format(data_dir)
     compute_bleu_similarity(doc_json, mapping_file, out_prefix)
+  elif args.task == 5:
+    # Random split
+    out_dir = 'data/video_m2e2_random_split/mentions/'
+    if not os.path.exists(out_dir):
+      os.makedirs(out_dir)
+
+    documents = json.load(open(os.path.join(data_dir, 'train.json')))
+    entity_mentions = json.load(open(os.path.join(data_dir, 'train_entities.json')))
+    event_mentions = json.load(open(os.path.join(data_dir, 'train_events.json')))
+    mixed_mentions = json.load(open(os.path.join(data_dir, 'train_mixed.json')))
+    
+    n_docs = len(documents)
+    doc_ids = sorted(documents)
+    n_train = int(0.75 * n_docs)
+    train_idxs = np.random.permuation(n_docs)[:n_train]
+    train_ids = [doc_ids[i] for i in train_idxs] 
+    test_ids = [doc_id for doc_id in doc_ids if not doc_id in train_ids]
+    
+    documents_train = {}
+    mixed_mentions_train = [m for m in mixed_mentions if m['doc_id'] in train_ids]
+    entity_mentions_train = [m for m in entity_mentions if m['doc_id'] in train_ids]
+    event_mentions_train = [m for m in event_mentions if m['doc_id'] in train_ids]
+    for train_id in train_ids:
+      documents_train[train_id] = deepcopy(documents[train_id])
+
+    documents_test = {}
+    mixed_mentions_test = [m for m in mixed_mentions if m['doc_id'] in test_ids]
+    entity_mentions_test = [m for m in entity_mentions if m['doc_id'] in test_ids]
+    event_mentions_test = [m for m in event_mentions if m['doc_id'] in test_ids]
+    for test_id in test_ids:
+      documents_test[test_id] = deepcopy(documents[test_id])
+
+    json.dump(documents_train, open(os.path.join(out_dir, 'train.json'), 'w'), indent=2)
+    json.dump(mixed_mentions_train, open(os.path.join(out_dir, 'train_mixed.json'), 'w'), indent=2)
+    json.dump(entity_mentions_train, open(os.path.join(out_dir, 'train_entities.json'), 'w'), indent=2)
+    json.dump(event_mentions_train, open(os.path.join(out_dir, 'train_events.json'), 'w'), indent=2)
+    
+    json.dump(documents_test, open(os.path.join(out_dir, 'test.json'), 'w'), indent=2)
+    json.dump(mixed_mentions_test, open(os.path.join(out_dir, 'test_mixed.json'), 'w'), indent=2)
+    json.dump(entity_mentions_test, open(os.path.join(out_dir, 'test_entities.json'), 'w'), indent=2)
+    json.dump(event_mentions_test, open(os.path.join(out_dir, 'test_events.json'), 'w'), indent=2)    
+
+
