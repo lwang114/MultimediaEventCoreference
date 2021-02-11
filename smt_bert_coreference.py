@@ -51,13 +51,10 @@ class SMTCoreferencer:
     self.mentions,\
     self.postags,\
     self.embeddings,\
-    self.image_embeddings,\
     self.tokens_ids,\
     self.cluster_ids,\
     self.vocabs = self.load_corpus(doc_path, mention_path, embed_path)
-    self.num_image_concepts = self.image_embeddings[0].shape[-1]
-
-    self.mention_probs = 1. / len(self.vocabs) * np.ones((self.num_image_concepts, len(self.vocabs), len(self.vocabs)))
+    self.mention_probs = 1. / len(self.vocabs) * np.ones((len(self.vocabs), len(self.vocabs)))
     self.length_probs = 1. / self.max_mention_length * np.ones((self.max_mention_length, self.max_mention_length))
     self.coref_probs = 1. / self.max_num_mentions * np.ones((self.max_num_mentions, self.max_num_mentions))
     self.alpha0 = EPS
@@ -71,7 +68,7 @@ class SMTCoreferencer:
     docs_origin_tokens = []
     clean_start_end_dict = {}
 
-    for doc_id in sorted(documents)[:20]: # XXX
+    for doc_id in sorted(documents):
       tokens = documents[doc_id]
       bert_tokens_ids, bert_sentence_ids = [], []
       start_bert_idx, end_bert_idx = [], [] # Start and end token indices for each bert token
@@ -100,7 +97,7 @@ class SMTCoreferencer:
 
     return docs_origin_tokens, docs_bert_tokens, docs_start_end_bert, clean_start_end_dict
     
-  def load_corpus(self, doc_path, mention_path, embed_path, image_path):
+  def load_corpus(self, doc_path, mention_path, embed_path):
     '''
     :returns doc_ids: list of str
     :returns mentions: list of list of str
@@ -112,7 +109,6 @@ class SMTCoreferencer:
     documents = json.load(open(doc_path))
     mention_list = json.load(open(mention_path))
     token_embeddings = np.load(embed_path)
-    image_embeddings = np.load(image_path)
     _, _, bert_spans, clean_span_dict = self.tokenize(documents)
     
     mention_dict = {} 
@@ -125,7 +121,6 @@ class SMTCoreferencer:
     doc_ids = sorted(documents)
     feat_keys = sorted(token_embeddings, key=lambda x:int(x.split('_')[-1]))
     feat_keys = [k for k in feat_keys if '_'.join(k.split('_')[:-1]) in documents]
-    image_embeddings = [image_embeddings[k] for k in feat_keys] 
     vocabs = {'###UNK###': 0}
     dep_rels = set()
     
@@ -138,7 +133,7 @@ class SMTCoreferencer:
         mention_dict[m['doc_id']] = {}
       mention_dict[m['doc_id']][span] = cluster_id
     
-    for doc_id, feat_id, bert_span, image in zip(doc_ids[:20], feat_keys, bert_spans): # XXX
+    for doc_id, feat_id, bert_span in zip(doc_ids[:20], feat_keys, bert_spans): # XXX
       if not doc_id in mention_dict:
         continue
       mentions.append([])
@@ -147,7 +142,7 @@ class SMTCoreferencer:
       spans.append([])
       cluster_ids.append([])
       embeddings.append([])
-
+      
       tokens = [t[2] for t in documents[doc_id]]
       postag = [t[1] for t in nltk.pos_tag(tokens)]
       '''
@@ -165,6 +160,7 @@ class SMTCoreferencer:
         clean_start, clean_end = clean_span_dict[doc_id][span[0]], clean_span_dict[doc_id][span[1]]
         bert_start, bert_end = bert_span[clean_start, 0], bert_span[clean_end, 1]
         mention_emb = token_embeddings[feat_id][bert_start:bert_end+1]
+        
         '''
         if span[0] != span[1]:
           mention_heads[-1].append([])
@@ -188,7 +184,7 @@ class SMTCoreferencer:
     logger.info('Number of documents = {}'.format(len(mentions)))
     logger.info('Vocab size = {}'.format(len(vocabs)))
     logger.info('Dependency relations = {}'.format(dep_rels))
-    return mentions, postags, embeddings, image_embeddings, spans, cluster_ids, vocabs
+    return mentions, postags, embeddings, spans, cluster_ids, vocabs
 
   def is_compatible(self, first_tag, second_tag):
     if first_tag[:2] == second_tag[:2]:
@@ -204,14 +200,14 @@ class SMTCoreferencer:
   def fit(self, n_epochs=10):
     best_f1 = 0.
     for epoch in range(n_epochs):
-      N_c = [np.zeros((len(img_vec), len(sent), len(sent))) for img_vec, sent in zip(self.image_embeddings, self.mentions)]
+      N_c = [np.zeros((len(sent), len(sent))) for sent in self.mentions]
       N_c_all = self.alpha0 * np.ones((self.max_num_mentions, self.max_num_mentions))
-      N_mc = [np.zeros((len(img_vec), len(sent), len(sent), self.max_mention_length, self.max_mention_length)) for sent in self.mentions] # TODO Add NULL symbol
-      N_m = self.alpha0 * np.ones((self.num_image_concepts, len(self.vocabs), len(self.vocabs)))
+      N_mc = [np.zeros((len(sent), len(sent), self.max_mention_length, self.max_mention_length)) for sent in self.mentions]
+      N_m = self.alpha0 * np.ones((len(self.vocabs), len(self.vocabs)))
       N_l = self.alpha0 * np.ones((self.max_mention_length, self.max_mention_length))
 
       # Compute counts
-      for sent_idx, (sent, postag, embedding, image_embedding) in enumerate(zip(self.mentions, self.postags, self.embeddings, self.image_embeddings)):
+      for sent_idx, (sent, postag, embedding) in enumerate(zip(self.mentions, self.postags, self.embeddings)):
         for second_idx in range(min(len(sent), self.max_num_mentions)):
           for first_idx in range(second_idx):
             for second_token_idx, (second_token, second_tag) in enumerate(zip(sent[second_idx], postag[second_idx])):
@@ -219,18 +215,14 @@ class SMTCoreferencer:
                 if self.is_compatible(first_tag, second_tag):
                   first = self.vocabs[first_token]
                   second = self.vocabs[second_token]
-                  N_mc[sent_idx][:, first_idx, second_idx, first_token_idx, second_token_idx] = image_embedding @ self.mention_probs[:, first, second]
-            N_c[sent_idx][:, first_idx, second_idx] = self.coref_probs[first_idx][second_idx] *\
-                                                      self.compute_mention_pair_prob(sent[first_idx],
+                  N_mc[sent_idx][first_idx, second_idx, first_token_idx, second_token_idx] = self.mention_probs[first][second]
+            N_c[sent_idx][first_idx, second_idx] = self.coref_probs[first_idx][second_idx] *\
+                                                   self.compute_mention_pair_prob(sent[first_idx], 
                                                                                   sent[second_idx],
                                                                                   postag[first_idx],
-                                                                                  postag[second_idx],
-                                                                                  image_embedding)
-            print('N_mc[sent_idx].sum(axis=0), N_c[sent_idx]: {} {}'.format(N_mc[sent_idx], N_c[sent_idx])) # XXX
-
-            N_c[sent_idx][first_idx, second_idx] *= np.exp(self.similarity(embedding[first_idx], embedding[second_idx])
+                                                                                  postag[second_idx])
+            N_c[sent_idx][first_idx, second_idx] *= np.exp(self.similarity(embedding[first_idx], embedding[second_idx]))
             N_mc[sent_idx][first_idx, second_idx] /= N_mc[sent_idx][first_idx, second_idx].sum(axis=0) + EPS
-
         N_c[sent_idx] /= N_c[sent_idx].sum(axis=0) + EPS
         N_c_all[:len(sent), :len(sent)] += N_c[sent_idx]
         
@@ -240,9 +232,8 @@ class SMTCoreferencer:
               for second_token_idx, first_token in enumerate(sent[first_idx]):
                 first = self.vocabs[first_token]
                 second = self.vocabs[second_token]
-                N_m[:, first, second] += 1. / image_embedding.shape(0) *\
-                                      image_embedding.T @ N_c[sent_idx][:, first_idx, second_idx] *\
-                                      N_mc[sent_idx][:, first_idx, second_idx, first_token_idx, second_token_idx]
+                N_m[first, second] += N_c[sent_idx][first_idx, second_idx] *\
+                                      N_mc[sent_idx][first_idx, second_idx, first_token_idx, second_token_idx]
             N_l[len(sent[first_idx])-1][len(sent[second_idx])-1] += N_c[sent_idx][first_idx, second_idx]
             
       # Update mention probs     
@@ -265,7 +256,7 @@ class SMTCoreferencer:
         best_f1 = pairwise_f1
         np.save(os.path.join(self.out_path, '../translate_probs_{}.npy'.format(epoch)), self.mention_probs)
         vocabs = sorted(self.vocabs, key=lambda x:int(self.vocabs[x]))
-        with open(os.path.join(self.out_path, '../translate_probs_top200.txt'), 'w') as f: # TODO
+        with open(os.path.join(self.out_path, '../translate_probs_top200.txt'), 'w') as f:
           top_idxs = np.argsort(-N_m.sum(axis=-1))[:200]
           for v_idx in top_idxs:
             v = vocabs[v_idx]
@@ -275,10 +266,10 @@ class SMTCoreferencer:
               f.write('{} -> {}: {}\n'.format(v, vocabs[c_idx], p[c_idx]))
             f.write('\n')
               
-  def log_likelihood(self): # TODO
+  def log_likelihood(self):
     ll = -np.inf 
     N = len(self.mentions)
-    for sent_idx, (mentions, postags, embeddings, image_embeddings) in enumerate(zip(self.mentions, self.postags, self.embeddings, self.image_embeddings)):
+    for sent_idx, (mentions, postags, embeddings) in enumerate(zip(self.mentions, self.postags, self.embeddings)):
       if sent_idx == 0:
         ll = 0.
       
@@ -287,28 +278,28 @@ class SMTCoreferencer:
         p_sent = 0.
         for m_idx2, (first, first_tag, first_emb) in enumerate(zip(mentions[:m_idx], postags[:m_idx], embeddings[:m_idx])):
           p_sent += self.coref_probs[m_idx2, m_idx] *\
-                    self.compute_mention_pair_prob(first, second, first_tag, second_tag, image_embeddings).mean() *\
+                    self.compute_mention_pair_prob(first, second, first_tag, second_tag) *\
                     np.exp(self.similarity(first_emb, second_emb))
           
         ll += 1. / N * np.log(p_sent + EPS)
     return ll
 
-  def predict(self, mentions, spans, postags, embeddings, image_embeddings):
+  def predict(self, mentions, spans, postags, embeddings):
     '''
     :param mentions: a list of list of str,
     :param spans: a list of tuple of (start idx, end idx)
-    :returns clusters:
+    :returns clusters:   
     '''
     clusters = {}
     cluster_labels = {}
-    for m_idx, (mention, span, postag, embed, img_embed) in enumerate(zip(mentions, spans, postags, embeddings, image_embeddings)):
-      if m_idx == 0:
+    for m_idx, (mention, span, postag, embed) in enumerate(zip(mentions, spans, postags, embeddings)):
+      if m_idx == 0:   
         cluster_labels[m_idx] = 0
 
       second = mention
       second_tag = postag
       second_emb = embed
-      scores = np.asarray([self.compute_mention_pair_prob(first, second, first_tag, second_tag, img_embed).mean()\
+      scores = np.asarray([self.compute_mention_pair_prob(first, second, first_tag, second_tag)\
                            * np.exp(self.similarity(first_emb, second_emb))
                            for first, first_tag, first_emb in zip(mentions[:m_idx+1], postags[:m_idx+1], embeddings[:m_idx+1])])
       scores = self.coref_probs[:m_idx+1, m_idx] * scores
@@ -327,24 +318,23 @@ class SMTCoreferencer:
 
     return clusters, cluster_labels
 
-  def evaluate(self, doc_path, mention_path, embed_path, image_path, out_path):
+  def evaluate(self, doc_path, mention_path, embed_path, out_path):
     if not os.path.exists(out_path):
       os.makedirs(out_path)
 
-    documents = json.load(open(doc_path, 'r'))
+    documents = json.load(open(doc_path, 'r')) 
     doc_ids = sorted(documents)
     mentions_all,\
     postags_all,\
     embeddings_all,\
-    image_embeddings_all,\
     spans_all,\
-    cluster_ids_all, _ = self.load_corpus(doc_path, mention_path, embed_path, image_path)
+    cluster_ids_all, _ = self.load_corpus(doc_path, mention_path, embed_path)
     
     preds = []
     golds = []
-    for doc_id, mentions, postags, embeddings, image_embeddings, spans, cluster_ids in zip(doc_ids, mentions_all, postags_all, embeddings_all, image_embeddings_all, spans_all, cluster_ids_all):
+    for doc_id, mentions, postags, embeddings, spans, cluster_ids in zip(doc_ids, mentions_all, postags_all, embeddings_all, spans_all, cluster_ids_all):
       # Compute pairwise F1
-      clusters, cluster_labels = self.predict(mentions, spans, postags, embeddings, image_embeddings)
+      clusters, cluster_labels = self.predict(mentions, spans, postags, embeddings)
       pred = [cluster_labels[f] == cluster_labels[s] for f, s in combinations(range(len(spans)), 2)]
       pred = np.asarray(pred)
 
@@ -373,17 +363,15 @@ class SMTCoreferencer:
     logger.info('Pairwise Recall = {:.3f}, Precision = {:.3f}, F1 = {:.3f}'.format(recall, precision, f1))
     return f1 
 
-  def compute_mention_pair_prob(self, first, second, first_tags, second_tags, image_scores):
-    num_images = image_scores.shape[0]
-    p_mention = self.length_probs[len(first)-1][len(second)-1] * np.ones(num_images)
-
+  def compute_mention_pair_prob(self, first, second, first_tags, second_tags):
+    p_mention = self.length_probs[len(first)-1][len(second)-1]
     for second_token, second_tag in zip(second, second_tags):
       p_token = 0.
       for first_token, first_tag in zip(first, first_tags):
         if self.is_compatible(first_tag, second_tag):
           first_idx = self.vocabs.get(first_token, 0)
           second_idx = self.vocabs.get(second_token, 0)
-          p_token += image_scores @ self.mention_probs[:, first_idx, second_idx]
+          p_token += self.mention_probs[first_idx][second_idx]
       p_mention *= p_token
     return p_mention
 
