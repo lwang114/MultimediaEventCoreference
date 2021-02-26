@@ -19,51 +19,6 @@ from coref.model_utils import pad_and_read_bert
 from coref.utils import create_corpus
 
 logger = logging.getLogger(__name__)
-def load_video(filename, config, transform=None, image_prefix=None):
-    '''Load video
-    :param filename: str, video filename
-    :return video_frames: FloatTensor of size (batch size, max num. of frames, width, height, n_channel)
-    :return mask: LongTensor of size (batch size, max num. of frames)
-    '''    
-    max_frame_num = config.max_frame_num
-    # Create mask
-    mask = torch.ones((max_frame_num,))
-
-    # Load video
-    try:
-      cap = cv2.VideoCapture(filename)
-      frame_rate = cap.get(5) 
-      video = [] 
-      while True:
-        frame_id = cap.get(1)
-        ret, img = cap.read()
-        if not ret:
-          print('{}, frame_rate, number of video frames: {}, {}'.format(filename, frame_rate, len(video)))
-          break
-        if (frame_id % math.floor(frame_rate) == 0):
-          video.append(img)    
-
-      # Subsample the video frames
-      step = len(video) // max_frame_num
-      indices = list(range(0, step*max_frame_num, step))
-    except:
-      print('Corrupted video file: {}'.format(filename))
-      logging.info('Corrupted video file: {}'.format(filename))
-      video = [torch.zeros((1, 3, 224, 224)) for _ in range(max_frame_num)]
-      return torch.cat(video, dim=0), mask
-
-    if not image_prefix is None:
-      for idx, img in enumerate(video):
-          img = Image.fromarray(img)
-          img.save('{}_{:03d}.jpg'.format(image_prefix, idx))
-
-    video = [Image.fromarray(video[idx]) for idx in indices]
-    # Apply transform to each frame
-    if transform is not None:
-      video = [transform(img).unsqueeze(0) for img in video]
-    
-    return torch.cat(video, dim=0), mask
-
 def save_frame_rate(config, split='train'):
   doc_json = os.path.join(config['data_folder'], split+'.json')
   documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
@@ -81,8 +36,10 @@ def save_frame_rate(config, split='train'):
 
 def extract_glove_embeddings(config, split, glove_file, dimension=300, out_prefix='glove_embedding'):
     ''' Extract glove embeddings for a sentence
-    :param doc_json: json metainfo file in m2e2 format
-    :return out_prefix: output embedding for the sentences
+    :param config: str, config file for the dataset
+    :param split: str, 'train' or 'test'
+    :param dimension: int, dimension of the embedding vectors
+    :return out_prefix: str
     '''
     doc_json = os.path.join(config['data_folder'], split+'.json')
     documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
