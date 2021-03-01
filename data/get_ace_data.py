@@ -5,7 +5,6 @@ import codecs
 import os
 import collections
 import argparse
-from conll import write_output_file
 
 def get_mention_doc(data_json, out_prefix):
   '''
@@ -47,8 +46,8 @@ def get_mention_doc(data_json, out_prefix):
   with open(data_json, 'r') as f:
     i = 0
     for line in f:
-      if i > 20:
-        break
+      # if i > 20:
+      #   break
       i += 1
       inst = json.loads(line)
       doc_id = inst['doc_id']
@@ -68,9 +67,12 @@ def get_mention_doc(data_json, out_prefix):
         cluster_id = cluster_ids[entity_mention['id']]
         start = entity_mention['start']
         end = entity_mention['end']
-         
+        entity_id = entity_mention['id']
+        
         entity = {'doc_id': doc_id,
+                  'm_id': entity_id,
                   'sentence_id': sent_id,
+                  'entity_type': entity_mention['entity_type'],
                   'tokens_ids': list(range(sen_start+start, sen_start+end)),
                   'tokens': entity_mention['text'],
                   'cluster_id': cluster_id,
@@ -82,12 +84,16 @@ def get_mention_doc(data_json, out_prefix):
         if not event_mention['id'] in cluster_ids:
           cluster_ids[event_mention['id']] = len(cluster_ids) 
         cluster_id = cluster_ids[event_mention['id']]
-        start = event_mention['start']
-        end = event_mention['end']
-      
+        start = event_mention['trigger']['start']
+        end = event_mention['trigger']['end']
+        event_id = event_mention['id']
+        
         event = {'doc_id': doc_id,
+                 'm_id': event_id,
+                 'arguments': event_mention['arguments'],
                  'sentence_id': sent_id,
-                 'tokens': event_mention['text'],
+                 'event_type': event_mention['event_type'],
+                 'tokens': event_mention['trigger']['text'],
                  'cluster_id': cluster_id,
                  'singleton': False}
         entity_event_mask[start:end] = 1.
@@ -209,9 +215,9 @@ def get_event_info(data_json, out_prefix):
 
 
 if __name__ == '__main__':
-  data_dir = 'data/ace/'
+  data_dir = 'ace/'
   for split in ['train', 'dev', 'test']:
     data_json = os.path.join(data_dir, '{}.oneie.json'.format(split))
     out_prefix = os.path.join(data_dir, 'mentions', split)
-    # get_mention_doc(data_json, out_prefix)
-    get_event_info(data_json, out_prefix)
+    get_mention_doc(data_json, out_prefix)
+    # get_event_info(data_json, out_prefix)
