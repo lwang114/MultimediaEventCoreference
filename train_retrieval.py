@@ -14,8 +14,9 @@ import numpy as np
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
 from models import SpanEmbedder, SimplePairWiseClassifier
-from mml_dotproduct_grounded_coreference import MMLDotProductGroundedCoreferencer, NoOp, BiLSTM
+from mml_dotproduct_grounded_coreference import MMLDotProductGroundedCoreferencer
 from adaptive_mml_dotproduct_grounded_coreference import AdaptiveMMLDotProductGroundedCoreferencer
+from text_models import NoOp, BiLSTM
 from corpus import GroundingFeatureDataset
 from corpus_glove import GroundingGloveFeatureDataset
 from evaluator import Evaluation, RetrievalEvaluation
@@ -87,7 +88,6 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
 
   if not isinstance(image_model, torch.nn.DataParallel):
     image_model = nn.DataParallel(image_model)
-  
   if not isinstance(coref_model, torch.nn.DataParallel):
     coref_model = nn.DataParallel(coref_model)
 
@@ -154,7 +154,7 @@ def train(text_model, image_model, coref_model, train_loader, test_loader, args)
 
       total_loss += loss.item() * B
       total += B
-      if i % 50 == 0:
+      if i % 100 == 0:
         info = 'Iter {} {:.4f}'.format(i, total_loss / total)
         print(info)
         logger.info(info) 
@@ -219,6 +219,10 @@ def test_retrieve(text_model, image_model, coref_model, test_loader, args):
   print('Number of article-video pairs: {}'.format(I2S_idxs.size(0)))
   print('I2S recall@1={}\tI2S recall@5={}\tI2S recall@10={}'.format(I2S_r1, I2S_r5, I2S_r10)) 
   print('S2I recall@1={}\tS2I recall@5={}\tS2I recall@10={}'.format(S2I_r1, S2I_r5, S2I_r10)) 
+  logger.info('Number of article-video pairs: {}'.format(I2S_idxs.size(0)))
+  logger.info('I2S recall@1={}\tI2S recall@5={}\tI2S recall@10={}'.format(I2S_r1, I2S_r5, I2S_r10)) 
+  logger.info('S2I recall@1={}\tS2I recall@5={}\tS2I recall@10={}'.format(S2I_r1, S2I_r5, S2I_r10)) 
+
 
 if __name__ == '__main__':
   # Set up argument parser

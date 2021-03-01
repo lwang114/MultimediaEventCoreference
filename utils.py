@@ -53,7 +53,10 @@ def plot_pr_curve(pred_json, model_name='Multimedia Coref.'):
   y_test = []
   for p in pred_dicts:
     y_score.extend(p['score'])
-    y_test.extend(p['pairwise_label'])
+    if len(np.asarray(p['pairwise_label']).shape) == 2:
+      p['pairwise_labels'] = p['pairwise_label'][0]
+    y_test.extend(p['pairwise_labels'])
+  
 
   average_precision = average_precision_score(y_test, y_score)
   print('Average_precision: {}'.format(average_precision))
@@ -119,31 +122,31 @@ if __name__ == '__main__':
   exp_dir = model_dir
 
   if args.task == 0: 
-    pred_jsons = ['{}_prediction_crossmedia_coref.json'.format(args.config.split('/')[-1].split('.')[0])] # ['config_grounded_text_only_decode_prediction.json', 'config_grounded_prediction.json']
+    prefix = args.config.split('/')[-1].split('.')[0]
+    pred_jsons = ['{}_prediction_text_only_coref.json'.format(prefix), '{}_prediction_text_coref.json'.format(prefix)]
     for pred_json in pred_jsons:
       pred_json = os.path.join(exp_dir, pred_json)
       mention_json = os.path.join(data_dir, 'mentions/test_mixed.json')
-      # make_prediction_readable(pred_json, img_dir, mention_json, pred_json.split('.')[0]+'_readable.txt')   
-      make_prediction_readable_crossmedia(pred_json, pred_json.split('.')[0]+'_readable.txt')   
+      make_prediction_readable(pred_json, img_dir, mention_json, pred_json.split('.')[0]+'_readable.txt')   
+      # make_prediction_readable_crossmedia(pred_json, pred_json.split('.')[0]+'_readable.txt')   
   elif args.task == 1:
     data_dir = config['data_folder']
-    out_prefix = os.path.join(data_dir, 'test')
+    out_prefix = os.path.join(data_dir, 'train')
     save_gold_conll_files(out_prefix+'.json', out_prefix+'_mixed.json', os.path.join(data_dir, '../gold_mixed')) 
     save_gold_conll_files(out_prefix+'.json', out_prefix+'_events.json', os.path.join(data_dir, '../gold_events')) 
     save_gold_conll_files(out_prefix+'.json', out_prefix+'_entities.json', os.path.join(data_dir, '../gold_entities'))
+  elif args.task == 2:
+    prefix = args.config.split('/')[-1].split('.')[0]
+    pred_jsons = ['{}_prediction_text_only_coref.json'.format(prefix), '{}_prediction_text_coref.json'.format(prefix)]
+    model_names = ['Text RoBERTa', 'Multimedia RoBERTa']
+    df = {'Model':[], 'Precision':[], 'Recall':[]}
+    for pred_json, model_name in zip(pred_jsons, model_names):
+      cur_df = plot_pr_curve(os.path.join(exp_dir, pred_json), model_name)
+      df['Model'].extend(cur_df['Model'])
+      df['Precision'].extend(cur_df['Precision'])
+      df['Recall'].extend(cur_df['Recall'])
 
-  '''
-  model_names = ['Text RoBERTa', 'Multimedia RoBERTa']
-  df = {'Model':[], 'Precision':[], 'Recall':[]}
-  for pred_json, model_name in zip(pred_jsons, model_names):
-    cur_df = plot_pr_curve(os.path.join(exp_dir, pred_json), model_name)
-    df['Model'].extend(cur_df['Model'])
-    df['Precision'].extend(cur_df['Precision'])
-    df['Recall'].extend(cur_df['Recall'])
-
-  df = pd.DataFrame(df)
-  sns.lineplot(data=df, x='Recall', y='Precision', hue='Model')
-  plt.savefig(os.path.join(exp_dir, 'precision_recall.png'))
-  plt.show()
-  '''
-  # plt.show()
+    df = pd.DataFrame(df)
+    sns.lineplot(data=df, x='Recall', y='Precision', hue='Model')
+    plt.savefig(os.path.join(exp_dir, 'precision_recall.png'))
+    plt.show()
