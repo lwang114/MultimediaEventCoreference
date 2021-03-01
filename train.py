@@ -541,6 +541,7 @@ if __name__ == '__main__':
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
 
   # Initialize dataloaders
+  type_to_idx = create_type_to_idx(os.path.join(config['data_folder'], 'train_mixed.json')) 
   if config.get('glove_dimension', None):
       train_set = SupervisedGroundingGloveFeatureDataset(os.path.join(config['data_folder'], 'train.json'), 
                                                          os.path.join(config['data_folder'], 'train_mixed.json'), 
@@ -555,11 +556,11 @@ if __name__ == '__main__':
       train_set = SupervisedGroundingFeatureDataset(os.path.join(config['data_folder'], 'train.json'), 
                                                     os.path.join(config['data_folder'], 'train_mixed.json'), 
                                                     os.path.join(config['data_folder'], 'train_bboxes.json'), 
-                                                    config, split='train')
+                                                    config, split='train', type_to_idx=type_to_idx)
       test_set = SupervisedGroundingFeatureDataset(os.path.join(config['data_folder'], 'test.json'), 
                                                    os.path.join(config['data_folder'], 'test_mixed.json'), 
                                                    os.path.join(config['data_folder'], 'test_bboxes.json'), 
-                                                   config, split='test')
+                                                   config, split='test', type_to_idx=type_to_idx)
  
   train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
   test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)

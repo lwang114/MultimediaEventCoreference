@@ -110,7 +110,7 @@ class SpanEmbedder(nn.Module):
         )
         self.self_attention_layer.apply(init_weights)
         self.width_feature = nn.Embedding(5, config.embedding_dimension)
-
+        self.type_feature = nn.Embedding(200, config.type_embedding_dimension)
 
 
     def pad_continous_embeddings(self, continuous_embeddings, width):
@@ -142,7 +142,7 @@ class SpanEmbedder(nn.Module):
         return padded_tokens_embeddings, masks
 
 
-    def forward(self, doc_embeddings, start_mappings, end_mappings, continuous_mappings, width):
+    def forward(self, doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, type_labels=None):
         start_embeddings = torch.matmul(start_mappings, doc_embeddings)
         end_embeddings = torch.matmul(end_mappings, doc_embeddings)
         start_end = torch.cat([start_embeddings, end_embeddings], dim=-1)
@@ -172,6 +172,10 @@ class SpanEmbedder(nn.Module):
             width = torch.clamp(width, max=4)
             width_embedding = self.width_feature(width)
             vector = torch.cat((vector, width_embedding), dim=1)
+        
+        if self.with_type_embedding: # XXX Add option 
+          type_embedding = self.type_feature(type_labels)
+          vector = torch.cat((vector, type_embedding), dim=1) 
 
         if not isinstance(continuous_embeddings, list):
           vector = vector.view(B, S, -1)
@@ -206,6 +210,9 @@ class SimplePairWiseClassifier(nn.Module):
         self.input_layer = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2 
         if config.with_mention_width:
             self.input_layer += config.embedding_dimension
+        if config.with_type_embedding:
+            self.input_layer += config.type_embedding_dimension
+
         self.input_layer *= 3
         self.hidden_layer = config.hidden_layer
         self.pairwise_mlp = nn.Sequential(
@@ -280,6 +287,9 @@ class SelfAttentionPairWiseClassifier(nn.Module):
     self.input_layer = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2 
     if config.with_mention_width:
         self.input_layer += config.embedding_dimension
+    if config.with_type_embedding:
+        self.input_layer += config.type_embedding_dimension
+
     self.transformer = torch.nn.Transformer(d_model=self.input_layer, 
                                             nhead=1, 
                                             num_encoder_layers=1, 

@@ -106,7 +106,7 @@ class TextFeatureDataset(Dataset):
     self.origin_tokens, self.bert_tokens, self.bert_start_ends, clean_start_end_dict = self.tokenize(documents) 
 
     # Extract coreference cluster labels
-    self.label_dict = self.create_dict_labels(mentions)
+    self.label_dict, self.type_label_dict = self.create_dict_labels(mentions)
 
     # Extract original mention spans
     self.origin_candidate_start_ends = [np.asarray([[start, end] for start, end in sorted(self.label_dict[doc_id])]) for doc_id in self.doc_ids]
@@ -162,6 +162,7 @@ class TextFeatureDataset(Dataset):
     :return label_dict: a mapping from doc id to a dict of (start token, end token) -> cluster id 
     '''
     label_dict = collections.defaultdict(dict)
+    type_label_dict = collections.defaultdict(dict)
     for m in mentions:
       if len(m['tokens_ids']) == 0:
         label_dict[m['doc_id']][(-1, -1)] = m['cluster_id']
@@ -169,7 +170,12 @@ class TextFeatureDataset(Dataset):
         start = min(m['tokens_ids'])
         end = max(m['tokens_ids']) 
         label_dict[m['doc_id']][(start, end)] = m['cluster_id']
-    return label_dict    
+        if 'entity_label' in m:
+          type_label_dict[m['doc_id']][(start, end)] = type_to_idx[m['entity_id']] # TODO Create type_to_idx
+        else:
+          type_label_dict[m['doc_id']][(start, end)] = type_to_idx[m['event_id']]
+
+    return label_dict, type_label_dict 
   
   def __getitem__(self, idx):
     '''Load mention span embeddings for the document
@@ -217,12 +223,21 @@ class TextFeatureDataset(Dataset):
  
     # Extract coreference cluster labels
     labels = [int(self.label_dict[self.doc_ids[idx]][(start, end)]) for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
+    type_labels = [int(self.label_dict[self.doc_ids[idx]][(start, end)]) for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
     labels = torch.LongTensor(labels)
+    type_labels = torch.LongTensor(type_labels)
     labels = fix_embedding_length(labels.unsqueeze(1), self.max_span_num).squeeze(1)
+    type_labels = fix_embedding_length(labels.unsqueeze(1), self.max_span_num).squeeze(1)
     text_mask = torch.FloatTensor([1. if j < doc_len else 0 for j in range(self.max_token_num)])
     span_mask = torch.FloatTensor([1. if i < span_num else 0 for i in range(self.max_span_num)])
 
-    return doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, labels, text_mask, span_mask
+    return doc_embeddings,\
+           start_mappings,\
+           end_mappings,\
+           continuous_mappings,\
+           width, labels,\
+           type_labels,\
+           text_mask, span_mask
 
   def __len__(self):
     return len(self.doc_ids)
