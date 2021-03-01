@@ -20,7 +20,7 @@ def get_all_token_mapping(start, end, max_token_num, max_mention_span):
     span_mappings = torch.zeros((span_num, max_mention_span, max_token_num), dtype=torch.float)  
     length = []
     for span_idx, (s, e) in enumerate(zip(start, end)):
-        if e >= max_token_num:
+        if e >= max_token_num or s >= max_token_num:
           continue
         start_mappings[span_idx, s] = 1.
         end_mappings[span_idx, e] = 1.
@@ -80,7 +80,8 @@ class TextFeatureDataset(Dataset):
     bert_embed_file = '{}_bert_embeddings.npz'.format(doc_json.split('.')[0])
     self.docs_embeddings = np.load(bert_embed_file)
     self.feat_keys = sorted(self.docs_embeddings, key=lambda x:int(x.split('_')[-1]))
-    self.doc_ids = ['_'.join(k.split('_')[:-1]) for k in self.feat_keys]
+    self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in documents]
+    self.doc_ids = ['_'.join(k.split('_')[:-1]) for k in self.feat_keys] 
 
     if test_id_file:
       with open(test_id_file) as f:
@@ -113,7 +114,8 @@ class TextFeatureDataset(Dataset):
       for start_end in self.origin_candidate_start_ends[idx]:
         if np.max(start_end) >= len(clean_start_end_dict[doc_id]):
           print(doc_id, max(start_end), len(clean_start_end_dict[doc_id]))
-    self.candidate_start_ends = [np.asarray([[clean_start_end_dict[doc_id][start-self.is_one_indexed], clean_start_end_dict[doc_id][end-self.is_one_indexed]] 
+    self.candidate_start_ends = [np.asarray([[clean_start_end_dict[doc_id][start-self.is_one_indexed],
+                                              clean_start_end_dict[doc_id][end-self.is_one_indexed]] 
                                               for start, end in start_ends]) 
                                  for doc_id, start_ends in zip(self.doc_ids, self.origin_candidate_start_ends)]
   
