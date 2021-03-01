@@ -8,7 +8,9 @@
   "with_head_attention": true,
   "with_type_embedding": true,
   "embedding_dimension": 20,
-
+  "type_embedding_dimension": 300,
+  "classifier": "attention",
+    
   "max_mention_span": 15,
   "use_gold_mentions": true,
   "mention_type": "mixed",
@@ -18,7 +20,7 @@
   "use_predicted_topics": false,
 
   "random_seed": 0,
-  "epochs": 21,
+  "epochs": 101,
   "batch_size": 4,
   "learning_rate": 1e-4,
   "weight_decay": 0,
@@ -29,9 +31,9 @@
   "neg_samp": true,
 
   "log_path": "logs/coref_translator/",
-  "data_folder": "data/ecb/mentions",
-  "is_one_indexed": true,
-  "span_repr_path": "models/topic_level_predicted_mentions/mixed_0.35/span_repr_9",
-  "span_scorer_path": "models/topic_level_predicted_mentions/mixed_0.35/span_scorer_9",
-  "model_path": "models/coref_translator_ecb/mixed_0.35"
+  "data_folder": "data/ace/mentions",
+  "is_one_indexed": false,
+  "span_repr_path": "models/coref_translator_ecb/mixed_0.35/mention_model.100.pth",
+  "pairwise_scorer_path": "models/coref_translator_ecb/mixed_0.35/coref_model.100.pth",
+  "model_path": "models/text_ace_attention_with_type_feats/mixed_0.35"
 }

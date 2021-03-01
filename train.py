@@ -541,7 +541,7 @@ if __name__ == '__main__':
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
 
   # Initialize dataloaders
-  type_to_idx = create_type_to_idx(os.path.join(config['data_folder'], 'train_mixed.json')) 
+  type_to_idx = create_type_to_idx(os.path.join(config['data_folder'], 'train_mixed.json'))
   if config.get('glove_dimension', None):
       train_set = SupervisedGroundingGloveFeatureDataset(os.path.join(config['data_folder'], 'train.json'), 
                                                          os.path.join(config['data_folder'], 'train_mixed.json'), 

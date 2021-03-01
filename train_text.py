@@ -18,6 +18,7 @@ from corpus_text import TextFeatureDataset
 from evaluator import Evaluation, RetrievalEvaluation
 from conll import write_output_file
 from copy import deepcopy
+from utils import create_type_to_idx
 
 logger = logging.getLogger(__name__)
 def fix_seed(config):
@@ -133,8 +134,10 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
     coref_model.train()
     for i, batch in enumerate(train_loader):
       doc_embeddings,\
-      start_mappings, end_mappings, continuous_mappings,\
-      width, text_labels, text_mask, span_mask = batch   
+      start_mappings, end_mappings,\
+      continuous_mappings, width,\
+      text_labels, type_labels,\
+      text_mask, span_mask = batch   
 
       B = doc_embeddings.size(0)     
       doc_embeddings = doc_embeddings.to(device)
@@ -142,13 +145,10 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
       end_mappings = end_mappings.to(device)
       continuous_mappings = continuous_mappings.to(device)
       width = width.to(device)
-      # videos = videos.to(device)
       text_labels = text_labels.to(device)
-      # img_labels = img_labels.to(device)
+      type_labels = type_labels.to(device)
       span_mask = span_mask.to(device)
       span_num = span_mask.sum(-1).long()
-      # video_mask = video_mask.to(device)
-      # region_num = video_mask.sum(-1).long()
       first_idxs, second_idxs, pairwise_labels = get_pairwise_labels(text_labels, is_training=False, device=device)
       pairwise_labels = pairwise_labels.to(torch.float)
       if first_idxs is None:
@@ -157,8 +157,11 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
       optimizer.zero_grad()
 
       text_output = text_model(doc_embeddings)
-      mention_output = mention_model(text_output, start_mappings, end_mappings, continuous_mappings, width)
-      # video_output = image_model(videos)
+      mention_output = mention_model(text_output,
+                                         start_mappings, end_mappings,
+                                         continuous_mappings, width,
+                                         type_labels)
+          
       scores = []
       for idx in range(B):
         scores.append(coref_model(mention_output[idx, first_idxs[idx]], 
@@ -207,8 +210,10 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
       pred_dicts = []
       for i, batch in enumerate(test_loader):
         doc_embeddings,\
-        start_mappings, end_mappings, continuous_mappings,\
-        width, text_labels, text_mask, span_mask = batch   
+        start_mappings, end_mappings,\
+        continuous_mappings, width,\
+        text_labels, type_labels,\
+        text_mask, span_mask = batch   
         
         token_num = text_mask.sum(-1).long()
         span_num = span_mask.sum(-1).long()
@@ -218,10 +223,11 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
         continuous_mappings = continuous_mappings.to(device)
         width = width.to(device)
         text_labels = text_labels.to(device)
+        type_labels = type_labels.to(device)
         
         # Compute mention embeddings
         text_output = text_model(doc_embeddings)
-        mention_output = mention_model(text_output, start_mappings, end_mappings, continuous_mappings, width)
+        mention_output = mention_model(text_output, start_mappings, end_mappings, continuous_mappings, width, type_labels)
 
         B = doc_embeddings.size(0)  
         for idx in range(B):
@@ -305,11 +311,17 @@ if __name__ == '__main__':
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
 
   # Initialize dataloaders
-  train_set = TextFeatureDataset(os.path.join(config['data_folder'], 'train.json'), os.path.join(config['data_folder'], 'train_mixed.json'), config, split='train')
+  type_to_idx = create_type_to_idx([os.path.join(config['data_folder'], 'train_mixed.json'),\
+                                    os.path.join(config['data_folder'], 'test_mixed.json')]) 
+  train_set = TextFeatureDataset(os.path.join(config['data_folder'], 'train.json'),
+                                 os.path.join(config['data_folder'], 'train_mixed.json'),
+                                 config, split='train', type_to_idx=type_to_idx)
   config_test = deepcopy(config)
   config_test['is_one_indexed'] = True if config['data_folder'].split('/')[-2] == 'ecb' else False
   print(config_test['is_one_indexed'])
-  test_set = TextFeatureDataset(os.path.join(config['data_folder'], 'test.json'), os.path.join(config['data_folder'], 'test_mixed.json'), config_test, split='test')
+  test_set = TextFeatureDataset(os.path.join(config['data_folder'], 'test.json'),
+                                os.path.join(config['data_folder'], 'test_mixed.json'),
+                                config_test, split='test', type_to_idx=type_to_idx)
 
   train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
   test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)

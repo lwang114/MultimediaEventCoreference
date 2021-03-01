@@ -13,6 +13,27 @@ import argparse
 import pyhocon
 from conll import write_output_file
 
+def create_type_to_idx(mention_jsons):
+  n_entity_types = 0
+  n_event_types = 0
+  type_to_idx = {'###UNK###':0}
+  for mention_json in mention_jsons:
+    mention_dicts = json.load(open(mention_json))
+    for mention_dict in mention_dicts:
+      if 'entity_type' in mention_dict:
+        entity_type = mention_dict['entity_type']
+        if not entity_type in type_to_idx:
+          type_to_idx[entity_type] = len(type_to_idx)
+          n_entity_types += 1
+      else:
+        event_type = mention_dict['event_type']
+        if not event_type in type_to_idx:
+          type_to_idx[event_type] = len(type_to_idx)
+          n_event_types += 1
+  print('Num. of entity types = {}'.format(n_entity_types))
+  print('Num. of event types = {}'.format(n_event_types))
+  return type_to_idx
+  
 def make_prediction_readable(pred_json, img_dir, mention_json, out_file='prediction_readable.txt'):
   pred_dicts = json.load(open(pred_json))
   mention_dicts = json.load(open(mention_json)) 
@@ -117,7 +138,7 @@ if __name__ == '__main__':
 
   config = pyhocon.ConfigFactory.parse_file(args.config)
   model_dir = config['model_path']
-  img_dir = config['image_dir']
+  # img_dir = config['image_dir']
   data_dir = os.path.join(config['data_folder'], '../')
   exp_dir = model_dir
 
@@ -150,3 +171,11 @@ if __name__ == '__main__':
     sns.lineplot(data=df, x='Recall', y='Precision', hue='Model')
     plt.savefig(os.path.join(exp_dir, 'precision_recall.png'))
     plt.show()
+  elif args.task == 3:
+    mention_json = 'test_create_type_to_idx.json'
+    json.dump([{'entity_type': '1'},
+               {'event_type': '2'},
+               {'entity_type': '1'},
+               {'entity_type': '1'}], open(mention_json, 'w'))
+    type_to_idx = create_type_to_idx([mention_json])
+    print(type_to_idx.items())

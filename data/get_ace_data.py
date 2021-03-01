@@ -93,6 +93,7 @@ def get_mention_doc(data_json, out_prefix):
                  'arguments': event_mention['arguments'],
                  'sentence_id': sent_id,
                  'event_type': event_mention['event_type'],
+                 'tokens_ids': list(range(sen_start+start, sen_start+end)),
                  'tokens': event_mention['trigger']['text'],
                  'cluster_id': cluster_id,
                  'singleton': False}
