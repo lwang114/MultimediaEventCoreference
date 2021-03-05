@@ -202,7 +202,8 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
           torch.save(image_model.module.state_dict(), '{}/image_model_best.pth'.format(args.exp_dir, epoch))
           torch.save(mention_model.module.state_dict(), '{}/mention_model_best.pth'.format(args.exp_dir, epoch))
           torch.save(coref_model.module.state_dict(), '{}/coref_model_best.pth'.format(args.exp_dir, epoch))
-      
+      print('Best F1: {}'.format(best_f1))
+          
   if args.evaluate_only:
     pairwise_f1 = test(text_model, mention_model, image_model, coref_model, test_loader, args)
 
@@ -373,4 +374,12 @@ if __name__ == '__main__':
       coref_model.load_state_dict(torch.load(config['pairwise_scorer_path'], map_location=device))
   
   # Training
+  n_params = 0
+  for p in mention_model.parameters():
+      n_params += p.numel()
+
+  for p in coref_model.parameters():
+      n_params += p.numel()
+
+  print('Number of parameters in coref classifier: {}'.format(n_params))
   train(text_model, mention_model, image_model, coref_model, train_loader, test_loader, args)

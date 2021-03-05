@@ -41,7 +41,9 @@ def fix_embedding_length(emb, L):
   return emb  
 
 class TextFeatureDataset(Dataset):
-  def __init__(self, doc_json, mention_json, config, split='train'):
+  def __init__(self, doc_json, mention_json,
+               config, split='train',
+               type_to_idx={'###NULL###':0}, role_to_idx={'###NULL###':0}):
     '''
     :param doc_json: dict of 
         [doc_id]: list of [sent id, token id, token, is entity/event]
@@ -65,6 +67,9 @@ class TextFeatureDataset(Dataset):
     self.max_frame_num = config.get('max_frame_num', 500)
     self.max_mention_span = config.get('max_mention_span', 15)
     self.is_one_indexed = config.get('is_one_indexed', False)
+    self.type_to_idx = type_to_idx
+    self.role_to_idx = role_to_idx
+    self.num_role_types = len(self.role_to_idx)
     test_id_file = config.get('test_id_file', '')
     self.split = split
     self.config = config
@@ -106,7 +111,7 @@ class TextFeatureDataset(Dataset):
     self.origin_tokens, self.bert_tokens, self.bert_start_ends, clean_start_end_dict = self.tokenize(documents) 
 
     # Extract coreference cluster labels
-    self.label_dict, self.type_label_dict = self.create_dict_labels(mentions)
+    self.label_dict, self.type_label_dict, self.argument_dict = self.create_dict_labels(mentions)
 
     # Extract original mention spans
     self.origin_candidate_start_ends = [np.asarray([[start, end] for start, end in sorted(self.label_dict[doc_id])]) for doc_id in self.doc_ids]
@@ -163,20 +168,65 @@ class TextFeatureDataset(Dataset):
     '''
     label_dict = collections.defaultdict(dict)
     type_label_dict = collections.defaultdict(dict)
+    argument_dict = collections.defaultdict(dict)
+    id_to_span = {}
     for m in mentions:
-      if len(m['tokens_ids']) == 0:
-        label_dict[m['doc_id']][(-1, -1)] = m['cluster_id']
-      else:
         start = min(m['tokens_ids'])
         end = max(m['tokens_ids']) 
         label_dict[m['doc_id']][(start, end)] = m['cluster_id']
-        if 'entity_label' in m:
-          type_label_dict[m['doc_id']][(start, end)] = type_to_idx[m['entity_id']] # TODO Create type_to_idx
+        if 'entity_type' in m:
+          type_label_dict[m['doc_id']][(start, end)] = self.type_to_idx[m['entity_type']]
         else:
-          type_label_dict[m['doc_id']][(start, end)] = type_to_idx[m['event_id']]
+          type_label_dict[m['doc_id']][(start, end)] = self.type_to_idx[m['event_type']]
+        id_to_span[m['m_id']] = (start, end) 
+          
+    # Extract event-argument graphs
+    for m in mentions:
+        if 'event_type' in m:
+            start = min(m['tokens_ids'])
+            end = max(m['tokens_ids'])
+            event_span = id_to_span[m['m_id']]
+            arguments = m['arguments']
+            argument_dict[m['doc_id']][(start, end)] = []
+            for a in arguments:
+                entity_id = a['entity_id']
+                role = a['role']
+                entity_span = id_to_span[entity_id]
+                argument_dict[m['doc_id']][(start, end)].append(list(entity_span)+[role])
+    return label_dict, type_label_dict, argument_dict
 
-    return label_dict, type_label_dict 
-  
+  def create_adjacency_matrix(self, argument_dict, starts, ends, with_self_loop=True):
+    span_to_idx = {(start, end): span_idx for span_idx, (start, end) in enumerate(zip(starts, ends))}
+    adj_idxs = [[], [], []]
+    adj_vals = []
+    span_num = min(len(starts), self.max_span_num-1)
+    if with_self_loop:
+        adj_idxs[0].extend([0]*span_num)
+        adj_idxs[1].extend(list(range(span_num)))
+        adj_idxs[2].extend(list(range(span_num)))
+        adj_vals.extend([1.]*span_num)
+        
+    for event_span, arguments in argument_dict.items():
+        event_idx = span_to_idx[event_span]
+        if event_idx >= self.max_span_num:
+            continue
+        
+        for a in arguments:
+            r = self.role_to_idx[a[2]]
+            arg_idx = span_to_idx[(a[0], a[1])]
+            if arg_idx >= self.max_span_num:
+                continue
+            adj_idxs[0].extend([r, r])
+            adj_idxs[1].extend([event_idx, arg_idx])
+            adj_idxs[2].extend([arg_idx, event_idx])
+            adj_vals.extend([1., 1.])
+
+    adj_idxs = torch.LongTensor(adj_idxs)
+    adj_vals = torch.FloatTensor(adj_vals)
+    adjm = torch.sparse.FloatTensor(adj_idxs, adj_vals, torch.Size([self.num_role_types, self.max_span_num, self.max_span_num]))
+    return adjm
+
+
   def __getitem__(self, idx):
     '''Load mention span embeddings for the document
     :param idx: int, doc index
@@ -223,13 +273,22 @@ class TextFeatureDataset(Dataset):
  
     # Extract coreference cluster labels
     labels = [int(self.label_dict[self.doc_ids[idx]][(start, end)]) for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
-    type_labels = [int(self.label_dict[self.doc_ids[idx]][(start, end)]) for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
+    type_labels = [int(self.type_label_dict[self.doc_ids[idx]][(start, end)]) for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
     labels = torch.LongTensor(labels)
     type_labels = torch.LongTensor(type_labels)
     labels = fix_embedding_length(labels.unsqueeze(1), self.max_span_num).squeeze(1)
-    type_labels = fix_embedding_length(labels.unsqueeze(1), self.max_span_num).squeeze(1)
+    type_labels = fix_embedding_length(type_labels.unsqueeze(1), self.max_span_num).squeeze(1)
     text_mask = torch.FloatTensor([1. if j < doc_len else 0 for j in range(self.max_token_num)])
     span_mask = torch.FloatTensor([1. if i < span_num else 0 for i in range(self.max_span_num)])
+
+    # Compute adjacency matrix
+    # if origin_candidate_start_ends.shape[0] > self.max_span_num:
+    #     print('{} exceeds the limit on the number of spans: {} > {}'.format(self.doc_ids[idx],
+    #                                                                         origin_candidate_start_ends.shape[0],
+    #                                                                         self.max_span_num))
+    adjm = self.create_adjacency_matrix(self.argument_dict[self.doc_ids[idx]],
+                                        origin_candidate_start_ends[:, 0],
+                                        origin_candidate_start_ends[:, 1]).to_dense()
 
     return doc_embeddings,\
            start_mappings,\
@@ -237,6 +296,7 @@ class TextFeatureDataset(Dataset):
            continuous_mappings,\
            width, labels,\
            type_labels,\
+           adjm,\
            text_mask, span_mask
 
   def __len__(self):
