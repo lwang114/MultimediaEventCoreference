@@ -13,12 +13,12 @@ import random
 import numpy as np
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
-from models import SpanEmbedder, SimplePairWiseClassifier, SelfAttentionPairWiseClassifier, NoOp, BiLSTM
+from text_models import SpanEmbedder, GCNSpanEmbedder, SimplePairWiseClassifier, SelfAttentionPairWiseClassifier, NoOp, BiLSTM
 from corpus_text import TextFeatureDataset
 from evaluator import Evaluation, RetrievalEvaluation
 from conll import write_output_file
 from copy import deepcopy
-from utils import create_type_to_idx
+from utils import create_type_to_idx, create_role_to_idx
 
 logger = logging.getLogger(__name__)
 def fix_seed(config):
@@ -128,6 +128,7 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
   begin_time = time.time()
   if args.evaluate_only:
     config.epochs = 0
+  best_f1 = 0
   for epoch in range(args.start_epoch, config.epochs):
     text_model.train()
     image_model.train()
@@ -136,10 +137,10 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
       doc_embeddings,\
       start_mappings, end_mappings,\
       continuous_mappings, width,\
-      text_labels, type_labels,\
-      text_mask, span_mask = batch   
+      text_labels, type_labels, adjms,\
+      text_mask, span_mask = batch 
 
-      B = doc_embeddings.size(0)     
+      B = doc_embeddings.size(0)
       doc_embeddings = doc_embeddings.to(device)
       start_mappings = start_mappings.to(device)
       end_mappings = end_mappings.to(device)
@@ -147,17 +148,23 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
       width = width.to(device)
       text_labels = text_labels.to(device)
       type_labels = type_labels.to(device)
+      adjms = adjms.to(device)
       span_mask = span_mask.to(device)
       span_num = span_mask.sum(-1).long()
       first_idxs, second_idxs, pairwise_labels = get_pairwise_labels(text_labels, is_training=False, device=device)
       pairwise_labels = pairwise_labels.to(torch.float)
       if first_idxs is None:
         continue
-
       optimizer.zero_grad()
 
       text_output = text_model(doc_embeddings)
-      mention_output = mention_model(text_output,
+      if config.mention_embedder == 'gcn':
+          mention_output = mention_model(text_output,
+                                         start_mappings, end_mappings,
+                                         continuous_mappings, width,
+                                         type_labels, adjms)
+      else:
+          mention_output = mention_model(text_output,
                                          start_mappings, end_mappings,
                                          continuous_mappings, width,
                                          type_labels)
@@ -174,7 +181,7 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
 
       total_loss += loss.item() * B
       total += B
-      if i % 50 == 0:
+      if i % 200 == 0:
         info = 'Iter {} {:.4f}'.format(i, total_loss / total)
         print(info)
         logger.info(info) 
@@ -183,17 +190,23 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
     print(info)
     logger.info(info)
 
-    torch.save(text_model.module.state_dict(), '{}/text_model.{}.pth'.format(args.exp_dir, epoch))
-    torch.save(image_model.module.state_dict(), '{}/image_model.{}.pth'.format(args.exp_dir, epoch))
-    torch.save(mention_model.module.state_dict(), '{}/mention_model.{}.pth'.format(args.exp_dir, epoch))
-    torch.save(coref_model.module.state_dict(), '{}/coref_model.{}.pth'.format(args.exp_dir, epoch))
- 
-    if epoch % 5 == 0:
-      test(text_model, mention_model, image_model, coref_model, test_loader, args)
+    torch.save(text_model.module.state_dict(), '{}/text_model.pth'.format(args.exp_dir))
+    torch.save(image_model.module.state_dict(), '{}/image_model.pth'.format(args.exp_dir))
+    torch.save(mention_model.module.state_dict(), '{}/mention_model.pth'.format(args.exp_dir))
+    torch.save(coref_model.module.state_dict(), '{}/coref_model.pth'.format(args.exp_dir))
+    if epoch % 1 == 0:
+      pairwise_f1 = test(text_model, mention_model, image_model, coref_model, test_loader, args)
+      if pairwise_f1 > best_f1:
+          best_f1 = pairwise_f1
+          torch.save(text_model.module.state_dict(), '{}/text_model_best.pth'.format(args.exp_dir, epoch))
+          torch.save(image_model.module.state_dict(), '{}/image_model_best.pth'.format(args.exp_dir, epoch))
+          torch.save(mention_model.module.state_dict(), '{}/mention_model_best.pth'.format(args.exp_dir, epoch))
+          torch.save(coref_model.module.state_dict(), '{}/coref_model_best.pth'.format(args.exp_dir, epoch))
       
   if args.evaluate_only:
-    test(text_model, mention_model, image_model, coref_model, test_loader, args)
+    pairwise_f1 = test(text_model, mention_model, image_model, coref_model, test_loader, args)
 
+    
     
 def test(text_model, mention_model, image_model, coref_model, test_loader, args): 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -213,7 +226,7 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
         start_mappings, end_mappings,\
         continuous_mappings, width,\
         text_labels, type_labels,\
-        text_mask, span_mask = batch   
+        adjm, text_mask, span_mask = batch
         
         token_num = text_mask.sum(-1).long()
         span_num = span_mask.sum(-1).long()
@@ -227,8 +240,17 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
         
         # Compute mention embeddings
         text_output = text_model(doc_embeddings)
-        mention_output = mention_model(text_output, start_mappings, end_mappings, continuous_mappings, width, type_labels)
-
+        if config.mention_embedder == 'gcn':
+            mention_output = mention_model(text_output,
+                                           start_mappings, end_mappings,
+                                           continuous_mappings, width,
+                                           type_labels, adjm)
+        else:
+            mention_output = mention_model(text_output,
+                                           start_mappings, end_mappings,
+                                           continuous_mappings, width,
+                                           type_labels)
+            
         B = doc_embeddings.size(0)  
         for idx in range(B):
           # Compute pairwise labels
@@ -280,7 +302,8 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
                                                            len(all_labels)))
       logger.info('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
                                                                       eval.get_precision(), eval.get_f1()))
-
+      return eval.get_f1()
+      
 if __name__ == '__main__':
   # Set up argument parser
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -311,26 +334,29 @@ if __name__ == '__main__':
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
 
   # Initialize dataloaders
-  type_to_idx = create_type_to_idx([os.path.join(config['data_folder'], 'train_mixed.json'),\
-                                    os.path.join(config['data_folder'], 'test_mixed.json')]) 
-  train_set = TextFeatureDataset(os.path.join(config['data_folder'], 'train.json'),
-                                 os.path.join(config['data_folder'], 'train_mixed.json'),
-                                 config, split='train', type_to_idx=type_to_idx)
+  splits = [os.path.join(config['data_folder'], 'train_mixed.json'),\
+            os.path.join(config['data_folder'], 'test_mixed.json')]
+  type_to_idx = create_type_to_idx(splits) 
+  role_to_idx = create_role_to_idx(splits)
+  train_set = TextFeatureDataset(os.path.join(config['data_folder'], 'train.json'), splits[0],
+                                 config, split='train', type_to_idx=type_to_idx, role_to_idx=role_to_idx)
   config_test = deepcopy(config)
   config_test['is_one_indexed'] = True if config['data_folder'].split('/')[-2] == 'ecb' else False
   print(config_test['is_one_indexed'])
-  test_set = TextFeatureDataset(os.path.join(config['data_folder'], 'test.json'),
-                                os.path.join(config['data_folder'], 'test_mixed.json'),
-                                config_test, split='test', type_to_idx=type_to_idx)
+  test_set = TextFeatureDataset(os.path.join(config['data_folder'], 'test.json'), splits[1],
+                                config_test, split='test', type_to_idx=type_to_idx, role_to_idx=role_to_idx)
 
-  train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
-  test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
+  train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=False)
+  test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=False)
 
   # Initialize models
-  embedding_dim = config.hidden_layer # config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2
+  embedding_dim = config.hidden_layer
   text_model = NoOp() 
-  # text_model = BiLSTM(1024, embedding_dim)
-  mention_model = SpanEmbedder(config, device).to(device)
+
+  if config.get('mention_embedder', 'simple') == 'gcn':
+      mention_model = GCNSpanEmbedder(config, len(role_to_idx), device).to(device)
+  else:
+      mention_model = SpanEmbedder(config, device).to(device)
 
   image_model = NoOp()
   if config.get('classifier', 'attention') == 'simple':
