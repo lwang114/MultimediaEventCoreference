@@ -456,11 +456,17 @@ class SelfAttentionPairWiseClassifier(nn.Module):
         if config.with_type_embedding:
             self.input_layer += config.type_embedding_dimension
 
-    self.transformer = torch.nn.Transformer(d_model=self.input_layer, 
-                                            nhead=1, 
-                                            num_encoder_layers=1, 
-                                            num_decoder_layers=1)
-  
+    if config.get('num_encoder_layers', 1) > 0:
+      self.transformer = torch.nn.Transformer(d_model=self.input_layer, 
+                                              nhead=1, 
+                                              num_encoder_layers=1, 
+                                              num_decoder_layers=1)
+    else:
+      transformer_decoder = nn.TransformerDecoderLayer(d_model=self.input_layer,
+                                                       nheads=1)
+      self.transformer = torch.nn.TransformerDecoder(transformer_decoder,
+                                                     num_decoder_layers=1)
+
   def forward(self, first, second):
     '''
     :param first: FloatTensor of size (num. of span pairs, span embed dim)
@@ -518,89 +524,7 @@ def find_connected_components(A):
     if visited[v] < 0:
       c = _dfs(v, [])
       components.append(c)
-  return components
-
-        
-class MultimediaPairWiseClassifier(nn.Module):
-    def __init__(self, config):
-        super(MultimediaPairWiseClassifier, self).__init__()
-        self.input_layer = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2 
-        if config.with_mention_width:
-            self.input_layer += config.embedding_dimension
-        self.input_layer *= 3
-        self.hidden_layer = config.hidden_layer
-        self.pairwise_mlp = nn.Sequential(
-            nn.Dropout(config.dropout),
-            nn.Linear(self.input_layer, self.hidden_layer),
-            nn.ReLU(),
-            nn.Linear(self.hidden_layer, self.hidden_layer),
-            nn.Dropout(config.dropout),
-            nn.ReLU(),
-            nn.Linear(self.hidden_layer, 1),
-        )
-        self.pairwise_mlp.apply(init_weights)
-
-    def forward(self, first, second):
-        return self.pairwise_mlp(torch.cat((first, second, first * second), dim=1))
-
-    def predict_cluster(self, span_embeddings, span_embeddings_i2s, first_idx, second_idx, w=1.):
-      '''
-      :param span_embeddings: FloatTensor of size (num. of spans, span embed dim),
-      :param image_embeddings: FloatTensor of size (num. of ROIs, image embed dim),
-      :param first_idx: LongTensor of size (num. of mention pairs,)
-      :param second_idx: LongTensor of size (num. of mention pairs,)
-      :return scores: FloatTensor of size (batch size, max num. of mention pairs),
-      :return clusters: dict of list of int, mapping from cluster id to mention ids of its members 
-      '''
-      device = span_embeddings.device
-      thres = -0.76 # TODO Make this a config parameter
-      span_num = max(second_idx) + 1
-      span_mask = torch.ones(len(first_idx)).to(device)
-      first_span_embeddings = span_embeddings[first_idx]
-      second_span_embeddings = span_embeddings[second_idx]
-      first_span_embeddings_i2s = span_embeddings_i2s[first_idx]
-      second_span_embeddings_i2s = span_embeddings_i2s[second_idx] 
-
-      text_only_scores = self(first_span_embeddings, second_span_embeddings)
-      scores = text_only_scores + w * self(first_span_embeddings_i2s, second_span_embeddings_i2s)
-
-      # Antecedent prediction
-      children = -1 * np.ones(span_num, dtype=np.int64)
-      for idx2 in range(span_num):
-        candidate_scores = []
-        for idx1 in range(idx2):
-          score_idx = idx1 * (2 * span_num - idx1 - 1) // 2 - 1
-          score_idx += (idx2 - idx1)
-          score = scores[score_idx].squeeze().cpu().detach().data.numpy()
-          if children[idx1] == -1:
-            candidate_scores.append(score)
-          else:
-            candidate_scores.append(-np.inf)
-
-        if len(candidate_scores) > 0:
-          candidate_scores = np.asarray(candidate_scores)
-          max_score = candidate_scores.max()
-          if max_score > thres:
-            parent = np.argmax(candidate_scores)
-            children[parent] = idx2
-      
-      # Extract clusters from coreference chains
-      cluster_id = 0
-      clusters = {}
-      covered_spans = []
-      for idx in range(span_num):
-        if not idx in covered_spans and children[idx] != -1:
-          covered_spans.append(idx)
-          clusters[cluster_id] = [idx]
-          cur_idx = idx
-          while children[cur_idx] != -1:
-            cur_idx = children[cur_idx]
-            clusters[cluster_id].append(cur_idx)
-            covered_spans.append(cur_idx)
-          cluster_id += 1
-      # print('Number of non-singleton clusters: {}'.format(cluster_id))
-      return clusters, scores, text_only_scores
-   
+  return components  
 
 if __name__ == '__main__':
   import argparse
