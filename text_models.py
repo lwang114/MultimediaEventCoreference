@@ -505,6 +505,68 @@ class SelfAttentionPairWiseClassifier(nn.Module):
     # print('Number of clusters: ', len(clusters))
     return clusters, scores
 
+class StructuredPairWiseClassifier(nn.Module): # TODO
+  def __init__(self, config):
+    super(SelfAttentionPairWiseClassifier, self).__init__()  
+
+    self.input_layer = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2 
+    if config.with_mention_width:
+        self.input_layer += config.embedding_dimension
+    if config.get('with_type_embedding', False):
+        self.input_layer += config.type_embedding_dimension
+
+    if config.get('num_encoder_layers', 1) > 0:
+      self.transformer = torch.nn.Transformer(d_model=self.input_layer, 
+                                              nhead=1, 
+                                              num_encoder_layers=1, 
+                                              num_decoder_layers=1)
+    else:
+      transformer_decoder = nn.TransformerDecoderLayer(d_model=self.input_layer,
+                                                       nheads=1)
+      self.transformer = torch.nn.TransformerDecoder(transformer_decoder,
+                                                     num_decoder_layers=1)
+
+  def forward(self, first, second):
+    '''
+    :param first: FloatTensor of size (num. of span pairs, span embed dim)
+    :param second: FloatTensor of size (num. of span pairs, span embed dim)
+    :return score: FloatTensor of size (num. of span pairs, 1) 
+    '''
+    first = first.unsqueeze(0)
+    second = second.unsqueeze(0)
+
+    d = first.size(-1)
+    first_c = self.transformer(second, second).squeeze(0)
+    # scale =  torch.tensor(d ** 0.5, dtype=torch.float, device=first.device)
+    scores = torch.sum(first * first_c, dim=-1).t() # / scale
+    return scores
+
+  def predict_cluster(self, span_embeddings, first_idxs, second_idxs):
+    span_num = span_embeddings.size(0)
+
+    # Compute pairwise scores for mention pairs specified
+    scores = self(span_embeddings[first_idxs], span_embeddings[second_idxs])
+    
+    # Compute the pairwise score matrix
+    row_idxs = [i for i in range(span_num) for j in range(span_num)]
+    col_idxs = [j for i in range(span_num) for j in range(span_num)]
+    S = self(span_embeddings[row_idxs], span_embeddings[col_idxs])
+    S = S.view(span_num, span_num).cpu().detach().numpy()
+
+    # Compute the adjacency matrix
+    A = np.zeros((span_num, span_num), dtype=np.float)
+    for row_idx in row_idxs:
+      col_idx = np.argmax(S[row_idx]) 
+      A[row_idx, col_idx] = 1.
+      A[col_idx, row_idx] = 1.
+  
+    # Find the connected components of the graph
+    clusters = find_connected_components(A)
+    clusters = {k:c for k, c in enumerate(clusters)}
+    # print('Number of clusters: ', len(clusters))
+    return clusters, scores
+    
+
 def find_connected_components(A):
   def _dfs(v, c):
     for u in range(n):
