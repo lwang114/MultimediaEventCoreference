@@ -4,7 +4,6 @@ import torch.nn.functional as F
 import numpy as np
 import torchvision.models as models
 from itertools import combinations
-from models import SimplePairWiseClassifier
 import json
   
 class TripletLoss(nn.Module):
@@ -20,21 +19,21 @@ class TripletLoss(nn.Module):
     :param image_outputs: FloatTensor of size (batch size, max num. of image regions, image embed dim)
     :return scores: FloatTensor of size (batch size, max num. of [score_type] spans, span embed dim)
     '''
-    B, N, _ = first.size()
-    L = second.size(1)
+    B, N, _ = text_outputs.size()
+    L = image_outputs.size(1)
     loss = torch.zeros(1, device=image_outputs.device, requires_grad=True)
-    ntokens = text_mask.sum(-1)
-    nregions = image_mask.sum(-1)
-
+    ntokens = text_mask.sum(1).to(torch.int)
+    nregions = image_mask.sum(1).to(torch.int)
+    
     if B == 1:
       return loss
     for i in range(B):
       I_imp_ind = i
       S_imp_ind = i
       while I_imp_ind == i:
-        I_imp_ind = np.random.randint(0, n)
+        I_imp_ind = np.random.randint(0, B)
       while S_imp_ind == i:
-        S_imp_ind = np.random.randint(0, n)
+        S_imp_ind = np.random.randint(0, B)
       
       nT = ntokens[i]
       nTimp = ntokens[S_imp_ind]
@@ -42,18 +41,18 @@ class TripletLoss(nn.Module):
       if len(nregions):
         nR = nregions[i]
         nRimp = nregions[I_imp_ind]
-    
+
       anchorsim = self.matchmap_similarity(
-          self.compute_matchmap(text_outputs[i, :nT[i]], 
-                                image_outputs[i, :nR[i]])
+          self.compute_matchmap(text_outputs[i, :nT], 
+                                image_outputs[i, :nR])
       )
       Simpsim = self.matchmap_similarity(
-          self.compute_matchmap(text_outputs[S_imp_ind, :nT[S_imp_ind]],
-                                image_outputs[i, :nR[i]])
+          self.compute_matchmap(text_outputs[S_imp_ind, :nTimp],
+                                image_outputs[i, :nR])
       )
       Iimpsim = self.matchmap_similarity(
-          self.compute_matchmap(text_outputs[i, :nT[i]],
-                                image_outputs[I_imp_ind, :nR[I_imp_ind]])
+          self.compute_matchmap(text_outputs[i, :nT],
+                                image_outputs[I_imp_ind, :nRimp])
       )
       
       S2I_simdif = margin + Iimpsim - anchorsim
@@ -68,12 +67,12 @@ class TripletLoss(nn.Module):
   def compute_matchmap(self, S, I):
     return torch.mm(S, I.t())
 
-  def matchmap_similarity(self, M, simtype):
-    if simtype == 'mean':
+  def matchmap_similarity(self, M):
+    if self.simtype == 'mean':
       return M.mean()
-    elif simtype == 'mean_max':
+    elif self.simtype == 'mean_max':
       return M.max(1)[0].mean()
-    elif simtype == 'max_mean':
+    elif self.simtype == 'max_mean':
       return M.max(0)[0].mean()
 
   def retrieve(self, text_outputs, image_outputs, text_masks, image_masks):

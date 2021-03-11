@@ -63,9 +63,9 @@ class SupervisedGroundingFeatureDataset(Dataset):
     self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     self.max_token_num = config.get('max_token_num', 512)
     self.max_span_num = config.get('max_span_num', 80)
-    self.max_frame_num = config.get('max_frame_num', 20)
+    self.max_frame_num = config.get('max_frame_num', 100)
     self.max_mention_span = config.get('max_mention_span', 15)
-    self.img_feat_type = config.get('img_feat_type', 'resnet101')
+    self.img_feat_type = config.get('img_feat_type', 'mmaction_feat')
     test_id_file = config.get('test_id_file', '')
 
     documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))

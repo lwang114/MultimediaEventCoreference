@@ -16,7 +16,7 @@ from conll import write_output_file
 def create_type_to_idx(mention_jsons):
   n_entity_types = 0
   n_event_types = 0
-  type_to_idx = {'###UNK###':0}
+  type_to_idx = {'###NULL###':0}
   for mention_json in mention_jsons:
     mention_dicts = json.load(open(mention_json))
     for mention_dict in mention_dicts:
@@ -33,7 +33,19 @@ def create_type_to_idx(mention_jsons):
   print('Num. of entity types = {}'.format(n_entity_types))
   print('Num. of event types = {}'.format(n_event_types))
   return type_to_idx
-  
+
+def create_role_to_idx(mention_jsons):
+  role_to_idx = {'###NULL###':0}
+  for mention_json in mention_jsons:
+    mention_dicts = json.load(open(mention_json))
+    for mention_dict in mention_dicts:
+      if 'event_type' in mention_dict:
+        for a in mention_dict['arguments']:
+          if not a['role'] in role_to_idx:
+            role_to_idx[a['role']] = len(role_to_idx)
+  print('Num. of role types = {}'.format(len(role_to_idx)))
+  return role_to_idx
+            
 def make_prediction_readable(pred_json, img_dir, mention_json, out_file='prediction_readable.txt'):
   pred_dicts = json.load(open(pred_json))
   mention_dicts = json.load(open(mention_json)) 

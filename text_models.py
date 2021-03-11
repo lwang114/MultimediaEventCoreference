@@ -159,7 +159,7 @@ class SpanEmbedder(nn.Module):
         self.bert_hidden_size = config.bert_hidden_size
         self.with_width_embedding = config.with_mention_width
         self.use_head_attention = config.with_head_attention
-        self.with_type_embedding = config.with_type_embedding
+        self.with_type_embedding = config.get('with_type_embedding', False)
         self.device = device
         self.dropout = config.dropout
         self.padded_vector = torch.zeros(self.bert_hidden_size, device=device)
@@ -219,7 +219,6 @@ class SpanEmbedder(nn.Module):
           M = continuous_embeddings.size(2)
           continuous_embeddings = continuous_embeddings.view(B*S, M, -1)
           width = width.view(B*S)
-          type_labels = type_labels.view(B*S)
           vector = vector.view(B*S, -1)
 
         if self.use_head_attention:
@@ -238,6 +237,7 @@ class SpanEmbedder(nn.Module):
             vector = torch.cat((vector, width_embedding), dim=1)
         
         if self.with_type_embedding:
+          type_labels = type_labels.view(B*S)
           type_embedding = self.type_feature(type_labels)
           vector = torch.cat((vector, type_embedding), dim=1) 
 
@@ -447,14 +447,12 @@ class SimplePairWiseClassifier(nn.Module):
 class SelfAttentionPairWiseClassifier(nn.Module):
   def __init__(self, config):
     super(SelfAttentionPairWiseClassifier, self).__init__()  
-    if config.mention_embedder == 'gcn':
-        self.input_layer = config.bert_hidden_size
-    else:
-        self.input_layer = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2 
-        if config.with_mention_width:
-            self.input_layer += config.embedding_dimension
-        if config.with_type_embedding:
-            self.input_layer += config.type_embedding_dimension
+
+    self.input_layer = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2 
+    if config.with_mention_width:
+        self.input_layer += config.embedding_dimension
+    if config.get('with_type_embedding', False):
+        self.input_layer += config.type_embedding_dimension
 
     if config.get('num_encoder_layers', 1) > 0:
       self.transformer = torch.nn.Transformer(d_model=self.input_layer, 
