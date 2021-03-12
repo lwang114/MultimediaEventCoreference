@@ -444,9 +444,9 @@ class SimplePairWiseClassifier(nn.Module):
       # print('Number of non-singleton clusters: {}'.format(cluster_id))
       return clusters, scores
 
-class SelfAttentionPairWiseClassifier(nn.Module):
+class TransformerPairWiseClassifier(nn.Module):
   def __init__(self, config):
-    super(SelfAttentionPairWiseClassifier, self).__init__()  
+    super(TransformerPairWiseClassifier, self).__init__()  
 
     self.input_layer = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2 
     if config.with_mention_width:
@@ -505,9 +505,9 @@ class SelfAttentionPairWiseClassifier(nn.Module):
     # print('Number of clusters: ', len(clusters))
     return clusters, scores
 
-class StructuredPairWiseClassifier(nn.Module): # TODO
+class StarTransformerClassifier(nn.Module):
   def __init__(self, config):
-    super(SelfAttentionPairWiseClassifier, self).__init__()  
+    super(StarTransformerClassifier, self).__init__()  
 
     self.input_layer = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2 
     if config.with_mention_width:
@@ -526,31 +526,50 @@ class StructuredPairWiseClassifier(nn.Module): # TODO
       self.transformer = torch.nn.TransformerDecoder(transformer_decoder,
                                                      num_decoder_layers=1)
 
-  def forward(self, first, second):
+  def forward(self, x, center_map, neighbor_map, 
+              first_idxs=None, second_idxs=None): # TODO Add mask
     '''
-    :param first: FloatTensor of size (num. of span pairs, span embed dim)
-    :param second: FloatTensor of size (num. of span pairs, span embed dim)
-    :return score: FloatTensor of size (num. of span pairs, 1) 
+    :param x: FloatTensor of size (sequence length, embed dim)
+    :param neighbors: FloatTensor of size (sequence length, num. of neighbors, embed dim)
+    :return scores: FloatTensor of size (num. pairs,) 
     '''
-    first = first.unsqueeze(0)
-    second = second.unsqueeze(0)
+    embs = self.transformer(x, x).squeeze(0)
+    c = torch.matmul(center_map, x)
+    neighors = torch.matmul(neighbor_map, x)
+    embs_c = torch.matmul(center_map, embs)
+    embs_neighbors = torch.matmul(neighbor_map, embs)
+    n = embs_c.size(0)
+    n_neighbors = embs_neighbors.size(1)
+     
+    if not first_idxs or not second_idxs:
+      first_idxs, second_idxs = zip(*list(combinations(range(n), 2)))
+    first_arg_idxs, second_arg_idxs = zip(*list((i, j) for i in range(n_neighbors) for j in range(n_neighbors)))
+    scores_c = self.pairwise_score(c[first_idxs], embs_c[second_idxs])
+    scores_neighbor = []
+    for first_idx, second_idx in zip(first_idxs, second_idxs):
+      scores_neighbor.append(self.alignment_score(
+                          self.pairwise_score(neighbors[first_idx, first_arg_idxs],
+                                              embs_neighbors[second_idx, second_arg_idxs]).view(n_neighbors, n_neighbors))
+                          )
+    scores_neighbors = torch.stack(scores_neighbors)
+    return scores + scores_neighbors
 
-    d = first.size(-1)
-    first_c = self.transformer(second, second).squeeze(0)
-    # scale =  torch.tensor(d ** 0.5, dtype=torch.float, device=first.device)
-    scores = torch.sum(first * first_c, dim=-1).t() # / scale
-    return scores
+  def pairwise_score(self, first, second):
+    return torch.sum(first * second, dim=-1)
 
-  def predict_cluster(self, span_embeddings, first_idxs, second_idxs):
-    span_num = span_embeddings.size(0)
+  def alignment_score(self, score_mat, dim=-1):
+    return score_mat.max(-1)[0].mean()
+    
+  def predict_cluster(self, x, center_map, neighbor_map, first_idxs, second_idxs):
+    span_num = x.size(0)
 
     # Compute pairwise scores for mention pairs specified
-    scores = self(span_embeddings[first_idxs], span_embeddings[second_idxs])
+    scores = self(x, center_map, neighbor_map, first_idxs, second_idxs)
     
     # Compute the pairwise score matrix
     row_idxs = [i for i in range(span_num) for j in range(span_num)]
     col_idxs = [j for i in range(span_num) for j in range(span_num)]
-    S = self(span_embeddings[row_idxs], span_embeddings[col_idxs])
+    S = self(x, neighbors, row_idxs, col_idxs)
     S = S.view(span_num, span_num).cpu().detach().numpy()
 
     # Compute the adjacency matrix
