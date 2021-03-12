@@ -75,7 +75,7 @@ def fix_embedding_length(emb, L):
     emb = emb[:L]
   return emb  
 
-class SupervisedGroundingFeatureDataset(Dataset):
+class StarFeatureDataset(Dataset):
   def __init__(self, doc_json, text_mention_json, image_mention_json, config, split='train'):
     '''
     :param doc_json: dict of 
@@ -93,7 +93,7 @@ class SupervisedGroundingFeatureDataset(Dataset):
          'cluster_desc': '',
          'singleton': boolean, whether the mention is a singleton}
     '''
-    super(SupervisedGroundingFeatureDataset, self).__init__()
+    super(StarFeatureDataset, self).__init__()
     self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     self.max_token_num = config.get('max_token_num', 512)
     self.max_span_num = config.get('max_span_num', 80)
