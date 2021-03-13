@@ -174,7 +174,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      116
+      78
     ],
     "tokens": "arrived",
     "arguments": [
@@ -197,7 +197,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      122
+      84
     ],
     "tokens": "shootout",
     "arguments": [
@@ -220,7 +220,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      208
+      94
     ],
     "tokens": "it",
     "arguments": [
@@ -249,7 +249,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      215
+      101
     ],
     "tokens": "bodies",
     "arguments": [
@@ -278,7 +278,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      322
+      115
     ],
     "tokens": "deadly",
     "arguments": [
@@ -301,7 +301,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      323
+      116
     ],
     "tokens": "shooting",
     "arguments": [
@@ -330,8 +330,8 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      339,
-      340
+      132,
+      133
     ],
     "tokens": "pulled up",
     "arguments": [
@@ -372,7 +372,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      356
+      149
     ],
     "tokens": "firing",
     "arguments": [
@@ -419,7 +419,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      473
+      157
     ],
     "tokens": "battle",
     "arguments": [
@@ -454,7 +454,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      480
+      164
     ],
     "tokens": "dead",
     "arguments": [
@@ -489,7 +489,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      514
+      198
     ],
     "tokens": "attack",
     "arguments": [
@@ -512,7 +512,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      915
+      248
     ],
     "tokens": "said",
     "arguments": [
@@ -535,7 +535,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      920
+      253
     ],
     "tokens": "attackers",
     "arguments": [
@@ -558,7 +558,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      934
+      267
     ],
     "tokens": "bloodshed",
     "arguments": [],
@@ -619,7 +619,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      82
+      56
     ],
     "tokens": "repatriating",
     "arguments": [
@@ -660,7 +660,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      138
+      66
     ],
     "tokens": "flights",
     "arguments": [
@@ -689,7 +689,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      157
+      85
     ],
     "tokens": "travel",
     "arguments": [
@@ -712,7 +712,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      342
+      121
     ],
     "tokens": "flights",
     "arguments": [
@@ -780,7 +780,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      78
+      54
     ],
     "tokens": "protests",
     "arguments": [
@@ -803,7 +803,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      132
+      68
     ],
     "tokens": "taken",
     "arguments": [
@@ -832,7 +832,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      326
+      117
     ],
     "tokens": "announced",
     "arguments": [],
@@ -848,7 +848,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      87
+      60
     ],
     "tokens": "told",
     "arguments": [
@@ -871,7 +871,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      94
+      67
     ],
     "tokens": "gatherings",
     "arguments": [
@@ -894,7 +894,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      108
+      81
     ],
     "tokens": "leave",
     "arguments": [
@@ -929,7 +929,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      112
+      85
     ],
     "tokens": "buy",
     "arguments": [
@@ -1138,8 +1138,8 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      146,
-      147
+      96,
+      97
     ],
     "tokens": "critical condition",
     "arguments": [
@@ -1162,7 +1162,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      391
+      148
     ],
     "tokens": "arrested",
     "arguments": [
@@ -1191,7 +1191,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      412
+      169
     ],
     "tokens": "attacked",
     "arguments": [
@@ -1242,7 +1242,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      70
+      48
     ],
     "tokens": "elected",
     "arguments": [
@@ -1271,7 +1271,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      110
+      56
     ],
     "tokens": "polls",
     "arguments": [],
@@ -1339,7 +1339,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      54
+      41
     ],
     "tokens": "attack",
     "arguments": [],
@@ -1355,7 +1355,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      77
+      64
     ],
     "tokens": "tragedy",
     "arguments": [],
@@ -1423,7 +1423,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      91
+      72
     ],
     "tokens": "former",
     "arguments": [
@@ -1452,7 +1452,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      159
+      87
     ],
     "tokens": "took",
     "arguments": [
@@ -1481,7 +1481,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      270
+      115
     ],
     "tokens": "election",
     "arguments": [
@@ -1568,7 +1568,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      123
+      69
     ],
     "tokens": "incident",
     "arguments": [],
@@ -1816,7 +1816,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      119
+      75
     ],
     "tokens": "Protests",
     "arguments": [
@@ -1845,7 +1845,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      145
+      101
     ],
     "tokens": "assault",
     "arguments": [
@@ -1868,7 +1868,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      223
+      105
     ],
     "tokens": "violence",
     "arguments": [
@@ -1891,7 +1891,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      522
+      166
     ],
     "tokens": "beat",
     "arguments": [
@@ -1926,7 +1926,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      527
+      171
     ],
     "tokens": "smashed",
     "arguments": [
@@ -1961,7 +1961,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      899
+      209
     ],
     "tokens": "fled",
     "arguments": [
@@ -1990,7 +1990,7 @@
     "m_id": "0",
     "sentence_id": 8,
     "tokens_ids": [
-      1110
+      223
     ],
     "tokens": "attack",
     "arguments": [],
@@ -2006,7 +2006,7 @@
     "m_id": "0",
     "sentence_id": 9,
     "tokens_ids": [
-      1336
+      234
     ],
     "tokens": "clash",
     "arguments": [
@@ -2029,7 +2029,7 @@
     "m_id": "0",
     "sentence_id": 11,
     "tokens_ids": [
-      1875
+      283
     ],
     "tokens": "violence",
     "arguments": [
@@ -2052,7 +2052,7 @@
     "m_id": "0",
     "sentence_id": 12,
     "tokens_ids": [
-      2186
+      320
     ],
     "tokens": "attack",
     "arguments": [
@@ -2075,7 +2075,7 @@
     "m_id": "0",
     "sentence_id": 12,
     "tokens_ids": [
-      2160
+      294
     ],
     "tokens": "it",
     "arguments": [],
@@ -2091,7 +2091,7 @@
     "m_id": "0",
     "sentence_id": 12,
     "tokens_ids": [
-      2181
+      315
     ],
     "tokens": "it",
     "arguments": [],
@@ -2107,7 +2107,7 @@
     "m_id": "0",
     "sentence_id": 15,
     "tokens_ids": [
-      3267
+      408
     ],
     "tokens": "protests",
     "arguments": [
@@ -2130,7 +2130,7 @@
     "m_id": "0",
     "sentence_id": 16,
     "tokens_ids": [
-      3693
+      435
     ],
     "tokens": "fled",
     "arguments": [
@@ -2171,7 +2171,7 @@
     "m_id": "0",
     "sentence_id": 20,
     "tokens_ids": [
-      5573
+      512
     ],
     "tokens": "protests",
     "arguments": [
@@ -2194,7 +2194,7 @@
     "m_id": "0",
     "sentence_id": 20,
     "tokens_ids": [
-      5580
+      519
     ],
     "tokens": "injured",
     "arguments": [
@@ -2223,7 +2223,7 @@
     "m_id": "0",
     "sentence_id": 20,
     "tokens_ids": [
-      5561
+      500
     ],
     "tokens": "This",
     "arguments": [],
@@ -2332,7 +2332,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      303
+      107
     ],
     "tokens": "touch",
     "arguments": [
@@ -2367,7 +2367,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      428
+      135
     ],
     "tokens": "closed",
     "arguments": [
@@ -2396,7 +2396,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      573
+      155
     ],
     "tokens": "attacks",
     "arguments": [
@@ -2431,7 +2431,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      749
+      184
     ],
     "tokens": "attack",
     "arguments": [
@@ -2466,7 +2466,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      734
+      169
     ],
     "tokens": "crash",
     "arguments": [
@@ -2550,7 +2550,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      92
+      71
     ],
     "tokens": "election",
     "arguments": [
@@ -2713,7 +2713,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      75
+      52
     ],
     "tokens": "declared",
     "arguments": [
@@ -2736,8 +2736,8 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      84,
-      85
+      61,
+      62
     ],
     "tokens": "pull out",
     "arguments": [
@@ -2760,7 +2760,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      148
+      77
     ],
     "tokens": "talks",
     "arguments": [
@@ -2795,7 +2795,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      238
+      98
     ],
     "tokens": "withdrawing",
     "arguments": [
@@ -2830,7 +2830,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      364
+      141
     ],
     "tokens": "returning",
     "arguments": [
@@ -3085,7 +3085,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      42
+      32
     ],
     "tokens": "election",
     "arguments": [],
@@ -3101,7 +3101,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      45
+      35
     ],
     "tokens": "it",
     "arguments": [],
@@ -3117,7 +3117,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      83
+      55
     ],
     "tokens": "election",
     "arguments": [],
@@ -3243,7 +3243,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      91
+      64
     ],
     "tokens": "offensive",
     "arguments": [
@@ -3272,7 +3272,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      102
+      75
     ],
     "tokens": "pulling",
     "arguments": [
@@ -3307,7 +3307,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      183
+      101
     ],
     "tokens": "attack",
     "arguments": [
@@ -3336,7 +3336,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      209
+      127
     ],
     "tokens": "insurgency",
     "arguments": [
@@ -3365,7 +3365,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      324
+      157
     ],
     "tokens": "attacked",
     "arguments": [
@@ -3388,7 +3388,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      336
+      169
     ],
     "tokens": "deaths",
     "arguments": [
@@ -3481,7 +3481,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      169
+      92
     ],
     "tokens": "launch",
     "arguments": [
@@ -3540,7 +3540,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      211
+      108
     ],
     "tokens": "announced",
     "arguments": [
@@ -3563,7 +3563,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      221
+      118
     ],
     "tokens": "address",
     "arguments": [
@@ -3638,7 +3638,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      103
+      73
     ],
     "tokens": "assassination",
     "arguments": [
@@ -3684,7 +3684,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      107
+      72
     ],
     "tokens": "killed",
     "arguments": [
@@ -3707,7 +3707,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      120
+      85
     ],
     "tokens": "phone",
     "arguments": [
@@ -3736,7 +3736,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      110
+      75
     ],
     "tokens": "fire",
     "arguments": [
@@ -3759,7 +3759,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      191
+      93
     ],
     "tokens": "fire",
     "arguments": [
@@ -3927,7 +3927,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      81
+      53
     ],
     "tokens": "detonated",
     "arguments": [
@@ -3962,7 +3962,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      155
+      80
     ],
     "tokens": "attack",
     "arguments": [
@@ -3991,7 +3991,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      146
+      71
     ],
     "tokens": "It",
     "arguments": [],
@@ -4007,7 +4007,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      56
+      43
     ],
     "tokens": "say",
     "arguments": [
@@ -4030,7 +4030,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      295
+      113
     ],
     "tokens": "stating",
     "arguments": [
@@ -4053,7 +4053,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      289
+      107
     ],
     "tokens": "criticised",
     "arguments": [
@@ -4222,7 +4222,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      71
+      55
     ],
     "tokens": "attacks",
     "arguments": [
@@ -4251,7 +4251,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      63
+      47
     ],
     "tokens": "says",
     "arguments": [
@@ -4306,7 +4306,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      285
+      112
     ],
     "tokens": "election",
     "arguments": [],
@@ -4397,7 +4397,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      147
+      101
     ],
     "tokens": "told",
     "arguments": [
@@ -4555,7 +4555,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      76
+      46
     ],
     "tokens": "homemade",
     "arguments": [],
@@ -4751,7 +4751,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      90
+      61
     ],
     "tokens": "protest",
     "arguments": [
@@ -4906,7 +4906,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      78
+      56
     ],
     "tokens": "talks",
     "arguments": [],
@@ -4922,7 +4922,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      146
+      76
     ],
     "tokens": "election",
     "arguments": [],
@@ -4977,7 +4977,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      79
+      54
     ],
     "tokens": "injured",
     "arguments": [
@@ -5029,7 +5029,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      161
+      87
     ],
     "tokens": "released",
     "arguments": [
@@ -5058,7 +5058,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      254
+      118
     ],
     "tokens": "nomination",
     "arguments": [
@@ -5081,7 +5081,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      207
+      104
     ],
     "tokens": "death",
     "arguments": [
@@ -5104,7 +5104,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      320
+      120
     ],
     "tokens": "descend",
     "arguments": [
@@ -5133,7 +5133,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      471
+      157
     ],
     "tokens": "entry",
     "arguments": [
@@ -5168,7 +5168,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      487
+      173
     ],
     "tokens": "told",
     "arguments": [
@@ -5249,7 +5249,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      105
+      72
     ],
     "tokens": "election",
     "arguments": [],
@@ -5265,7 +5265,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      112
+      79
     ],
     "tokens": "coup",
     "arguments": [],
@@ -5349,8 +5349,8 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      66,
-      67
+      53,
+      54
     ],
     "tokens": "faced off",
     "arguments": [
@@ -5385,7 +5385,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      85
+      72
     ],
     "tokens": "attack",
     "arguments": [
@@ -5420,8 +5420,8 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      152,
-      153
+      91,
+      92
     ],
     "tokens": "faced off",
     "arguments": [
@@ -5456,7 +5456,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      163
+      102
     ],
     "tokens": "protesters",
     "arguments": [
@@ -5479,7 +5479,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      194
+      133
     ],
     "tokens": "blockade",
     "arguments": [
@@ -5508,7 +5508,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      284
+      137
     ],
     "tokens": "discharged",
     "arguments": [
@@ -5537,7 +5537,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      439
+      157
     ],
     "tokens": "protesters",
     "arguments": [
@@ -5566,7 +5566,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      590
+      161
     ],
     "tokens": "confrontation",
     "arguments": [
@@ -5589,7 +5589,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      598
+      169
     ],
     "tokens": "retreated",
     "arguments": [
@@ -5612,7 +5612,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      601
+      172
     ],
     "tokens": "left",
     "arguments": [
@@ -5741,7 +5741,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      103
+      73
     ],
     "tokens": "injuries",
     "arguments": [
@@ -5764,7 +5764,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      196
+      101
     ],
     "tokens": "lacerations",
     "arguments": [
@@ -5851,7 +5851,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      137
+      72
     ],
     "tokens": "announcing",
     "arguments": [
@@ -5916,7 +5916,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      104
+      78
     ],
     "tokens": "deaths",
     "arguments": [
@@ -5939,7 +5939,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      107
+      81
     ],
     "tokens": "losses",
     "arguments": [
@@ -5962,8 +5962,8 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      194,
-      195
+      95,
+      96
     ],
     "tokens": "thrown out",
     "arguments": [
@@ -5986,7 +5986,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      312
+      124
     ],
     "tokens": "deaths",
     "arguments": [
@@ -6009,7 +6009,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      630
+      189
     ],
     "tokens": "dead",
     "arguments": [
@@ -6032,7 +6032,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      642
+      201
     ],
     "tokens": "death",
     "arguments": [
@@ -6094,7 +6094,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      90
+      51
     ],
     "tokens": "fire",
     "arguments": [
@@ -6250,7 +6250,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      67
+      48
     ],
     "tokens": "protesters",
     "arguments": [
@@ -6273,7 +6273,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      71
+      52
     ],
     "tokens": "leave",
     "arguments": [
@@ -6296,9 +6296,9 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      79,
-      80,
-      81
+      60,
+      61,
+      62
     ],
     "tokens": "stand - off",
     "arguments": [
@@ -6327,7 +6327,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      62
+      43
     ],
     "tokens": "It",
     "arguments": [],
@@ -6343,7 +6343,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      147
+      86
     ],
     "tokens": "protests",
     "arguments": [
@@ -6366,7 +6366,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      226
+      99
     ],
     "tokens": "ruled",
     "arguments": [
@@ -6395,7 +6395,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      341
+      123
     ],
     "tokens": "protesters",
     "arguments": [
@@ -6418,7 +6418,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      460
+      131
     ],
     "tokens": "violence",
     "arguments": [
@@ -6441,7 +6441,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      610
+      152
     ],
     "tokens": "protests",
     "arguments": [],
@@ -6457,7 +6457,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      615
+      157
     ],
     "tokens": "extradition",
     "arguments": [],
@@ -6473,7 +6473,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      627
+      169
     ],
     "tokens": "demonstrations",
     "arguments": [],
@@ -6719,7 +6719,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      64
+      44
     ],
     "tokens": "killed",
     "arguments": [
@@ -6742,7 +6742,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      111
+      52
     ],
     "tokens": "hit",
     "arguments": [
@@ -6771,7 +6771,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      172
+      67
     ],
     "tokens": "strike",
     "arguments": [
@@ -6794,7 +6794,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      245
+      80
     ],
     "tokens": "attack",
     "arguments": [
@@ -6846,7 +6846,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      66
+      46
     ],
     "tokens": "overthrown",
     "arguments": [
@@ -6869,7 +6869,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      68
+      48
     ],
     "tokens": "arrested",
     "arguments": [
@@ -6892,7 +6892,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      75
+      55
     ],
     "tokens": "protests",
     "arguments": [
@@ -7118,7 +7118,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      93
+      63
     ],
     "tokens": "attack",
     "arguments": [
@@ -7141,7 +7141,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      173
+      82
     ],
     "tokens": "arrested",
     "arguments": [
@@ -7164,7 +7164,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      262
+      93
     ],
     "tokens": "raid",
     "arguments": [
@@ -7193,7 +7193,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      364
+      108
     ],
     "tokens": "died",
     "arguments": [
@@ -7344,7 +7344,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      115
+      78
     ],
     "tokens": "paralysed",
     "arguments": [
@@ -7367,7 +7367,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      189
+      84
     ],
     "tokens": "interview",
     "arguments": [
@@ -7396,7 +7396,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      210
+      105
     ],
     "tokens": "prison",
     "arguments": [
@@ -7419,7 +7419,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      301
+      116
     ],
     "tokens": "trial",
     "arguments": [
@@ -7442,7 +7442,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      305
+      120
     ],
     "tokens": "charge",
     "arguments": [
@@ -7471,7 +7471,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      426
+      131
     ],
     "tokens": "suing",
     "arguments": [
@@ -7494,7 +7494,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      558
+      137
     ],
     "tokens": "says",
     "arguments": [
@@ -7517,7 +7517,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      564
+      143
     ],
     "tokens": "hurt",
     "arguments": [
@@ -7546,7 +7546,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      727
+      171
     ],
     "tokens": "apology",
     "arguments": [
@@ -7662,8 +7662,8 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      86,
-      87
+      57,
+      58
     ],
     "tokens": "busting out",
     "arguments": [
@@ -7698,7 +7698,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      233
+      91
     ],
     "tokens": "hits",
     "arguments": [
@@ -7733,7 +7733,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      345
+      114
     ],
     "tokens": "smashes",
     "arguments": [
@@ -7871,7 +7871,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      75
+      54
     ],
     "tokens": "detained",
     "arguments": [
@@ -7900,7 +7900,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      216
+      90
     ],
     "tokens": "fight",
     "arguments": [
@@ -7929,7 +7929,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      292
+      97
     ],
     "tokens": "arrived",
     "arguments": [
@@ -7952,7 +7952,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      294
+      99
     ],
     "tokens": "shots",
     "arguments": [
@@ -7975,7 +7975,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      296
+      101
     ],
     "tokens": "fired",
     "arguments": [],
@@ -8052,7 +8052,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      88
+      67
     ],
     "tokens": "election",
     "arguments": [],
@@ -8183,7 +8183,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      104
+      49
     ],
     "tokens": "arrived",
     "arguments": [
@@ -8375,7 +8375,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      70
+      50
     ],
     "tokens": "injuries",
     "arguments": [
@@ -8398,7 +8398,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      124
+      59
     ],
     "tokens": "arrested",
     "arguments": [
@@ -8427,7 +8427,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      277
+      89
     ],
     "tokens": "attacked",
     "arguments": [
@@ -8479,7 +8479,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      64
+      44
     ],
     "tokens": "warned",
     "arguments": [
@@ -8508,7 +8508,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      73
+      53
     ],
     "tokens": "loans",
     "arguments": [
@@ -8614,7 +8614,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      104
+      87
     ],
     "tokens": "deploy",
     "arguments": [
@@ -8649,7 +8649,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      117
+      100
     ],
     "tokens": "missions",
     "arguments": [
@@ -8678,8 +8678,8 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      311,
-      312
+      120,
+      121
     ],
     "tokens": "soared into",
     "arguments": [],
@@ -8695,7 +8695,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      634
+      177
     ],
     "tokens": "journey",
     "arguments": [
@@ -8724,7 +8724,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      629
+      172
     ],
     "tokens": "This",
     "arguments": [],
@@ -8851,7 +8851,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      114
+      83
     ],
     "tokens": "airstrikes",
     "arguments": [
@@ -8874,7 +8874,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      119
+      88
     ],
     "tokens": "offensive",
     "arguments": [
@@ -8903,7 +8903,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      212
+      118
     ],
     "tokens": "escaping",
     "arguments": [
@@ -8926,7 +8926,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      242
+      148
     ],
     "tokens": "bombardment",
     "arguments": [
@@ -8955,7 +8955,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      227
+      133
     ],
     "tokens": "herded",
     "arguments": [
@@ -8990,7 +8990,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      356
+      159
     ],
     "tokens": "fleeing",
     "arguments": [
@@ -9171,7 +9171,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      153
+      97
     ],
     "tokens": "attacks",
     "arguments": [
@@ -9200,7 +9200,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      232
+      110
     ],
     "tokens": "protester",
     "arguments": [
@@ -9229,7 +9229,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      239
+      117
     ],
     "tokens": "emerging",
     "arguments": [
@@ -9252,7 +9252,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      248
+      126
     ],
     "tokens": "protests",
     "arguments": [
@@ -9275,7 +9275,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      394
+      173
     ],
     "tokens": "requests",
     "arguments": [
@@ -9343,7 +9343,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      110
+      57
     ],
     "tokens": "election",
     "arguments": [
@@ -9366,7 +9366,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      106
+      53
     ],
     "tokens": "voting",
     "arguments": [
@@ -9457,7 +9457,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      68
+      43
     ],
     "tokens": "eruption",
     "arguments": [],
@@ -9629,7 +9629,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      68
+      47
     ],
     "tokens": "violence",
     "arguments": [
@@ -9652,7 +9652,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      76
+      55
     ],
     "tokens": "close",
     "arguments": [
@@ -9727,7 +9727,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      151
+      79
     ],
     "tokens": "issued",
     "arguments": [
@@ -9756,7 +9756,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      244
+      103
     ],
     "tokens": "violence",
     "arguments": [
@@ -9779,7 +9779,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      246
+      105
     ],
     "tokens": "protests",
     "arguments": [
@@ -9802,7 +9802,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      350
+      123
     ],
     "tokens": "gather",
     "arguments": [
@@ -9825,7 +9825,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      356
+      129
     ],
     "tokens": "announced",
     "arguments": [
@@ -9848,7 +9848,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      92
+      62
     ],
     "tokens": "deaths",
     "arguments": [
@@ -9964,7 +9964,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      238
+      136
     ],
     "tokens": "contact",
     "arguments": [
@@ -9999,7 +9999,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      902
+      224
     ],
     "tokens": "selling",
     "arguments": [
@@ -10045,7 +10045,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      115
+      78
     ],
     "tokens": "declared",
     "arguments": [
@@ -10068,7 +10068,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      144
+      107
     ],
     "tokens": "declared",
     "arguments": [
@@ -10097,7 +10097,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      237
+      127
     ],
     "tokens": "declaration",
     "arguments": [],
@@ -10113,7 +10113,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      381
+      147
     ],
     "tokens": "request",
     "arguments": [
@@ -10142,7 +10142,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      385
+      151
     ],
     "tokens": "pay",
     "arguments": [
@@ -10171,7 +10171,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      376
+      142
     ],
     "tokens": "It",
     "arguments": [],
@@ -10187,8 +10187,8 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      563,
-      564
+      187,
+      188
     ],
     "tokens": "set up",
     "arguments": [
@@ -10217,7 +10217,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      582
+      206
     ],
     "tokens": "said",
     "arguments": [
@@ -10298,7 +10298,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      58
+      36
     ],
     "tokens": "evacuate",
     "arguments": [
@@ -10327,7 +10327,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      71
+      49
     ],
     "tokens": "blasts",
     "arguments": [],
@@ -10430,7 +10430,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      98
+      70
     ],
     "tokens": "protesters",
     "arguments": [
@@ -10650,7 +10650,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      56
+      42
     ],
     "tokens": "occupy",
     "arguments": [
@@ -10679,8 +10679,8 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      64,
-      65
+      50,
+      51
     ],
     "tokens": "step down",
     "arguments": [
@@ -10703,7 +10703,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      112
+      59
     ],
     "tokens": "called",
     "arguments": [
@@ -10732,7 +10732,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      114
+      61
     ],
     "tokens": "protesters",
     "arguments": [
@@ -10755,7 +10755,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      116
+      63
     ],
     "tokens": "disperse",
     "arguments": [
@@ -10778,7 +10778,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      186
+      80
     ],
     "tokens": "protesters",
     "arguments": [
@@ -10898,7 +10898,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      138
+      72
     ],
     "tokens": "meeting",
     "arguments": [
@@ -11164,7 +11164,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      312
+      147
     ],
     "tokens": "walk",
     "arguments": [
@@ -11338,7 +11338,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      94
+      66
     ],
     "tokens": "elections",
     "arguments": [],
@@ -11354,7 +11354,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      97
+      69
     ],
     "tokens": "said",
     "arguments": [
@@ -11377,7 +11377,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      166
+      81
     ],
     "tokens": "arrested",
     "arguments": [
@@ -11400,7 +11400,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      244
+      86
     ],
     "tokens": "election",
     "arguments": [],
@@ -11416,7 +11416,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      481
+      129
     ],
     "tokens": "former",
     "arguments": [
@@ -11439,7 +11439,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      614
+      137
     ],
     "tokens": "Election",
     "arguments": [],
@@ -11507,7 +11507,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      59
+      41
     ],
     "tokens": "election",
     "arguments": [
@@ -11530,7 +11530,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      53
+      35
     ],
     "tokens": "It",
     "arguments": [],
@@ -11546,7 +11546,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      111
+      59
     ],
     "tokens": "election",
     "arguments": [],
@@ -11677,9 +11677,9 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      134,
-      135,
-      136
+      59,
+      60,
+      61
     ],
     "tokens": "laid to rest",
     "arguments": [
@@ -11708,7 +11708,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      212
+      82
     ],
     "tokens": "killing",
     "arguments": [
@@ -11731,7 +11731,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      218
+      88
     ],
     "tokens": "conflict",
     "arguments": [
@@ -11760,7 +11760,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      554
+      137
     ],
     "tokens": "election",
     "arguments": [
@@ -11783,7 +11783,7 @@
     "m_id": "0",
     "sentence_id": 8,
     "tokens_ids": [
-      698
+      155
     ],
     "tokens": "attacked",
     "arguments": [
@@ -11818,7 +11818,7 @@
     "m_id": "0",
     "sentence_id": 8,
     "tokens_ids": [
-      709
+      166
     ],
     "tokens": "attacks",
     "arguments": [
@@ -11899,7 +11899,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      116
+      86
     ],
     "tokens": "deaths",
     "arguments": [],
@@ -11915,7 +11915,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      230
+      121
     ],
     "tokens": "deaths",
     "arguments": [],
@@ -11931,7 +11931,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      345
+      133
     ],
     "tokens": "says",
     "arguments": [
@@ -11977,7 +11977,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      111
+      52
     ],
     "tokens": "announced",
     "arguments": [
@@ -12000,7 +12000,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      113
+      54
     ],
     "tokens": "closure",
     "arguments": [
@@ -12157,7 +12157,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      65
+      43
     ],
     "tokens": "attack",
     "arguments": [
@@ -12279,7 +12279,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      105
+      70
     ],
     "tokens": "death",
     "arguments": [],
@@ -12295,7 +12295,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      299
+      127
     ],
     "tokens": "war",
     "arguments": [
@@ -12318,7 +12318,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      441
+      156
     ],
     "tokens": "death",
     "arguments": [
@@ -12341,7 +12341,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      461
+      176
     ],
     "tokens": "fatalities",
     "arguments": [
@@ -12463,7 +12463,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      103
+      70
     ],
     "tokens": "launched",
     "arguments": [
@@ -12504,7 +12504,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      180
+      83
     ],
     "tokens": "war",
     "arguments": [
@@ -12632,7 +12632,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      71
+      53
     ],
     "tokens": "attacks",
     "arguments": [
@@ -12897,7 +12897,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      71
+      42
     ],
     "tokens": "attack",
     "arguments": [
@@ -12926,7 +12926,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      76
+      47
     ],
     "tokens": "dead",
     "arguments": [
@@ -12949,7 +12949,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      85
+      56
     ],
     "tokens": "wounded",
     "arguments": [
@@ -12972,7 +12972,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      130
+      60
     ],
     "tokens": "shooting",
     "arguments": [
@@ -12995,7 +12995,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      211
+      83
     ],
     "tokens": "killed",
     "arguments": [
@@ -13018,7 +13018,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      229
+      101
     ],
     "tokens": "killed",
     "arguments": [
@@ -13047,7 +13047,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      234
+      106
     ],
     "tokens": "wounded",
     "arguments": [
@@ -13076,7 +13076,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      316
+      116
     ],
     "tokens": "taken",
     "arguments": [
@@ -13105,7 +13105,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      328
+      128
     ],
     "tokens": "died",
     "arguments": [
@@ -13180,7 +13180,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      218
+      116
     ],
     "tokens": "admitted",
     "arguments": [
@@ -13261,7 +13261,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      103
+      72
     ],
     "tokens": "Travel",
     "arguments": [
@@ -13284,7 +13284,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      127
+      96
     ],
     "tokens": "fatalities",
     "arguments": [],
@@ -13300,7 +13300,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      326
+      123
     ],
     "tokens": "retired",
     "arguments": [
@@ -13474,7 +13474,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      74
+      55
     ],
     "tokens": "released",
     "arguments": [
@@ -13503,7 +13503,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      82
+      63
     ],
     "tokens": "serving",
     "arguments": [
@@ -13526,7 +13526,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      86
+      67
     ],
     "tokens": "sentence",
     "arguments": [
@@ -13549,7 +13549,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      146
+      76
     ],
     "tokens": "injured",
     "arguments": [
@@ -13572,7 +13572,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      338
+      109
     ],
     "tokens": "arrests",
     "arguments": [],
@@ -13588,7 +13588,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      472
+      137
     ],
     "tokens": "attack",
     "arguments": [
@@ -13611,7 +13611,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      605
+      145
     ],
     "tokens": "sentence",
     "arguments": [
@@ -13634,7 +13634,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      615
+      155
     ],
     "tokens": "released",
     "arguments": [
@@ -13715,7 +13715,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      103
+      71
     ],
     "tokens": "attack",
     "arguments": [
@@ -13738,7 +13738,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      128
+      96
     ],
     "tokens": "seized",
     "arguments": [
@@ -13773,7 +13773,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      201
+      103
     ],
     "tokens": "fighting",
     "arguments": [
@@ -13802,7 +13802,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      211
+      113
     ],
     "tokens": "attacking",
     "arguments": [
@@ -13872,7 +13872,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      320
+      158
     ],
     "tokens": "told",
     "arguments": [
@@ -13901,9 +13901,9 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      485,
-      486,
-      487
+      198,
+      199,
+      200
     ],
     "tokens": "laid - off",
     "arguments": [
@@ -13926,7 +13926,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      459
+      172
     ],
     "tokens": "told",
     "arguments": [
@@ -13955,7 +13955,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      919
+      256
     ],
     "tokens": "election",
     "arguments": [
@@ -13978,7 +13978,7 @@
     "m_id": "0",
     "sentence_id": 8,
     "tokens_ids": [
-      1239
+      330
     ],
     "tokens": "meet",
     "arguments": [
@@ -14007,7 +14007,7 @@
     "m_id": "0",
     "sentence_id": 9,
     "tokens_ids": [
-      1547
+      339
     ],
     "tokens": "death",
     "arguments": [
@@ -14459,7 +14459,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      97
+      63
     ],
     "tokens": "beating",
     "arguments": [
@@ -14494,7 +14494,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      98
+      64
     ],
     "tokens": "protesters",
     "arguments": [
@@ -14517,7 +14517,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      102
+      68
     ],
     "tokens": "smashing",
     "arguments": [
@@ -14546,7 +14546,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      169
+      78
     ],
     "tokens": "protests",
     "arguments": [],
@@ -14562,7 +14562,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      272
+      105
     ],
     "tokens": "killed",
     "arguments": [
@@ -14585,7 +14585,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      275
+      108
     ],
     "tokens": "protests",
     "arguments": [],
@@ -14763,7 +14763,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      82
+      54
     ],
     "tokens": "throwing",
     "arguments": [
@@ -14792,7 +14792,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      211
+      72
     ],
     "tokens": "arrested",
     "arguments": [
@@ -14821,7 +14821,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      218
+      79
     ],
     "tokens": "attack",
     "arguments": [
@@ -14890,7 +14890,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      73
+      51
     ],
     "tokens": "clashes",
     "arguments": [
@@ -14925,7 +14925,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      77
+      55
     ],
     "tokens": "protesters",
     "arguments": [
@@ -14948,7 +14948,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      144
+      75
     ],
     "tokens": "said",
     "arguments": [
@@ -14971,8 +14971,8 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      148,
-      149
+      79,
+      80
     ],
     "tokens": "take to",
     "arguments": [
@@ -15001,8 +15001,8 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      156,
-      157
+      87,
+      88
     ],
     "tokens": "found guilty",
     "arguments": [
@@ -15025,7 +15025,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      263
+      124
     ],
     "tokens": "trial",
     "arguments": [],
@@ -15111,7 +15111,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      78
+      50
     ],
     "tokens": "blast",
     "arguments": [],
@@ -15127,7 +15127,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      79
+      51
     ],
     "tokens": "killed",
     "arguments": [
@@ -15150,7 +15150,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      84
+      56
     ],
     "tokens": "wounded",
     "arguments": [
@@ -15173,7 +15173,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      154
+      78
     ],
     "tokens": "explosions",
     "arguments": [
@@ -15202,7 +15202,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      178
+      102
     ],
     "tokens": "pull",
     "arguments": [
@@ -15237,7 +15237,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      266
+      120
     ],
     "tokens": "attack",
     "arguments": [],
@@ -15335,7 +15335,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      111
+      75
     ],
     "tokens": "Speaking",
     "arguments": [
@@ -15370,7 +15370,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      140
+      104
     ],
     "tokens": "departure",
     "arguments": [
@@ -15513,7 +15513,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      108
+      74
     ],
     "tokens": "blast",
     "arguments": [
@@ -15669,7 +15669,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      448
+      126
     ],
     "tokens": "fought",
     "arguments": [
@@ -15692,7 +15692,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      454
+      132
     ],
     "tokens": "wars",
     "arguments": [
@@ -15715,7 +15715,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      461
+      139
     ],
     "tokens": "attacks",
     "arguments": [],
@@ -15731,7 +15731,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      596
+      151
     ],
     "tokens": "fallen",
     "arguments": [
@@ -15754,7 +15754,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      603
+      158
     ],
     "tokens": "killed",
     "arguments": [
@@ -15777,7 +15777,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      605
+      160
     ],
     "tokens": "attacks",
     "arguments": [
@@ -15875,7 +15875,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      128
+      96
     ],
     "tokens": "journey",
     "arguments": [
@@ -15904,7 +15904,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      143
+      111
     ],
     "tokens": "entering",
     "arguments": [
@@ -15933,7 +15933,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      149
+      117
     ],
     "tokens": "hajj",
     "arguments": [
@@ -15956,7 +15956,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      263
+      160
     ],
     "tokens": "traveling",
     "arguments": [
@@ -16169,7 +16169,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      126
+      82
     ],
     "tokens": "deadly",
     "arguments": [
@@ -16192,7 +16192,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      127
+      83
     ],
     "tokens": "shots",
     "arguments": [
@@ -16215,7 +16215,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      204
+      88
     ],
     "tokens": "gathered",
     "arguments": [
@@ -16244,7 +16244,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      212
+      96
     ],
     "tokens": "dead",
     "arguments": [
@@ -16273,7 +16273,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      327
+      126
     ],
     "tokens": "died",
     "arguments": [
@@ -16302,7 +16302,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      801
+      192
     ],
     "tokens": "died",
     "arguments": [
@@ -16389,7 +16389,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      255
+      119
     ],
     "tokens": "moved",
     "arguments": [
@@ -16546,7 +16546,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      57
+      40
     ],
     "tokens": "deadly",
     "arguments": [
@@ -16569,7 +16569,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      58
+      41
     ],
     "tokens": "attack",
     "arguments": [
@@ -16592,7 +16592,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      115
+      59
     ],
     "tokens": "attack",
     "arguments": [],
@@ -16608,8 +16608,8 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      123,
-      124
+      67,
+      68
     ],
     "tokens": "called for",
     "arguments": [
@@ -16655,7 +16655,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      56
+      42
     ],
     "tokens": "win",
     "arguments": [
@@ -16753,7 +16753,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      86
+      53
     ],
     "tokens": "statement",
     "arguments": [
@@ -16776,7 +16776,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      156
+      73
     ],
     "tokens": "protesting",
     "arguments": [
@@ -16799,7 +16799,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      172
+      89
     ],
     "tokens": "firing",
     "arguments": [
@@ -16840,7 +16840,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      255
+      103
     ],
     "tokens": "protesters",
     "arguments": [
@@ -16863,7 +16863,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      269
+      117
     ],
     "tokens": "bleeding",
     "arguments": [
@@ -16898,7 +16898,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      280
+      128
     ],
     "tokens": "shot",
     "arguments": [
@@ -16933,7 +16933,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      390
+      137
     ],
     "tokens": "statement",
     "arguments": [
@@ -17026,7 +17026,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      75
+      53
     ],
     "tokens": "transferring",
     "arguments": [
@@ -17061,7 +17061,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      124
+      66
     ],
     "tokens": "fired",
     "arguments": [
@@ -17096,7 +17096,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      136
+      78
     ],
     "tokens": "airstrikes",
     "arguments": [
@@ -17125,7 +17125,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      212
+      91
     ],
     "tokens": "killed",
     "arguments": [
@@ -17154,7 +17154,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      421
+      122
     ],
     "tokens": "get",
     "arguments": [
@@ -17189,7 +17189,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      558
+      148
     ],
     "tokens": "incursion",
     "arguments": [
@@ -17461,7 +17461,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      130
+      66
     ],
     "tokens": "death",
     "arguments": [],
@@ -17500,7 +17500,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      98
+      75
     ],
     "tokens": "cross",
     "arguments": [
@@ -17603,7 +17603,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      115
+      73
     ],
     "tokens": "attack",
     "arguments": [
@@ -17644,7 +17644,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      116
+      74
     ],
     "tokens": "killed",
     "arguments": [
@@ -17685,7 +17685,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      122
+      80
     ],
     "tokens": "injured",
     "arguments": [
@@ -17726,7 +17726,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      195
+      92
     ],
     "tokens": "suicide",
     "arguments": [
@@ -17755,7 +17755,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      197
+      94
     ],
     "tokens": "stormed",
     "arguments": [
@@ -17790,7 +17790,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      315
+      128
     ],
     "tokens": "election",
     "arguments": [],
@@ -17806,7 +17806,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      324
+      137
     ],
     "tokens": "elect",
     "arguments": [
@@ -17903,7 +17903,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      178
+      90
     ],
     "tokens": "dead",
     "arguments": [
@@ -18241,7 +18241,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      139
+      89
     ],
     "tokens": "blasts",
     "arguments": [
@@ -18264,7 +18264,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      154
+      104
     ],
     "tokens": "fatalities",
     "arguments": [
@@ -18287,7 +18287,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      158
+      108
     ],
     "tokens": "blasts",
     "arguments": [],
@@ -18303,7 +18303,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      254
+      119
     ],
     "tokens": "bombings",
     "arguments": [
@@ -18413,7 +18413,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      70
+      51
     ],
     "tokens": "injuries",
     "arguments": [],
@@ -18527,7 +18527,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      90
+      62
     ],
     "tokens": "charged",
     "arguments": [
@@ -18550,7 +18550,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      153
+      73
     ],
     "tokens": "death",
     "arguments": [
@@ -18573,7 +18573,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      157
+      77
     ],
     "tokens": "protests",
     "arguments": [
@@ -18596,7 +18596,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      251
+      102
     ],
     "tokens": "deployed",
     "arguments": [
@@ -18619,7 +18619,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      255
+      106
     ],
     "tokens": "protests",
     "arguments": [],
@@ -18635,7 +18635,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      347
+      115
     ],
     "tokens": "taken",
     "arguments": [
@@ -18664,7 +18664,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      352
+      120
     ],
     "tokens": "protest",
     "arguments": [
@@ -18693,7 +18693,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      355
+      123
     ],
     "tokens": "death",
     "arguments": [
@@ -18716,7 +18716,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      358
+      126
     ],
     "tokens": "event",
     "arguments": [
@@ -18829,7 +18829,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      94
+      65
     ],
     "tokens": "protests",
     "arguments": [],
@@ -18845,7 +18845,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      99
+      70
     ],
     "tokens": "extradition",
     "arguments": [],
@@ -18912,7 +18912,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      78
+      55
     ],
     "tokens": "assailants",
     "arguments": [
@@ -18935,7 +18935,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      129
+      60
     ],
     "tokens": "protesters",
     "arguments": [
@@ -18958,7 +18958,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      140
+      71
     ],
     "tokens": "attack",
     "arguments": [],
@@ -19150,7 +19150,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      109
+      79
     ],
     "tokens": "sued",
     "arguments": [
@@ -19195,6 +19195,22 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
+      42
+    ],
+    "tokens": "deaths",
+    "arguments": [],
+    "tags": "",
+    "lemmas": "",
+    "cluster_id": 2284,
+    "cluster_desc": "",
+    "singleton": false
+  },
+  {
+    "doc_id": "EPf5YqFWgbI",
+    "subtopic": "0",
+    "m_id": "0",
+    "sentence_id": 3,
+    "tokens_ids": [
       58
     ],
     "tokens": "deaths",
@@ -19211,23 +19227,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      112
-    ],
-    "tokens": "deaths",
-    "arguments": [],
-    "tags": "",
-    "lemmas": "",
-    "cluster_id": 2284,
-    "cluster_desc": "",
-    "singleton": false
-  },
-  {
-    "doc_id": "EPf5YqFWgbI",
-    "subtopic": "0",
-    "m_id": "0",
-    "sentence_id": 3,
-    "tokens_ids": [
-      118
+      64
     ],
     "tokens": "deaths",
     "arguments": [
@@ -19331,7 +19331,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      82
+      64
     ],
     "tokens": "die",
     "arguments": [
@@ -19360,7 +19360,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      85
+      67
     ],
     "tokens": "arrested",
     "arguments": [
@@ -19383,7 +19383,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      146
+      77
     ],
     "tokens": "violence",
     "arguments": [
@@ -19406,7 +19406,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      366
+      133
     ],
     "tokens": "charged",
     "arguments": [
@@ -19429,7 +19429,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      369
+      136
     ],
     "tokens": "killing",
     "arguments": [
@@ -19458,7 +19458,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      494
+      144
     ],
     "tokens": "Protests",
     "arguments": [
@@ -19516,7 +19516,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      136
+      86
     ],
     "tokens": "emigrated",
     "arguments": [
@@ -19620,7 +19620,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      82
+      60
     ],
     "tokens": "protesting",
     "arguments": [
@@ -19655,7 +19655,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      142
+      68
     ],
     "tokens": "killing",
     "arguments": [
@@ -19923,7 +19923,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      109
+      74
     ],
     "tokens": "bombing",
     "arguments": [
@@ -19946,7 +19946,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      287
+      104
     ],
     "tokens": "blast",
     "arguments": [],
@@ -20008,7 +20008,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      151
+      84
     ],
     "tokens": "arrived",
     "arguments": [
@@ -20182,7 +20182,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      222
+      101
     ],
     "tokens": "statement",
     "arguments": [
@@ -20205,7 +20205,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      238
+      117
     ],
     "tokens": "attack",
     "arguments": [],
@@ -20393,7 +20393,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      165
+      82
     ],
     "tokens": "speaking",
     "arguments": [
@@ -20434,7 +20434,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      62
+      43
     ],
     "tokens": "close",
     "arguments": [
@@ -20457,7 +20457,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      115
+      64
     ],
     "tokens": "loans",
     "arguments": [
@@ -20519,7 +20519,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      69
+      44
     ],
     "tokens": "death",
     "arguments": [
@@ -20542,7 +20542,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      136
+      68
     ],
     "tokens": "death",
     "arguments": [
@@ -20565,7 +20565,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      213
+      88
     ],
     "tokens": "deaths",
     "arguments": [
@@ -20666,7 +20666,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      73
+      55
     ],
     "tokens": "fire",
     "arguments": [],
@@ -20682,7 +20682,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      122
+      65
     ],
     "tokens": "explosions",
     "arguments": [],
@@ -20808,7 +20808,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      79
+      53
     ],
     "tokens": "injured",
     "arguments": [
@@ -20831,7 +20831,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      87
+      61
     ],
     "tokens": "dead",
     "arguments": [
@@ -20854,7 +20854,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      147
+      73
     ],
     "tokens": "bombings",
     "arguments": [],
@@ -20870,7 +20870,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      158
+      84
     ],
     "tokens": "war",
     "arguments": [],
@@ -20886,7 +20886,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      151
+      77
     ],
     "tokens": "violence",
     "arguments": [],
@@ -20999,7 +20999,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      116
+      78
     ],
     "tokens": "protests",
     "arguments": [],
@@ -21195,7 +21195,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      118
+      78
     ],
     "tokens": "taken",
     "arguments": [
@@ -21224,7 +21224,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      675
+      192
     ],
     "tokens": "testified",
     "arguments": [
@@ -21253,7 +21253,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      690
+      207
     ],
     "tokens": "contact",
     "arguments": [
@@ -21288,7 +21288,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      916
+      244
     ],
     "tokens": "deaths",
     "arguments": [
@@ -21311,7 +21311,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      74
+      54
     ],
     "tokens": "speech",
     "arguments": [
@@ -21334,7 +21334,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      155
+      85
     ],
     "tokens": "violence",
     "arguments": [],
@@ -21350,7 +21350,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      166
+      96
     ],
     "tokens": "dead",
     "arguments": [
@@ -21373,7 +21373,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      261
+      115
     ],
     "tokens": "violence",
     "arguments": [
@@ -21564,7 +21564,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      72
+      46
     ],
     "tokens": "announced",
     "arguments": [
@@ -21587,7 +21587,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      80
+      54
     ],
     "tokens": "protests",
     "arguments": [
@@ -21610,7 +21610,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      132
+      67
     ],
     "tokens": "protests",
     "arguments": [],
@@ -21626,7 +21626,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      137
+      72
     ],
     "tokens": "clashes",
     "arguments": [
@@ -21655,7 +21655,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      147
+      82
     ],
     "tokens": "dead",
     "arguments": [
@@ -21684,7 +21684,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      159
+      94
     ],
     "tokens": "injured",
     "arguments": [
@@ -21707,7 +21707,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      246
+      116
     ],
     "tokens": "disperse",
     "arguments": [
@@ -21736,7 +21736,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      348
+      122
     ],
     "tokens": "protests",
     "arguments": [],
@@ -21889,7 +21889,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      68
+      48
     ],
     "tokens": "told",
     "arguments": [
@@ -21918,7 +21918,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      73
+      53
     ],
     "tokens": "gunshot",
     "arguments": [
@@ -21941,7 +21941,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      80
+      60
     ],
     "tokens": "protesters",
     "arguments": [
@@ -21964,7 +21964,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      88
+      68
     ],
     "tokens": "taken",
     "arguments": [
@@ -21993,7 +21993,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      96
+      76
     ],
     "tokens": "clashes",
     "arguments": [
@@ -22016,7 +22016,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      157
+      91
     ],
     "tokens": "shots",
     "arguments": [
@@ -22097,7 +22097,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      103
+      71
     ],
     "tokens": "targeted",
     "arguments": [
@@ -22126,7 +22126,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      116
+      84
     ],
     "tokens": "marched",
     "arguments": [
@@ -22155,7 +22155,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      130
+      98
     ],
     "tokens": "force",
     "arguments": [
@@ -22190,7 +22190,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      134
+      102
     ],
     "tokens": "disperse",
     "arguments": [
@@ -22225,7 +22225,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      138
+      106
     ],
     "tokens": "protests",
     "arguments": [
@@ -22248,7 +22248,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      208
+      110
     ],
     "tokens": "launched",
     "arguments": [
@@ -22283,7 +22283,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      212
+      114
     ],
     "tokens": "disperse",
     "arguments": [
@@ -22312,7 +22312,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      214
+      116
     ],
     "tokens": "protesters",
     "arguments": [
@@ -22335,7 +22335,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      329
+      123
     ],
     "tokens": "return",
     "arguments": [
@@ -22364,7 +22364,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      332
+      126
     ],
     "tokens": "attacked",
     "arguments": [
@@ -22539,7 +22539,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      83
+      61
     ],
     "tokens": "strikes",
     "arguments": [
@@ -22574,7 +22574,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      102
+      80
     ],
     "tokens": "clashed",
     "arguments": [
@@ -22609,7 +22609,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      166
+      88
     ],
     "tokens": "strikes",
     "arguments": [
@@ -22632,7 +22632,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      195
+      117
     ],
     "tokens": "development",
     "arguments": [
@@ -22667,7 +22667,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      292
+      128
     ],
     "tokens": "statement",
     "arguments": [
@@ -22690,7 +22690,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      299
+      135
     ],
     "tokens": "killed",
     "arguments": [
@@ -22713,7 +22713,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      303
+      139
     ],
     "tokens": "strike",
     "arguments": [
@@ -22736,7 +22736,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      436
+      151
     ],
     "tokens": "eliminated",
     "arguments": [
@@ -22906,7 +22906,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      82
+      55
     ],
     "tokens": "fought",
     "arguments": [
@@ -22929,7 +22929,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      91
+      64
     ],
     "tokens": "fired",
     "arguments": [
@@ -23127,7 +23127,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      92
+      70
     ],
     "tokens": "left",
     "arguments": [
@@ -23231,7 +23231,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      100
+      72
     ],
     "tokens": "blast",
     "arguments": [
@@ -23254,7 +23254,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      102
+      74
     ],
     "tokens": "fled",
     "arguments": [
@@ -23345,7 +23345,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      216
+      105
     ],
     "tokens": "explosion",
     "arguments": [],
@@ -23361,7 +23361,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      328
+      132
     ],
     "tokens": "evacuated",
     "arguments": [
@@ -23384,7 +23384,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      747
+      166
     ],
     "tokens": "injuries",
     "arguments": [
@@ -23583,7 +23583,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      98
+      71
     ],
     "tokens": "shooting",
     "arguments": [
@@ -23618,7 +23618,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      112
+      85
     ],
     "tokens": "speech",
     "arguments": [
@@ -23641,7 +23641,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      125
+      98
     ],
     "tokens": "death",
     "arguments": [
@@ -23664,7 +23664,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      225
+      131
     ],
     "tokens": "gunfire",
     "arguments": [
@@ -23687,7 +23687,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      351
+      150
     ],
     "tokens": "killed",
     "arguments": [
@@ -23722,7 +23722,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      353
+      152
     ],
     "tokens": "injured",
     "arguments": [
@@ -23745,7 +23745,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      363
+      162
     ],
     "tokens": "death",
     "arguments": [],
@@ -23842,7 +23842,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      119
+      83
     ],
     "tokens": "explosion",
     "arguments": [
@@ -23865,8 +23865,8 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      236,
-      237
+      124,
+      125
     ],
     "tokens": "blown up",
     "arguments": [
@@ -23889,7 +23889,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      359
+      145
     ],
     "tokens": "explosion",
     "arguments": [
@@ -23912,7 +23912,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      669
+      180
     ],
     "tokens": "left",
     "arguments": [
@@ -23964,7 +23964,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      137
+      104
     ],
     "tokens": "election",
     "arguments": [],
@@ -23980,7 +23980,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      354
+      140
     ],
     "tokens": "elections",
     "arguments": [
@@ -24003,7 +24003,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      367
+      153
     ],
     "tokens": "said",
     "arguments": [
@@ -24137,7 +24137,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      100
+      72
     ],
     "tokens": "attack",
     "arguments": [
@@ -24282,7 +24282,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      84
+      56
     ],
     "tokens": "injuries",
     "arguments": [
@@ -24311,7 +24311,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      157
+      79
     ],
     "tokens": "firebombed",
     "arguments": [
@@ -24415,7 +24415,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      157
+      79
     ],
     "tokens": "death",
     "arguments": [
@@ -24438,7 +24438,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      230
+      83
     ],
     "tokens": "killing",
     "arguments": [],
@@ -24454,7 +24454,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      333
+      105
     ],
     "tokens": "sent",
     "arguments": [
@@ -24553,7 +24553,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      104
+      72
     ],
     "tokens": "escaped",
     "arguments": [
@@ -24582,7 +24582,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      112
+      80
     ],
     "tokens": "attacks",
     "arguments": [
@@ -24605,7 +24605,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      119
+      87
     ],
     "tokens": "reprisals",
     "arguments": [
@@ -24663,7 +24663,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      86
+      60
     ],
     "tokens": "attack",
     "arguments": [
@@ -24686,7 +24686,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      142
+      69
     ],
     "tokens": "attack",
     "arguments": [
@@ -24721,7 +24721,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      231
+      96
     ],
     "tokens": "elections",
     "arguments": [
@@ -24744,7 +24744,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      326
+      109
     ],
     "tokens": "reelected",
     "arguments": [
@@ -24783,7 +24783,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      200
+      106
     ],
     "tokens": "war",
     "arguments": [
@@ -24806,7 +24806,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      321
+      135
     ],
     "tokens": "death",
     "arguments": [
@@ -24829,7 +24829,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      341
+      155
     ],
     "tokens": "fatalities",
     "arguments": [
@@ -24893,7 +24893,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      172
+      74
     ],
     "tokens": "discharged",
     "arguments": [
@@ -24916,7 +24916,7 @@
     "m_id": "0",
     "sentence_id": 8,
     "tokens_ids": [
-      616
+      156
     ],
     "tokens": "deaths",
     "arguments": [
@@ -24939,7 +24939,7 @@
     "m_id": "0",
     "sentence_id": 9,
     "tokens_ids": [
-      778
+      177
     ],
     "tokens": "speaking",
     "arguments": [
@@ -25089,7 +25089,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      92
+      69
     ],
     "tokens": "injured",
     "arguments": [
@@ -25112,7 +25112,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      86
+      63
     ],
     "tokens": "told",
     "arguments": [
@@ -25141,7 +25141,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      269
+      112
     ],
     "tokens": "injured",
     "arguments": [
@@ -25164,7 +25164,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      273
+      116
     ],
     "tokens": "blast",
     "arguments": [
@@ -25248,7 +25248,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      117
+      65
     ],
     "tokens": "exchanges",
     "arguments": [
@@ -25358,7 +25358,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      100
+      72
     ],
     "tokens": "funding",
     "arguments": [
@@ -25381,7 +25381,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      164
+      86
     ],
     "tokens": "attack",
     "arguments": [
@@ -25404,7 +25404,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      169
+      91
     ],
     "tokens": "immigrated",
     "arguments": [
@@ -25433,7 +25433,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      259
+      107
     ],
     "tokens": "came",
     "arguments": [
@@ -25462,7 +25462,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      283
+      131
     ],
     "tokens": "election",
     "arguments": [],
@@ -25548,7 +25548,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      98
+      62
     ],
     "tokens": "deaths",
     "arguments": [
@@ -25571,7 +25571,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      279
+      115
     ],
     "tokens": "travel",
     "arguments": [
@@ -25600,7 +25600,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      533
+      144
     ],
     "tokens": "leave",
     "arguments": [
@@ -25675,7 +25675,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      92
+      60
     ],
     "tokens": "invasion",
     "arguments": [],
@@ -25691,7 +25691,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      97
+      65
     ],
     "tokens": "it",
     "arguments": [],
@@ -25736,7 +25736,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      52
+      41
     ],
     "tokens": "lost",
     "arguments": [
@@ -25840,7 +25840,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      90
+      61
     ],
     "tokens": "declared",
     "arguments": [
@@ -25863,7 +25863,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      105
+      76
     ],
     "tokens": "pay",
     "arguments": [
@@ -25892,7 +25892,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      189
+      102
     ],
     "tokens": "exports",
     "arguments": [
@@ -25915,7 +25915,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      435
+      152
     ],
     "tokens": "deaths",
     "arguments": [
@@ -25938,7 +25938,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      590
+      167
     ],
     "tokens": "killed",
     "arguments": [
@@ -26019,7 +26019,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      146
+      115
     ],
     "tokens": "lost",
     "arguments": [
@@ -26042,7 +26042,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      934
+      212
     ],
     "tokens": "killed",
     "arguments": [
@@ -26077,7 +26077,7 @@
     "m_id": "0",
     "sentence_id": 8,
     "tokens_ids": [
-      1175
+      249
     ],
     "tokens": "death",
     "arguments": [
@@ -26199,7 +26199,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      109
+      77
     ],
     "tokens": "violence",
     "arguments": [],
@@ -26314,7 +26314,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      81
+      56
     ],
     "tokens": "killed",
     "arguments": [
@@ -26337,7 +26337,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      91
+      66
     ],
     "tokens": "injured",
     "arguments": [
@@ -26360,7 +26360,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      94
+      69
     ],
     "tokens": "gunfire",
     "arguments": [
@@ -26383,7 +26383,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      149
+      74
     ],
     "tokens": "entered",
     "arguments": [
@@ -26412,7 +26412,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      157
+      82
     ],
     "tokens": "fire",
     "arguments": [
@@ -26453,7 +26453,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      343
+      109
     ],
     "tokens": "attack",
     "arguments": [
@@ -26476,7 +26476,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      235
+      105
     ],
     "tokens": "visit",
     "arguments": [
@@ -26505,7 +26505,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      381
+      156
     ],
     "tokens": "fatalities",
     "arguments": [],
@@ -26521,7 +26521,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      522
+      171
     ],
     "tokens": "deaths",
     "arguments": [
@@ -26544,7 +26544,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      702
+      186
     ],
     "tokens": "traveling",
     "arguments": [
@@ -26573,7 +26573,7 @@
     "m_id": "0",
     "sentence_id": 8,
     "tokens_ids": [
-      897
+      208
     ],
     "tokens": "leaving",
     "arguments": [
@@ -26677,7 +26677,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      264
+      139
     ],
     "tokens": "harmed",
     "arguments": [
@@ -26700,7 +26700,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      267
+      142
     ],
     "tokens": "attack",
     "arguments": [],
@@ -26739,7 +26739,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      131
+      102
     ],
     "tokens": "reopen",
     "arguments": [
@@ -26768,8 +26768,8 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      252,
-      253
+      140,
+      141
     ],
     "tokens": "shut down",
     "arguments": [],
@@ -26785,7 +26785,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      401
+      167
     ],
     "tokens": "visited",
     "arguments": [
@@ -26814,7 +26814,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      167
+      87
     ],
     "tokens": "went",
     "arguments": [
@@ -26843,7 +26843,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      181
+      101
     ],
     "tokens": "fight",
     "arguments": [
@@ -26919,7 +26919,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      77
+      52
     ],
     "tokens": "War",
     "arguments": [
@@ -26942,7 +26942,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      133
+      69
     ],
     "tokens": "bombing",
     "arguments": [
@@ -27098,7 +27098,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      91
+      70
     ],
     "tokens": "attack",
     "arguments": [
@@ -27127,7 +27127,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      117
+      96
     ],
     "tokens": "warned",
     "arguments": [
@@ -27150,7 +27150,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      203
+      122
     ],
     "tokens": "attack",
     "arguments": [
@@ -27185,7 +27185,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      208
+      127
     ],
     "tokens": "killed",
     "arguments": [
@@ -27352,7 +27352,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      85
+      55
     ],
     "tokens": "departing",
     "arguments": [
@@ -27375,8 +27375,8 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      113,
-      114
+      83,
+      84
     ],
     "tokens": "took over",
     "arguments": [
@@ -27399,7 +27399,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      210
+      127
     ],
     "tokens": "come",
     "arguments": [
@@ -27540,7 +27540,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      131
+      58
     ],
     "tokens": "hurt",
     "arguments": [
@@ -27563,7 +27563,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      192
+      66
     ],
     "tokens": "arrested",
     "arguments": [
@@ -27632,7 +27632,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      98
+      59
     ],
     "tokens": "celebration",
     "arguments": [],
@@ -27648,7 +27648,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      157
+      68
     ],
     "tokens": "it",
     "arguments": [],
@@ -27687,7 +27687,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      99
+      69
     ],
     "tokens": "take",
     "arguments": [
@@ -27815,7 +27815,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      103
+      71
     ],
     "tokens": "carrying",
     "arguments": [
@@ -27862,7 +27862,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      224
+      125
     ],
     "tokens": "wrote",
     "arguments": [
@@ -27914,7 +27914,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      58
+      35
     ],
     "tokens": "visited",
     "arguments": [
@@ -27943,7 +27943,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      70
+      47
     ],
     "tokens": "injuries",
     "arguments": [
@@ -28001,7 +28001,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      92
+      63
     ],
     "tokens": "died",
     "arguments": [
@@ -28036,7 +28036,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      96
+      67
     ],
     "tokens": "attacked",
     "arguments": [
@@ -28071,7 +28071,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      165
+      78
     ],
     "tokens": "shootings",
     "arguments": [
@@ -28094,7 +28094,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      389
+      133
     ],
     "tokens": "attacks",
     "arguments": [
@@ -28123,7 +28123,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      510
+      138
     ],
     "tokens": "shooter",
     "arguments": [
@@ -28146,7 +28146,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      516
+      144
     ],
     "tokens": "trial",
     "arguments": [
@@ -28169,7 +28169,7 @@
     "m_id": "0",
     "sentence_id": 7,
     "tokens_ids": [
-      662
+      155
     ],
     "tokens": "announced",
     "arguments": [
@@ -28300,7 +28300,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      71
+      53
     ],
     "tokens": "injuries",
     "arguments": [],
@@ -28316,7 +28316,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      128
+      65
     ],
     "tokens": "explode",
     "arguments": [],
@@ -28436,7 +28436,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      88
+      60
     ],
     "tokens": "protesters",
     "arguments": [
@@ -28889,7 +28889,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      110
+      78
     ],
     "tokens": "injured",
     "arguments": [
@@ -28912,7 +28912,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      113
+      81
     ],
     "tokens": "stabbing",
     "arguments": [
@@ -28935,7 +28935,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      114
+      82
     ],
     "tokens": "attack",
     "arguments": [
@@ -28958,7 +28958,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      120
+      88
     ],
     "tokens": "wounds",
     "arguments": [
@@ -28981,7 +28981,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      161
+      87
     ],
     "tokens": "announced",
     "arguments": [
@@ -29004,7 +29004,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      272
+      114
     ],
     "tokens": "killed",
     "arguments": [
@@ -29125,7 +29125,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      115
+      73
     ],
     "tokens": "torching",
     "arguments": [
@@ -29160,7 +29160,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      130
+      88
     ],
     "tokens": "clashed",
     "arguments": [
@@ -29189,7 +29189,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      203
+      95
     ],
     "tokens": "Incidents",
     "arguments": [
@@ -29212,7 +29212,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      470
+      161
     ],
     "tokens": "election",
     "arguments": [
@@ -29235,7 +29235,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      480
+      171
     ],
     "tokens": "victory",
     "arguments": [
@@ -29339,7 +29339,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      89
+      65
     ],
     "tokens": "communicate",
     "arguments": [
@@ -29362,7 +29362,7 @@
     "m_id": "0",
     "sentence_id": 5,
     "tokens_ids": [
-      348
+      133
     ],
     "tokens": "statement",
     "arguments": [
@@ -29385,7 +29385,7 @@
     "m_id": "0",
     "sentence_id": 6,
     "tokens_ids": [
-      477
+      155
     ],
     "tokens": "explosion",
     "arguments": [
@@ -29437,7 +29437,7 @@
     "m_id": "0",
     "sentence_id": 2,
     "tokens_ids": [
-      91
+      69
     ],
     "tokens": "travelled",
     "arguments": [
@@ -29466,7 +29466,7 @@
     "m_id": "0",
     "sentence_id": 3,
     "tokens_ids": [
-      148
+      79
     ],
     "tokens": "died",
     "arguments": [
@@ -29495,7 +29495,7 @@
     "m_id": "0",
     "sentence_id": 4,
     "tokens_ids": [
-      231
+      89
     ],
     "tokens": "death",
     "arguments": [

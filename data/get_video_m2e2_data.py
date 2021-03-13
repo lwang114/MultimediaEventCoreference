@@ -65,7 +65,7 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
   sen_start = 0
   end_inc = 1 if inclusive else 0 
   cur_id = ''
-  for sen_dict in sen_dicts:
+  for sen_dict in sen_dicts[:20]: # XXX
     doc_id = sen_dict['image']
     # XXX '0_{}'.format(sen_dict['image']) # Prepend a dummy topic id to run on coref
     sent_id = sen_dict['sentence_id']
@@ -167,6 +167,12 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
         for pos in range(start, end+end_inc):
           event_mask[pos] = 1
 
+        arguments = []
+        for arg_info in mention['arguments']:
+          start = arg_info['start']
+          end = arg_info['end']
+          arguments.append((start, end))
+          
         if 'coreference' in sen_dict:
           m_id = event_mention_ids[m_idx]
           cluster_id = event2coref[m_id]
@@ -178,6 +184,7 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
                        'sentence_id': sent_id,
                        'tokens_ids': list(range(sen_start+start, sen_start+end+end_inc)),
                        'tokens': ' '.join(tokens[start:end+end_inc]),
+                       'arguments': arguments,
                        'tags': '',
                        'lemmas': '',
                        'cluster_id': cluster_id,
@@ -436,10 +443,10 @@ if __name__ == '__main__':
   parser.add_argument('--task', type=int)
   args = parser.parse_args()
 
-  data_dir = 'data/video_m2e2/mentions/'
-  mapping_file = 'm2e2/data/video_m2e2/video_m2e2.json'
-  test_desc_file = 'm2e2/data/video_m2e2/unannotatedVideos_textEventCount.json'
-  data_json = 'm2e2/data/video_m2e2/grounding_video_m2e2.json'
+  data_dir = 'video_m2e2_old/mentions/'
+  mapping_file = 'video_m2e2/video_m2e2.json'
+  test_desc_file = 'video_m2e2/unannotatedVideos_textEventCount.json'
+  data_json = 'video_m2e2/grounding_video_m2e2.json'
   csv_dir = os.path.join(data_dir, 'mmaction_feat')
   
   if not os.path.isdir(data_dir):
@@ -450,7 +457,7 @@ if __name__ == '__main__':
   if args.task == 0:  
     out_prefix = os.path.join(data_dir, 'train')
     get_mention_doc(data_json, out_prefix, inclusive=False) 
-    data_json = 'm2e2/data/video_m2e2/grounding_video_m2e2_test.json'
+    data_json = 'video_m2e2/grounding_video_m2e2_test.json'
     out_prefix = os.path.join(data_dir, 'test')
     get_mention_doc(data_json, out_prefix, inclusive=True)
   elif args.task == 1:
@@ -471,7 +478,7 @@ if __name__ == '__main__':
     compute_bleu_similarity(doc_json, mapping_file, out_prefix)
   elif args.task == 5:
     # Random split
-    out_dir = 'data/video_m2e2_random_split/mentions/'
+    out_dir = 'video_m2e2/mentions/'
     if not os.path.exists(out_dir):
       os.makedirs(out_dir)
 

@@ -125,7 +125,7 @@ class StarFeatureDataset(Dataset):
     self.event_to_roles = self.create_dict_labels(text_mentions, image_mentions)
 
     # Extract doc/image ids
-    self.feat_keys = sorted(self.imgs_embeddings, key=lambda x:int(x.split('_')[-1])) # XXX
+    self.feat_keys = sorted(self.imgs_embeddings, key=lambda x:int(x.split('_')[-1]))[:20] # XXX
     self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in self.text_label_dict]
     if test_id_file:
       with open(test_id_file) as f:
@@ -206,6 +206,7 @@ class StarFeatureDataset(Dataset):
         end = max(m['tokens_ids'])
         if not m['doc_id'] in text_label_dict:
             text_label_dict[m['doc_id']] = {'events':{}, 'entities':{}}
+            event_to_roles[m['doc_id']] = {}
         if 'arguments' in m:
             text_label_dict[m['doc_id']]['events'][(start, end)] = m['cluster_id'] 
             event_to_roles[m['doc_id']][(start, end)] = []
