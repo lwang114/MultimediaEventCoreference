@@ -65,7 +65,7 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
   sen_start = 0
   end_inc = 1 if inclusive else 0 
   cur_id = ''
-  for sen_dict in sen_dicts[:20]: # XXX
+  for sen_dict in sen_dicts: # XXX
     doc_id = sen_dict['image']
     # XXX '0_{}'.format(sen_dict['image']) # Prepend a dummy topic id to run on coref
     sent_id = sen_dict['sentence_id']
@@ -149,6 +149,7 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
                          'sentence_id': sent_id,
                          'tokens_ids': list(range(sen_start+mention['start'], sen_start+mention['end']+end_inc)),
                          'tokens': ' '.join(tokens[mention['start']:mention['end']+end_inc]),
+                         'entity_type': mention['entity_type'], 
                          'tags': '',
                          'lemmas': '',
                          'cluster_id': cluster_id,
@@ -184,6 +185,7 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
                        'sentence_id': sent_id,
                        'tokens_ids': list(range(sen_start+start, sen_start+end+end_inc)),
                        'tokens': ' '.join(tokens[start:end+end_inc]),
+                       'event_type': mention['event_type'], 
                        'arguments': arguments,
                        'tags': '',
                        'lemmas': '',
@@ -450,7 +452,7 @@ if __name__ == '__main__':
   csv_dir = os.path.join(data_dir, 'mmaction_feat')
   
   if not os.path.isdir(data_dir):
-    os.mkdir(data_dir)
+    os.makedirs(data_dir)
     os.mkdir(os.path.join(data_dir, 'mentions'))
     os.mkdir(os.path.join(data_dir, 'gold'))
 

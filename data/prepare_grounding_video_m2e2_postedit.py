@@ -104,7 +104,6 @@ class Article:
             t_end = None
             for idx, token in enumerate(self.tokens[sent_idx]):
               if token.text in PUNCT:
-                # print('Skip punctuation: {}'.format(token.text))
                 continue
               if int_overlap(start, end, token.start_char, token.end_char):
                 if t_start is None:
@@ -116,6 +115,7 @@ class Article:
             name = [t.text for t in self.tokens[sent_idx][t_start:t_end+1]]
             triggers[sent_idx][parts[0]] = {'start': t_start, 
                                             'end': t_end,
+                                            'event-type': event_type,
                                             'text': ' '.join(name)} 
             
     for sent_idx in range(len(self.sentences)):
@@ -228,6 +228,7 @@ def generate_json(img_id, ann, events, entities, cluster2idx, documents):
                          'sentence_id': sent_idx,
                          'tokens_ids': list(range(sen_start+mention['start'], sen_start+mention['end']+1)),
                          'tokens': ' '.join(sent_tokens[mention['start']:mention['end']+1]),
+                         'entity_type': mention['entity-type'],
                          'tags': '',
                          'lemmas': '',
                          'cluster_id': cluster_idx,
@@ -247,6 +248,7 @@ def generate_json(img_id, ann, events, entities, cluster2idx, documents):
                        'tokens_ids': list(range(sen_start+event['start'], sen_start+event['end']+1)),
                        'tokens': ' '.join(sent_tokens[event['start']:event['end']+1]),
                        'arguments': arguments,
+                       'event_type': event['event-type'],
                        'tags': '',
                        'lemmas': '',
                        'cluster_id': cluster_idx,
@@ -255,8 +257,8 @@ def generate_json(img_id, ann, events, entities, cluster2idx, documents):
     
       # Extract tokens
       for token_idx, token in enumerate(article.tokens[sent_idx]):
-        tokens.append([sent_idx, token_idx, token.text, (int(mention_mask[token_idx]) > 0)])
-      sen_start += len(tokens)
+        tokens.append([sent_idx, sen_start+token_idx, token.text, (int(mention_mask[token_idx]) > 0)])
+      sen_start = len(tokens)
     documents[img_id] = tokens
 
     return events, entities, cluster2idx, documents
@@ -312,6 +314,6 @@ def main(grounding_dir, img_dir, m2e2_caption, m2e2_annotation_dir, out_prefix='
 if __name__ == '__main__':
   grounding_dir = ''
   img_dir = '/ws/ifp-53_2/hasegawa/lwang114/fall2020/MultimediaEventCoreference/m2e2/data/video_m2e2/videos/'
-  m2e2_caption = '../../../data/video_m2e2/video_m2e2.json' # '/ws/ifp-53_2/hasegawa/lwang114/fall2020/MultimediaEventCoreference/m2e2/data/video_m2e2/video_m2e2.json'
-  m2e2_annotation_dir = '../../../../brat/brat-v1.3_Crunchy_Frog/data/video_m2e2_oneie/train/'
+  m2e2_caption = 'video_m2e2/video_m2e2.json' # '/ws/ifp-53_2/hasegawa/lwang114/fall2020/MultimediaEventCoreference/m2e2/data/video_m2e2/video_m2e2.json'
+  m2e2_annotation_dir = '../brat/brat-v1.3_Crunchy_Frog/data/video_m2e2_oneie/train/'
   main(grounding_dir, img_dir, m2e2_caption, m2e2_annotation_dir, out_prefix='train')
