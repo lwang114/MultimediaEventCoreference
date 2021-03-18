@@ -37,11 +37,12 @@ def get_all_mention_mapping(origin_candidate_start_ends,
                             entity_labels_dict,
                             event_to_roles,
                             max_event_num,
+                            max_role_num,
                             max_mention_num):
     span_num = origin_candidate_start_ends.shape[0]
     event_mappings = torch.zeros((max_event_num, max_mention_num))
     entity_mappings = torch.zeros((max_mention_num, max_mention_num))
-    event_to_roles_mappings = torch.zeros((max_event_num, max_mention_num))
+    event_to_roles_mappings = torch.zeros((max_event_num, max_role_num, max_mention_num))
     labels = torch.zeros(max_mention_num)
 
     span_to_idx = {tuple(origin_candidate_start_ends[i].tolist()):i for i in range(span_num)}
@@ -55,9 +56,9 @@ def get_all_mention_mapping(origin_candidate_start_ends,
     for event_idx, span in enumerate(sorted(event_labels_dict)):
         span_idx = span_to_idx[span]
         event_mappings[event_idx, span_idx] = 1.
-        for span_role in event_to_roles[span]:
-            role_idx = span_to_idx[span_role]
-            event_to_roles_mappings[event_idx, role_idx] = 1.
+        for role_idx, span_role in enumerate(event_to_roles[span]):
+            span_idx2 = span_to_idx[span_role]
+            event_to_roles_mappings[event_idx, role_idx, span_idx2] = 1.
         
     for entity_idx, span in enumerate(sorted(entity_labels_dict)):
         span_idx = span_to_idx[span]
@@ -98,6 +99,7 @@ class StarFeatureDataset(Dataset):
     self.max_token_num = config.get('max_token_num', 512)
     self.max_span_num = config.get('max_span_num', 80)
     self.max_event_num = config.get('max_event_num', 20)
+    self.max_role_num = config.get('max_role_num', 10)
     self.max_frame_num = config.get('max_frame_num', 100)
     self.max_mention_span = config.get('max_mention_span', 15)
     self.img_feat_type = config.get('img_feat_type', 'mmaction_feat')
@@ -244,7 +246,7 @@ class StarFeatureDataset(Dataset):
     :return continuous_mappings: FloatTensor of size (max num. spans, max mention span, max num. tokens)
     :return event_mappings: FloatTensor of size (max num. events, max num. spans)
     :return entity_mappings: FloatTensor of size (max num. entities, max num. spans)
-    :return event_to_role_mappings: FloatTensor of size (max num. events, max num. entities)
+    :return event_to_role_mappings: FloatTensor of size (max num. events, max num. roles, max num. spans)
     :return mask: FloatTensor of size (max num. spans,)
     :return width: LongTensor of size (max num. spans,)
     :return labels: LongTensor of size (max num. spans,) 
@@ -287,6 +289,7 @@ class StarFeatureDataset(Dataset):
                              entity_labels_dict,
                              event_to_roles,
                              self.max_event_num,
+                             self.max_role_num,
                              self.max_span_num)
     
     width = torch.LongTensor([min(w, self.max_mention_span) for w in width])
