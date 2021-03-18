@@ -1,5 +1,6 @@
 import torch
-
+import collections
+from allennlp-models.coref.metrics import conll_coref_scores
 
 class Evaluation:
     def __init__(self, predictions, labels):
@@ -63,6 +64,63 @@ class RetrievalEvaluation:
           break
     return recall_at_k / self.total  
          
-          
+class CoNLLEvaluation:
+  def __init__(self):
+    self.scorer = ConllCorefScores()
 
+  def __call__(
+    self,
+    top_spans,
+    predicted_antecedents,
+    gold_spans,
+    gold_labels
+  ):
+    """
+    :param top_spans: LongTensor of size (num. spans, 2)
+    :param predicted_antecedents: LongTensor of size (num. spans, 2)
+    :param gold_labels: LongTensor of size (num. spans,)
+    """
+    num_spans = top_spans.size(0)
+    top_spans = top_spans.unsqueeze(0).cpu()
+    predicted_antecedents = predicted_antecedents.unsqueeze(0).cpu()
+    pred_clusters = self.get_predicted_clusters(top_spans, 
+                                                antecedent_indices,
+                                                predicted_antecedents) 
+    gold_clusters = self.get_gold_clusters(gold_spans, gold_labels)
+    metadata_list = [{'clusters': gold_clusters}]
 
+    antecdent_indices = torch.LongTensor([[j if j < i else -1 for j in range(num_spans)] for i in range(num_spans)]).unsqueeze(0)
+
+    self.scorer(top_spans, antecedent_indices, predicted_antecedents, metadata_list)
+    return pred_clusters, gold_clusters
+
+  def get_predicted_clusters(self, top_spans, antecedent_indices, predicted_antecedents): 
+    predicted_clusters, _ = self.scorer.get_predicted_clusters(
+                                          top_spans, 
+                                          antecedent_indices, 
+                                          predicted_antecedents)
+    return predicted_clusters
+     
+  def get_gold_clusters(self, gold_spans, gold_labels):
+    gold_labels = gold_labels.cpu().detach().numpy().tolist()
+    cluster_dict = collections.defaultdict(list)
+    
+    for cluster_id, span in enumerate(gold_labels, gold_spans):
+      cluster_dict[cluster_id].append(span)
+
+    return list(cluster_dict.values())
+
+  def get_metrics(self):
+    muc = (self.scorer.scorers[0].get_precision(), self.scorer.scorers[0].get_recall(), self.scorer.scorers[0].get_f1())
+    b_cubed = (self.scorer.scorers[1].get_precision(), self.scorer.scorers[1].get_recall(), self.scorer.scorers[1].get_f1())
+    ceafe = (self.scorer.scorers[2].get_precision(), self.scorer.scorers[2].get_recall(), self.scorer.scorers[2].get_f1())
+    avg = self.scorer.get_metric()
+    return muc, b_cubed, ceafe, avg
+
+  def make_output_readable(self, pred_clusters, gold_clusters, tokens):
+    pred_clusters_str = [[' '.join(tokens[m[0]:m[1]+1]) for m in cluster] for cluster in pred_clusters]
+    gold_clusters_str = [[' '.join(tokens[m[0]:m[1]+1]) for m in cluster] for cluster in gold_clusters]
+    return pred_clusters_str, gold_clusters_str
+    
+      
+        

@@ -17,9 +17,8 @@ from text_models import SpanEmbedder, BiLSTM, TransformerPairWiseClassifier
 from image_models import VisualEncoder
 from criterion import TripletLoss
 from corpus import SupervisedGroundingFeatureDataset
-from evaluator import Evaluation, RetrievalEvaluation
+from evaluator import Evaluation, RetrievalEvaluation, CoNLLEvaluation
 from utils import make_prediction_readable
-from conll import write_output_file
 
 logger = logging.getLogger(__name__)
 def fix_seed(config):
@@ -257,18 +256,15 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
     documents = test_loader.dataset.documents
     all_scores = []
     all_labels = []
+
     text_model.eval()
     image_model.eval()
     coref_model.eval()
 
-    out_dir = os.path.join(config['model_path'], 'pred_conll')
-    if not os.path.isdir(out_dir):
-      os.makedirs(out_dir)
-
-    best_f1 = 0. 
-    f = open(os.path.join(args.exp_dir, 'prediction.readable'), 'w')
-    with torch.no_grad():
-        pred_dicts = []      
+    conll_eval = CoNLLEvaluation()
+    f_out = open(os.path.join(args.exp_dir, 'prediction.readable'), 'w')
+    best_f1 = 0.
+    with torch.no_grad():     
         for i, batch in enumerate(test_loader):
           doc_embeddings,\
           start_mappings, end_mappings,\
@@ -311,51 +307,45 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
             first_text_idx = first_text_idx.squeeze(0)
             second_text_idx = second_text_idx.squeeze(0)
             pairwise_text_labels = pairwise_text_labels.squeeze(0)
-            clusters, text_scores = coref_model.module.predict_cluster(mention_output[idx, :span_num[idx]], first_text_idx,
-       second_text_idx)
+            predicted_antecedents, text_scores = coref_model.module.predict_cluster(mention_output[idx, :span_num[idx]], first_text_idx,
+       second_text_idx) 
+            origin_candidate_start_ends = test_loader.dataset.origin_candidate_start_ends
+            predicted_antecedents = torch.LongTensor(predicted_antecedents)
+            origin_candidate_start_ends = torch.LongTensor(origin_candidate_start_ends)
+            
 
-            all_scores.append(text_scores.squeeze(1))
-            all_labels.append(pairwise_text_labels.to(torch.int).cpu())
+            pred_clusters, gold_clusters = coref_eval(origin_candidate_start_ends,
+                                                      predicted_antecedents,
+                                                      origin_candidate_start_ends,
+                                                      text_labels[idx, :span_num[idx]])
+            # Save the output clusters
             global_idx = i * test_loader.batch_size + idx
             doc_id = test_loader.dataset.doc_ids[global_idx]
-            origin_tokens = [token[2] for token in test_loader.dataset.origin_tokens[global_idx]]
-            candidate_start_ends = test_loader.dataset.origin_candidate_start_ends[global_idx]
-            doc_name = doc_id
-            document = {doc_id:test_loader.dataset.documents[doc_id]}
-            write_output_file(document, clusters,
-                              [doc_id]*candidate_start_ends.shape[0],
-                              candidate_start_ends[:, 0].tolist(),
-                              candidate_start_ends[:, 1].tolist(),
-                              out_dir,
-                              doc_name, 
-                              False, True) 
-            # Save pairs with the highest coreference scores
-            top_pair_list = np.argsort(-text_scores.squeeze(1).cpu().detach().numpy())[:100]
-            for top_idx in top_pair_list: 
-                first_id = first_text_idx[top_idx]
-                second_id = second_text_idx[top_idx]
-                first_tokens = ' '.join(origin_tokens[candidate_start_ends[first_id][0]:candidate_start_ends[first_id][1]+1])
-                second_tokens = ' '.join(origin_tokens[candidate_start_ends[second_id][0]:candidate_start_ends[second_id][1]+1])
-                score = text_scores[top_idx].squeeze(0).item()
-                label = pairwise_text_labels[top_idx].item()
+            pred_clusters_str, gold_clusters_str = coref_eval.make_output_readable(pred_clusters, gold_clusters) 
+            tokens = self.documents[doc_id] 
+            f_out.write(f"{' '.join(tokens).strip('\n')}\n")
+            f_out.write(f'Pred: {pred_clusters_str}')
+            f_out.write(f'Gold: {gold_clusters_str}')
 
-                f.write(f'{doc_id} {first_tokens} {second_tokens} {score} {label}\n')
- 
+            all_scores.append(text_scores.squeeze(1))
+            all_labels.append(pairwise_text_labels.to(torch.int).cpu())            
         all_scores = torch.cat(all_scores)
         all_labels = torch.cat(all_labels)
 
         strict_preds = (all_scores > 0).to(torch.int)
         eval = Evaluation(strict_preds, all_labels.to(device))
+
         print('Number of predictions: {}/{}'.format(strict_preds.sum(), len(strict_preds)))
         print('Number of positive pairs: {}/{}'.format(len((all_labels == 1).nonzero()),
                                                      len(all_labels)))
-        print('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
+        print('Pairwise - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
                                                                 eval.get_precision(), eval.get_f1()))
-        logger.info('Number of predictions: {}/{}'.format(strict_preds.sum(), len(strict_preds)))
-        logger.info('Number of positive pairs: {}/{}'.format(len((all_labels == 1).nonzero()),
-                                                           len(all_labels)))
-        logger.info('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
-                                                                      eval.get_precision(), eval.get_f1()))
+        
+        muc, b_cubed, ceafe, avg = conll_eval.get_metrics()
+        print('MUC - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*muc))
+        print('Bcubed - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*b_cubed))
+        print('CEAFe - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*ceafe))
+        print('CoNLL - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*avg)) 
         return eval.get_f1()
 
 

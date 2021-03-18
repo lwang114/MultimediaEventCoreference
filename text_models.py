@@ -395,14 +395,13 @@ class SimplePairWiseClassifier(nn.Module):
     def predict_cluster(self, span_embeddings, first_idx, second_idx):
       '''
       :param span_embeddings: FloatTensor of size (num. of spans, span embed dim),
-      :param image_embeddings: FloatTensor of size (num. of ROIs, image embed dim),
       :param first_idx: LongTensor of size (num. of mention pairs,)
       :param second_idx: LongTensor of size (num. of mention pairs,)
       :return scores: FloatTensor of size (batch size, max num. of mention pairs),
       :return clusters: dict of list of int, mapping from cluster id to mention ids of its members 
       '''
       device = span_embeddings.device
-      thres = -0.76 # TODO Make this a config parameter
+      thres = 0.
       span_num = max(second_idx) + 1
       span_mask = torch.ones(len(first_idx)).to(device)
       first_span_embeddings = span_embeddings[first_idx]
@@ -441,7 +440,7 @@ class SimplePairWiseClassifier(nn.Module):
             clusters[cluster_id].append(cur_idx)
             covered_spans.append(cur_idx)
           cluster_id += 1
-      # print('Number of non-singleton clusters: {}'.format(cluster_id))
+      # TODO Pruning, higher order inference?
       return clusters, scores
 
 class TransformerPairWiseClassifier(nn.Module):
