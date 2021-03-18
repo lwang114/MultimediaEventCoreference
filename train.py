@@ -13,7 +13,7 @@ import random
 import numpy as np
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
-from text_models import SpanEmbedder, BiLSTM, SelfAttentionPairWiseClassifier
+from text_models import SpanEmbedder, BiLSTM, TransformerPairWiseClassifier
 from image_models import VisualEncoder
 from criterion import TripletLoss
 from corpus import SupervisedGroundingFeatureDataset
@@ -203,8 +203,7 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
                                     mention_output[idx, second_text_idx[idx]]))
       scores = torch.cat(scores).squeeze(1)
       loss = criterion(scores, pairwise_text_labels)
-      loss = loss + multimedia_criterion(text_output, video_output, 
-                                         text_mask, video_mask)
+      loss = loss + multimedia_criterion(text_output, video_output, text_mask, video_mask)
 
       loss.backward()
       optimizer.step()
@@ -307,6 +306,8 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
             # Compute pairwise labels
             first_text_idx, second_text_idx, pairwise_text_labels = get_pairwise_text_labels(text_labels[idx, :span_num[idx]].unsqueeze(0), 
                                                                                              is_training=False, device=device)
+            if first_text_idx is None:
+                continue
             first_text_idx = first_text_idx.squeeze(0)
             second_text_idx = second_text_idx.squeeze(0)
             pairwise_text_labels = pairwise_text_labels.squeeze(0)
@@ -482,11 +483,11 @@ if __name__ == '__main__':
 
   # Initialize dataloaders
   train_set = SupervisedGroundingFeatureDataset(os.path.join(config['data_folder'], 'train.json'), 
-                                                os.path.join(config['data_folder'], 'train_mixed.json'), 
+                                                os.path.join(config['data_folder'], f'train_{config.mention_type}.json'), 
                                                 os.path.join(config['data_folder'], 'train_bboxes.json'),
                                                 config, split='train')
   test_set = SupervisedGroundingFeatureDataset(os.path.join(config['data_folder'], 'test.json'), 
-                                               os.path.join(config['data_folder'], 'test_mixed.json'), 
+                                               os.path.join(config['data_folder'], f'test_{config.mention_type}.json'), 
                                                os.path.join(config['data_folder'], 'test_bboxes.json'), 
                                                config, split='test')
  
@@ -498,7 +499,7 @@ if __name__ == '__main__':
   image_model = VisualEncoder(400, config.hidden_layer)
 
   mention_model = SpanEmbedder(config, device)
-  coref_model = SelfAttentionPairWiseClassifier(config).to(device)
+  coref_model = TransformerPairWiseClassifier(config).to(device)
 
   if config['training_method'] in ('pipeline', 'continue'):
       # text_model.load_state_dict(torch.load(config['text_model_path'], map_location=device))

@@ -83,7 +83,7 @@ class TripletLoss(nn.Module):
     S = torch.zeros((n, n), dtype=torch.float, requires_grad=False)
     for s_idx in range(n):
       for v_idx in range(n):
-        S[s_idx, v_idx] = -self.matchmap_similarity(
+        S[s_idx, v_idx] = self.matchmap_similarity(
                             self.compute_matchmap(text_outputs[s_idx][:nF[s_idx]],
                                                   image_outputs[v_idx][:nR[v_idx]])
                             ).to(device)

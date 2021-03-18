@@ -511,13 +511,13 @@ if __name__ == '__main__':
     config['model_path'] = args.exp_dir
     
   if not os.path.isdir(config['model_path']):
-    os.mkdir(config['model_path'])
+    os.makedirs(config['model_path'])
   if not os.path.isdir(os.path.join(config['model_path'], 'log')):
-    os.mkdir(os.path.join(config['model_path'], 'log')) 
+    os.makedirs(os.path.join(config['model_path'], 'log')) 
   
   pred_out_dir = os.path.join(config['model_path'], 'pred_conll')
   if not os.path.isdir(pred_out_dir):
-    os.mkdir(pred_out_dir)
+    os.makedirs(pred_out_dir)
 
   logging.basicConfig(filename=os.path.join(config['model_path'],'log/{}.txt'.format(datetime.now().strftime("%Y_%m_%d_%H_%M_%S"))),\
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 

@@ -62,15 +62,16 @@ def get_mention_doc(data_json, out_prefix):
 
       entity_event_mask = np.zeros(len(tokens))
       for entity_mention in entity_mentions:
-        if not entity_mention['id'] in cluster_ids:
-          cluster_ids[entity_mention['id']] = len(cluster_ids)
-        cluster_id = cluster_ids[entity_mention['id']]
+        mention_id = entity_mention['id']
+        entity_id = '-'.join(mention_id.split('-')[:-1])
+        if not entity_id in cluster_ids:
+          cluster_ids[entity_id] = len(cluster_ids)
+        cluster_id = cluster_ids[entity_id]
         start = entity_mention['start']
         end = entity_mention['end']
-        entity_id = entity_mention['id']
         
         entity = {'doc_id': doc_id,
-                  'm_id': entity_id,
+                  'm_id': mention_id,
                   'sentence_id': sent_id,
                   'entity_type': entity_mention['entity_type'],
                   'tokens_ids': list(range(sen_start+start, sen_start+end)),
@@ -81,15 +82,16 @@ def get_mention_doc(data_json, out_prefix):
         entities.append(entity)
 
       for event_mention in event_mentions:
-        if not event_mention['id'] in cluster_ids:
-          cluster_ids[event_mention['id']] = len(cluster_ids) 
-        cluster_id = cluster_ids[event_mention['id']]
+        mention_id = event_mention['id']
+        event_id = '-'.join(mention_id.split('-')[:-1])
+        if not event_id in cluster_ids:
+          cluster_ids[event_id] = len(cluster_ids) 
+        cluster_id = cluster_ids[event_id]
         start = event_mention['trigger']['start']
         end = event_mention['trigger']['end']
-        event_id = event_mention['id']
         
         event = {'doc_id': doc_id,
-                 'm_id': event_id,
+                 'm_id': mention_id,
                  'arguments': event_mention['arguments'],
                  'sentence_id': sent_id,
                  'event_type': event_mention['event_type'],

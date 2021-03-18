@@ -99,7 +99,7 @@ if __name__ == '__main__':
 
     # Compute the document-level scores
     doc_ids = ['_'.join(k.split('_')[:-2]) for k in os.listdir(pred_out_dir)]
-    metrics = ['bcub', 'ceafm', 'blanc']
+    metrics = ['muc', 'bcub', 'ceafe', 'ceafm', 'blanc']
     results = {m:[0., 0., 0.] for m in metrics}
     n = len(doc_ids)
     for doc_id in doc_ids:
