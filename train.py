@@ -13,7 +13,7 @@ import random
 import numpy as np
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
-from text_models import SpanEmbedder, BiLSTM, TransformerPairWiseClassifier
+from text_models import SpanEmbedder, BiLSTM, TransformerPairWiseClassifier, SimplePairWiseClassifier
 from image_models import VisualEncoder
 from criterion import TripletLoss
 from corpus import SupervisedGroundingFeatureDataset
@@ -136,13 +136,10 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
   coref_model.to(device)
 
   # Create/load exp
-  if not os.path.isdir(args.exp_dir):
-    os.path.mkdir(args.exp_dir)
-
   if args.start_epoch != 0:
-    text_model.load_state_dict(torch.load('{}/text_model.{}.pth'.format(args.exp_dir, args.start_epoch)))
-    image_model.load_state_dict(torch.load('{}/image_model.{}.pth'.format(args.exp_dir, args.start_epoch)))
-    coref_model.load_state_dict(torch.load('{}/text_scorer.{}.pth'.format(args.exp_dir, args.start_epoch)))
+    text_model.load_state_dict(torch.load('{}/text_model.pth'.format(config['model_path'], args.start_epoch)))
+    image_model.load_state_dict(torch.load('{}/image_model.pth'.format(config['model_path'], args.start_epoch)))
+    coref_model.load_state_dict(torch.load('{}/text_scorer.{}.pth'.format(config['model_path'], args.start_epoch)))
 
   # Define the training criterion
   criterion = nn.BCEWithLogitsLoss()
@@ -218,10 +215,10 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
     print(info)
     logger.info(info)
 
-    torch.save(text_model.module.state_dict(), '{}/text_model.pth'.format(args.exp_dir))
-    torch.save(image_model.module.state_dict(), '{}/image_model.pth'.format(args.exp_dir))
-    torch.save(mention_model.module.state_dict(), '{}/mention_model.pth'.format(args.exp_dir))
-    torch.save(coref_model.module.state_dict(), '{}/text_scorer.pth'.format(args.exp_dir))
+    torch.save(text_model.module.state_dict(), '{}/text_model.pth'.format(config['model_path']))
+    torch.save(image_model.module.state_dict(), '{}/image_model.pth'.format(config['model_path']))
+    torch.save(mention_model.module.state_dict(), '{}/mention_model.pth'.format(config['model_path']))
+    torch.save(coref_model.module.state_dict(), '{}/text_scorer.pth'.format(config['model_path']))
  
     if epoch % 1 == 0:
       task = config.get('task', 'coreference')
@@ -229,10 +226,10 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
         text_f1 = test(text_model, mention_model, image_model, coref_model, test_loader, args)
         if text_f1 > best_text_f1:
           best_text_f1 = text_f1
-          torch.save(text_model.module.state_dict(), '{}/best_text_model.pth'.format(args.exp_dir))
-          torch.save(image_model.module.state_dict(), '{}/best_image_model.pth'.format(args.exp_dir))
-          torch.save(mention_model.module.state_dict(), '{}/best_mention_model.pth'.format(args.exp_dir))
-          torch.save(coref_model.module.state_dict(), '{}/best_text_scorer.pth'.format(args.exp_dir))
+          torch.save(text_model.module.state_dict(), '{}/best_text_model.pth'.format(config['model_path']))
+          torch.save(image_model.module.state_dict(), '{}/best_image_model.pth'.format(config['model_path']))
+          torch.save(mention_model.module.state_dict(), '{}/best_mention_model.pth'.format(config['model_path']))
+          torch.save(coref_model.module.state_dict(), '{}/best_text_scorer.pth'.format(config['model_path']))
         print('Best text coreference F1={}'.format(best_text_f1))
       if task in ('retrieval', 'both'):
         I2S_r10, S2I_r10 = test_retrieve(text_model, image_model, grounding_model, test_loader, args)
@@ -249,7 +246,6 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
     if task in ('retrieval', 'both'):
       I2S_r10, S2I_r10 = test_retrieve(text_model, image_model, test_loader, args)
 
-
 def test(text_model, mention_model, image_model, coref_model, test_loader, args): 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     config = pyhocon.ConfigFactory.parse_file(args.config)
@@ -262,7 +258,7 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
     coref_model.eval()
 
     conll_eval = CoNLLEvaluation()
-    f_out = open(os.path.join(args.exp_dir, 'prediction.readable'), 'w')
+    f_out = open(os.path.join(config['model_path'], 'prediction.readable'), 'w')
     best_f1 = 0.
     with torch.no_grad():     
         for i, batch in enumerate(test_loader):
@@ -299,6 +295,8 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
           # Compute score for each mention pair
           B = doc_embeddings.size(0) 
           for idx in range(B):
+            global_idx = i * test_loader.batch_size + idx
+
             # Compute pairwise labels
             first_text_idx, second_text_idx, pairwise_text_labels = get_pairwise_text_labels(text_labels[idx, :span_num[idx]].unsqueeze(0), 
                                                                                              is_training=False, device=device)
@@ -309,23 +307,23 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
             pairwise_text_labels = pairwise_text_labels.squeeze(0)
             predicted_antecedents, text_scores = coref_model.module.predict_cluster(mention_output[idx, :span_num[idx]], first_text_idx,
        second_text_idx) 
-            origin_candidate_start_ends = test_loader.dataset.origin_candidate_start_ends
+            origin_candidate_start_ends = test_loader.dataset.origin_candidate_start_ends[global_idx]
             predicted_antecedents = torch.LongTensor(predicted_antecedents)
             origin_candidate_start_ends = torch.LongTensor(origin_candidate_start_ends)
             
 
-            pred_clusters, gold_clusters = coref_eval(origin_candidate_start_ends,
+            pred_clusters, gold_clusters = conll_eval(origin_candidate_start_ends,
                                                       predicted_antecedents,
                                                       origin_candidate_start_ends,
                                                       text_labels[idx, :span_num[idx]])
             # Save the output clusters
-            global_idx = i * test_loader.batch_size + idx
             doc_id = test_loader.dataset.doc_ids[global_idx]
-            pred_clusters_str, gold_clusters_str = coref_eval.make_output_readable(pred_clusters, gold_clusters) 
-            tokens = self.documents[doc_id] 
-            f_out.write(f"{' '.join(tokens).strip('\n')}\n")
-            f_out.write(f'Pred: {pred_clusters_str}')
-            f_out.write(f'Gold: {gold_clusters_str}')
+            tokens = [token[2] for token in test_loader.dataset.documents[doc_id]]
+            pred_clusters_str, gold_clusters_str = conll_eval.make_output_readable(pred_clusters, gold_clusters, tokens) 
+            token_str = ' '.join(tokens).replace('\n', '')
+            f_out.write(f"{doc_id}: {token_str}\n")
+            f_out.write(f'Pred: {pred_clusters_str}\n')
+            f_out.write(f'Gold: {gold_clusters_str}\n\n')
 
             all_scores.append(text_scores.squeeze(1))
             all_labels.append(pairwise_text_labels.to(torch.int).cpu())            
@@ -342,10 +340,11 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
                                                                 eval.get_precision(), eval.get_f1()))
         
         muc, b_cubed, ceafe, avg = conll_eval.get_metrics()
-        print('MUC - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*muc))
-        print('Bcubed - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*b_cubed))
-        print('CEAFe - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*ceafe))
-        print('CoNLL - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*avg)) 
+        conll_metrics = muc+b_cubed+ceafe+avg
+        print('MUC - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
+              'Bcubed - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
+              'CEAFe - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
+              'CoNLL - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*conll_metrics)) 
         return eval.get_f1()
 
 
@@ -400,8 +399,8 @@ def test_retrieve(text_model, image_model, grounding_model, test_loader, args):
       video_masks.extend(torch.split(video_mask, 1))
 
     I2S_idxs, S2I_idxs = criterion.retrieve(text_embeddings, video_embeddings, text_masks, video_masks, k=10)
-    with open(os.path.join(args.exp_dir, 'I2S.txt'), 'w') as f_i2s,\
-         open(os.path.join(args.exp_dir, 'S2I.txt'), 'w') as f_s2i:
+    with open(os.path.join(config['model_path'], 'I2S.txt'), 'w') as f_i2s,\
+         open(os.path.join(config['model_path'], 'S2I.txt'), 'w') as f_s2i:
       for idx, (i2s_idxs, s2i_idxs) in enumerate(zip(I2S_idxs.cpu().detach().numpy().tolist(), S2I_idxs.cpu().detach().numpy().tolist())):
         doc_id = test_loader.dataset.doc_ids[idx]
         tokens = [t[2] for t in test_loader.dataset.origin_tokens[idx]]
@@ -445,7 +444,6 @@ def test_retrieve(text_model, image_model, grounding_model, test_loader, args):
 if __name__ == '__main__':
   # Set up argument parser
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-  parser.add_argument('--exp_dir', type=str, default='')
   parser.add_argument('--config', type=str, default='configs/config_grounded.json')
   parser.add_argument('--start_epoch', type=int, default=0)
   parser.add_argument('--evaluate_only', action='store_true')
@@ -454,19 +452,11 @@ if __name__ == '__main__':
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
   # Set up logger
   config = pyhocon.ConfigFactory.parse_file(args.config)
-  if not args.exp_dir:
-    args.exp_dir = config['model_path']
-  else:
-    config['model_path'] = args.exp_dir
     
   if not os.path.isdir(config['model_path']):
-    os.mkdir(config['model_path'])
+    os.makedirs(config['model_path'])
   if not os.path.isdir(os.path.join(config['model_path'], 'log')):
     os.mkdir(os.path.join(config['model_path'], 'log')) 
-  
-  pred_out_dir = os.path.join(config['model_path'], 'pred_conll')
-  if not os.path.isdir(pred_out_dir):
-    os.mkdir(pred_out_dir)
 
   logging.basicConfig(filename=os.path.join(config['model_path'],'log/{}.txt'.format(datetime.now().strftime("%Y_%m_%d_%H_%M_%S"))),\
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
@@ -489,13 +479,17 @@ if __name__ == '__main__':
   image_model = VisualEncoder(400, config.hidden_layer)
 
   mention_model = SpanEmbedder(config, device)
-  coref_model = TransformerPairWiseClassifier(config).to(device)
-
+  if config['classifier'] == 'simple':
+      coref_model = SimplePairWiseClassifier(config).to(device)
+  elif config['classifier'] == 'attention':
+      coref_model = TransformerPairWiseClassifier(config).to(device)
+  else:
+      raise ValueError(f"Invalid classifier type {config['classifier']}")
+      
   if config['training_method'] in ('pipeline', 'continue'):
-      # text_model.load_state_dict(torch.load(config['text_model_path'], map_location=device))
-      # for p in text_model.parameters():
-      #   p.requires_grad = False
-      # image_model.load_state_dict(torch.load(config['image_model_path'], map_location=device))
+      text_model.load_state_dict(torch.load(config['text_model_path'], map_location=device))
+      for p in text_model.parameters():
+        p.requires_grad = False
       mention_model.load_state_dict(torch.load(config['mention_model_path']))
       for p in mention_model.parameters():
         p.requires_grad = False

@@ -1,6 +1,6 @@
 import torch
 import collections
-from allennlp-models.coref.metrics import conll_coref_scores
+from allennlp_models.coref.metrics.conll_coref_scores import ConllCorefScores
 
 class Evaluation:
     def __init__(self, predictions, labels):
@@ -81,15 +81,17 @@ class CoNLLEvaluation:
     :param gold_labels: LongTensor of size (num. spans,)
     """
     num_spans = top_spans.size(0)
-    top_spans = top_spans.unsqueeze(0).cpu()
-    predicted_antecedents = predicted_antecedents.unsqueeze(0).cpu()
+    antecedent_indices = torch.LongTensor([[j if j < i else -1 for j in range(num_spans)] for i in range(num_spans)])
+    gold_clusters = self.get_gold_clusters(gold_spans, gold_labels)
     pred_clusters = self.get_predicted_clusters(top_spans, 
                                                 antecedent_indices,
-                                                predicted_antecedents) 
-    gold_clusters = self.get_gold_clusters(gold_spans, gold_labels)
-    metadata_list = [{'clusters': gold_clusters}]
+                                                predicted_antecedents)
 
-    antecdent_indices = torch.LongTensor([[j if j < i else -1 for j in range(num_spans)] for i in range(num_spans)]).unsqueeze(0)
+    antecedent_indices = antecedent_indices.unsqueeze(0)
+    top_spans = top_spans.unsqueeze(0).cpu()
+    predicted_antecedents = predicted_antecedents.unsqueeze(0).cpu()
+    
+    metadata_list = [{'clusters': gold_clusters}]
 
     self.scorer(top_spans, antecedent_indices, predicted_antecedents, metadata_list)
     return pred_clusters, gold_clusters
@@ -105,8 +107,9 @@ class CoNLLEvaluation:
     gold_labels = gold_labels.cpu().detach().numpy().tolist()
     cluster_dict = collections.defaultdict(list)
     
-    for cluster_id, span in enumerate(gold_labels, gold_spans):
-      cluster_dict[cluster_id].append(span)
+    for cluster_id, span in zip(gold_labels, gold_spans):
+        if cluster_id > 0:
+            cluster_dict[cluster_id].append(span)
 
     return list(cluster_dict.values())
 
@@ -121,6 +124,3 @@ class CoNLLEvaluation:
     pred_clusters_str = [[' '.join(tokens[m[0]:m[1]+1]) for m in cluster] for cluster in pred_clusters]
     gold_clusters_str = [[' '.join(tokens[m[0]:m[1]+1]) for m in cluster] for cluster in gold_clusters]
     return pred_clusters_str, gold_clusters_str
-    
-      
-        

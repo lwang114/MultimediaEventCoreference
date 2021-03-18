@@ -367,13 +367,13 @@ class SpanScorer(nn.Module):
 class SimplePairWiseClassifier(nn.Module):
     def __init__(self, config):
         super(SimplePairWiseClassifier, self).__init__()
-        if config.mention_embedder == 'gcn':
+        if config.get('mention_embedder', '') == 'gcn':
             self.input_layer = config.bert_hidden_size
         else:
             self.input_layer = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2 
             if config.with_mention_width:
                 self.input_layer += config.embedding_dimension
-            if config.with_type_embedding:
+            if config.get('with_type_embedding', False):
                 self.input_layer += config.type_embedding_dimension
 
         self.input_layer *= 3
@@ -408,7 +408,7 @@ class SimplePairWiseClassifier(nn.Module):
       second_span_embeddings = span_embeddings[second_idx]
 
       scores = self(first_span_embeddings, second_span_embeddings)
-      children = -1 * np.ones(span_num, dtype=np.int64)
+      antecedents = -1 * np.ones(span_num, dtype=np.int64)
 
       # Antecedent prediction
       for idx2 in range(span_num):
@@ -423,25 +423,10 @@ class SimplePairWiseClassifier(nn.Module):
           candidate_scores = np.asarray(candidate_scores)
           max_score = candidate_scores.max()
           if max_score > thres:
-            parent = np.argmax(candidate_scores)
-            children[parent] = idx2
+            antecedent = np.argmax(candidate_scores)
+            antecedents[idx2] = antecedent
       
-      # Extract clusters from coreference chains
-      cluster_id = 0
-      clusters = {}
-      covered_spans = []
-      for idx in range(span_num):
-        if not idx in covered_spans and children[idx] != -1:
-          covered_spans.append(idx)
-          clusters[cluster_id] = [idx]
-          cur_idx = idx
-          while children[cur_idx] != -1:
-            cur_idx = children[cur_idx]
-            clusters[cluster_id].append(cur_idx)
-            covered_spans.append(cur_idx)
-          cluster_id += 1
-      # TODO Pruning, higher order inference?
-      return clusters, scores
+      return antecedents, scores
 
 class TransformerPairWiseClassifier(nn.Module):
   def __init__(self, config):
@@ -464,6 +449,43 @@ class TransformerPairWiseClassifier(nn.Module):
       self.transformer = torch.nn.TransformerDecoder(transformer_decoder,
                                                      num_decoder_layers=1)
 
+  def predict_cluster(self, span_embeddings, first_idx, second_idx):
+      '''
+      :param span_embeddings: FloatTensor of size (num. of spans, span embed dim),
+      :param first_idx: LongTensor of size (num. of mention pairs,)
+      :param second_idx: LongTensor of size (num. of mention pairs,)
+      :return scores: FloatTensor of size (batch size, max num. of mention pairs),
+      :return antecedents: dict of list of int, mapping from cluster id to mention ids of its members 
+      '''
+      device = span_embeddings.device
+      thres = 0.
+      span_num = max(second_idx) + 1
+      span_mask = torch.ones(len(first_idx)).to(device)
+      first_span_embeddings = span_embeddings[first_idx]
+      second_span_embeddings = span_embeddings[second_idx]
+
+      scores = self(first_span_embeddings, second_span_embeddings)
+      antecedents = -1 * np.ones(span_num, dtype=np.int64)
+
+      # Antecedent prediction
+      for idx2 in range(span_num):
+        candidate_scores = []
+        for idx1 in range(idx2):
+          score_idx = idx1 * (2 * span_num - idx1 - 1) // 2 - 1
+          score_idx += (idx2 - idx1)
+          score = scores[score_idx].squeeze().cpu().detach().data.numpy()
+          candidate_scores.append(score)
+
+        if len(candidate_scores) > 0:
+          candidate_scores = np.asarray(candidate_scores)
+          max_score = candidate_scores.max()
+          if max_score > thres:
+            antecedent = np.argmax(candidate_scores)
+            antecedents[idx2] = antecedent
+      
+      return antecedents, scores
+      
+      
   def forward(self, first, second):
     '''
     :param first: FloatTensor of size (num. of span pairs, span embed dim)
@@ -479,30 +501,7 @@ class TransformerPairWiseClassifier(nn.Module):
     scores = torch.sum(first * first_c, dim=-1).t() # / scale
     return scores
 
-  def predict_cluster(self, span_embeddings, first_idxs, second_idxs):
-    span_num = span_embeddings.size(0)
 
-    # Compute pairwise scores for mention pairs specified
-    scores = self(span_embeddings[first_idxs], span_embeddings[second_idxs])
-    
-    # Compute the pairwise score matrix
-    row_idxs = [i for i in range(span_num) for j in range(span_num)]
-    col_idxs = [j for i in range(span_num) for j in range(span_num)]
-    S = self(span_embeddings[row_idxs], span_embeddings[col_idxs])
-    S = S.view(span_num, span_num).cpu().detach().numpy()
-
-    # Compute the adjacency matrix
-    A = np.zeros((span_num, span_num), dtype=np.float)
-    for row_idx in row_idxs:
-      col_idx = np.argmax(S[row_idx]) 
-      A[row_idx, col_idx] = 1.
-      A[col_idx, row_idx] = 1.
-  
-    # Find the connected components of the graph
-    clusters = find_connected_components(A)
-    clusters = {k:c for k, c in enumerate(clusters)}
-    # print('Number of clusters: ', len(clusters))
-    return clusters, scores
 
 class StarTransformerClassifier(nn.Module):
   def __init__(self, config):
@@ -558,18 +557,20 @@ class StarTransformerClassifier(nn.Module):
 
   def alignment_score(self, score_mat, dim=-1):
     return score_mat.max(-1)[0].mean()
-    
+
   def predict_cluster(self, x, center_map, neighbor_map, first_idxs, second_idxs):
     span_num = x.size(0)
 
     # Compute pairwise scores for mention pairs specified
     scores = self(x, center_map, neighbor_map, first_idxs, second_idxs)
+    S = self(x, neighbors, row_idxs, col_idxs)
+    S = S.view(span_num, span_num).cpu().detach().numpy()
     
+    
+def graph_decode(S):
     # Compute the pairwise score matrix
     row_idxs = [i for i in range(span_num) for j in range(span_num)]
     col_idxs = [j for i in range(span_num) for j in range(span_num)]
-    S = self(x, neighbors, row_idxs, col_idxs)
-    S = S.view(span_num, span_num).cpu().detach().numpy()
 
     # Compute the adjacency matrix
     A = np.zeros((span_num, span_num), dtype=np.float)
@@ -583,7 +584,6 @@ class StarTransformerClassifier(nn.Module):
     clusters = {k:c for k, c in enumerate(clusters)}
     # print('Number of clusters: ', len(clusters))
     return clusters, scores
-    
 
 def find_connected_components(A):
   def _dfs(v, c):
