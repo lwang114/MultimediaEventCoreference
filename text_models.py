@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 import json
+import allennlp.nn.util as util 
 
 def init_weights(m):
     if isinstance(m, nn.Linear) or isinstance(m, nn.Bilinear):
@@ -523,16 +524,21 @@ class StarTransformerClassifier(nn.Module):
                                                        nheads=1)
       self.transformer = torch.nn.TransformerDecoder(transformer_decoder,
                                                      num_decoder_layers=1)
+    self.classifier_feature_gate = nn.Linear(2*self.input_layer, 1)
 
-  def forward(self, x, center_map, neighbor_map, 
-              first_idxs=None, second_idxs=None): # TODO Add mask
+  def forward(self, x, center_map, neighbor_map,
+              first_idxs=None, second_idxs=None):
     '''
-    :param x: FloatTensor of size (sequence length, embed dim)
-    :param neighbors: FloatTensor of size (sequence length, num. of neighbors, embed dim)
+    :param x: FloatTensor of size (batch size, max num. of spans, embed dim)
+    :param center_map: FloatTensor of size (batch size, max num. of centers, max num. of spans)
+    :param neighbor_map: FloatTensor of size (batch size, max num. of centers, max num. of neighbors, max num. of spans)
     :return scores: FloatTensor of size (num. pairs,) 
     '''
     embs = self.transformer(x, x).squeeze(0)
+    neighbor_mask = neighbor_map.sum(-1)
+
     c = torch.matmul(center_map, x)
+    g = self.classifier_feature_gate(x)
     neighors = torch.matmul(neighbor_map, x)
     embs_c = torch.matmul(center_map, embs)
     embs_neighbors = torch.matmul(neighbor_map, embs)
@@ -542,30 +548,55 @@ class StarTransformerClassifier(nn.Module):
     if not first_idxs or not second_idxs:
       first_idxs, second_idxs = zip(*list(combinations(range(n), 2)))
     first_arg_idxs, second_arg_idxs = zip(*list((i, j) for i in range(n_neighbors) for j in range(n_neighbors)))
+
     scores_c = self.pairwise_score(c[first_idxs], embs_c[second_idxs])
     scores_neighbor = []
+    gate_probs = []
     for first_idx, second_idx in zip(first_idxs, second_idxs):
+      arg_pair_mask = neighbor_mask[first_idx].unsqueeze(-1) * neighbor_mask[second_idx].unsqueeze(0) 
       scores_neighbor.append(self.alignment_score(
                           self.pairwise_score(neighbors[first_idx, first_arg_idxs],
-                                              embs_neighbors[second_idx, second_arg_idxs]).view(n_neighbors, n_neighbors))
-                          )
+                                              embs_neighbors[second_idx, second_arg_idxs]).view(n_neighbors, n_neighbors),
+                          arg_pair_mask))
     scores_neighbors = torch.stack(scores_neighbors)
-    return scores + scores_neighbors
+    gate_probs = torch.sigmoid(self.classifier_feature_gate(
+                                torch.cat([embs_c[first_idxs],
+                                           embs_c[second_idxs]], dim=-1)))
+    
+    return gate_probs * scores + (1 - gate_probs) * scores_neighbors
 
   def pairwise_score(self, first, second):
     return torch.sum(first * second, dim=-1)
 
-  def alignment_score(self, score_mat, dim=-1):
-    return score_mat.max(-1)[0].mean()
+  def alignment_score(self, score_mat, mask, dim=-1): # TODO optimal transport
+    return util.masked_max(score_mat, mask, dim=dim).mean()
 
-  def predict_cluster(self, x, center_map, neighbor_map, first_idxs, second_idxs):
+  def predict_cluster(self, x, center_map, neighbor_map, first_idxs, second_idxs): 
     span_num = x.size(0)
 
     # Compute pairwise scores for mention pairs specified
-    scores = self(x, center_map, neighbor_map, first_idxs, second_idxs)
-    S = self(x, neighbors, row_idxs, col_idxs)
-    S = S.view(span_num, span_num).cpu().detach().numpy()
+    scores = self(x, center_map, neighbor_map, first_idxs, second_idxs)    
+    antecedents = -1 * np.ones(span_num, dtype=np.int64)
+
+    # Antecedent prediction
+    for idx2 in range(span_num):
+      candidate_scores = []
+      for idx1 in range(idx2):
+        score_idx = idx1 * (2 * span_num - idx1 - 1) // 2 - 1
+        score_idx += (idx2 - idx1)
+        score = scores[score_idx].squeeze().cpu().detach().data.numpy()
+        candidate_scores.append(score)
+
+      if len(candidate_scores) > 0:
+        candidate_scores = np.asarray(candidate_scores)
+        max_score = candidate_scores.max()
+        if max_score > thres:
+          antecedent = np.argmax(candidate_scores)
+          antecedents[idx2] = antecedent
     
+    return antecedents, scores
+      
+     
     
 def graph_decode(S):
     # Compute the pairwise score matrix
