@@ -43,11 +43,11 @@ def get_all_mention_mapping(origin_candidate_start_ends,
     event_mappings = torch.zeros((max_event_num, max_mention_num))
     entity_mappings = torch.zeros((max_mention_num, max_mention_num))
     event_to_roles_mappings = torch.zeros((max_event_num, max_role_num, max_mention_num))
-    labels = torch.zeros(max_mention_num)
+    labels = torch.zeros(max_mention_num, dtype=torch.long)
 
     span_to_idx = {tuple(origin_candidate_start_ends[i].tolist()):i for i in range(span_num)}
     for i in range(span_num):
-        span = origin_candidate_start_ends[i]
+        span = tuple(origin_candidate_start_ends[i].tolist())
         if span in event_labels_dict:
             labels[i] = event_labels_dict[span]
         else:
@@ -63,7 +63,7 @@ def get_all_mention_mapping(origin_candidate_start_ends,
     for entity_idx, span in enumerate(sorted(entity_labels_dict)):
         span_idx = span_to_idx[span]
         entity_mappings[entity_idx, span_idx] = 1.
-        
+    
     return event_mappings, entity_mappings, event_to_roles_mappings, labels
 
 
@@ -123,11 +123,12 @@ class StarFeatureDataset(Dataset):
     # Extract coreference cluster labels
     self.text_label_dict,\
     self.image_label_dict,\
-    image_token_dict,\
-    self.event_to_roles = self.create_dict_labels(text_mentions, image_mentions)
+    self.event_to_roles,\
+    self.type_label_dict,\
+    self.type_to_idx = self.create_dict_labels(text_mentions, image_mentions)
 
     # Extract doc/image ids
-    self.feat_keys = sorted(self.imgs_embeddings, key=lambda x:int(x.split('_')[-1]))[:20] # XXX
+    self.feat_keys = sorted(self.imgs_embeddings, key=lambda x:int(x.split('_')[-1])) # XXX
     self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in self.text_label_dict]
     if test_id_file:
       with open(test_id_file) as f:
@@ -146,7 +147,9 @@ class StarFeatureDataset(Dataset):
     self.origin_tokens, self.bert_tokens, self.bert_start_ends, clean_start_end_dict = self.tokenize(documents)
 
     # Extract spans
-    self.origin_candidate_start_ends = [np.asarray(sorted(self.text_label_dict[doc_id])) for doc_id in self.doc_ids]
+    self.origin_candidate_start_ends = [np.asarray(sorted(self.text_label_dict[doc_id]['events'])+
+                                                   sorted(self.text_label_dict[doc_id]['entities']))
+                                        for doc_id in self.doc_ids]
     for doc_id, start_ends in zip(self.doc_ids, self.origin_candidate_start_ends):
       for start, end in start_ends:
         if end >= len(clean_start_end_dict[doc_id]):
@@ -195,20 +198,33 @@ class StarFeatureDataset(Dataset):
 
   def create_dict_labels(self, text_mentions, image_mentions, clean_start_end_dict=None):
     '''
-    :return label_dict: a mapping from doc id to a mapping from 'entities'/'events' to 
+    :return text_label_dict: a mapping from doc id to a mapping from 'entities'/'events' to 
                         a dict of (start token, end token) -> cluster id 
     :return image_label_dict: a mapping from image id to a dict of (bbox id, x min, y min, x max, y max) -> cluster id 
     '''
     text_label_dict = {}
     image_label_dict = {}
     image_token_dict = {}
+    type_label_dict = {}
     event_to_roles = {}
+    type_to_idx = {}
     for m in text_mentions:
         start = min(m['tokens_ids'])
         end = max(m['tokens_ids'])
         if not m['doc_id'] in text_label_dict:
             text_label_dict[m['doc_id']] = {'events':{}, 'entities':{}}
             event_to_roles[m['doc_id']] = {}
+            type_label_dict[m['doc_id']] = {}
+
+        if 'event_type' in m:
+            if not m['event_type'] in type_to_idx:
+                type_to_idx[m['event_type']] = len(type_to_idx)
+            type_label_dict[m['doc_id']][(start, end)] = type_to_idx[m['event_type']]
+        else:
+            if not m['entity_type'] in type_to_idx:
+                type_to_idx[m['entity_type']] = len(type_to_idx)
+            type_label_dict[m['doc_id']][(start, end)] = type_to_idx[m['entity_type']]
+            
         if 'arguments' in m:
             text_label_dict[m['doc_id']]['events'][(start, end)] = m['cluster_id'] 
             event_to_roles[m['doc_id']][(start, end)] = []
@@ -217,9 +233,7 @@ class StarFeatureDataset(Dataset):
                 a_end = a['end']
                 event_to_roles[m['doc_id']][(start, end)].append((a_start, a_end))
         else:
-            text_label_dict[m['doc_id']]['entities'][(start, end)] = m['cluster_id'] 
-        
-        text_label_dict[m['doc_id']][(start, end)] = m['cluster_id']
+            text_label_dict[m['doc_id']]['entities'][(start, end)] = m['cluster_id']
 
     for i, m in enumerate(image_mentions):
         if not m['doc_id'] in image_label_dict:
@@ -236,7 +250,7 @@ class StarFeatureDataset(Dataset):
             image_label_dict[m['doc_id']][(bbox_id, m['cluster_id'])] = cluster_dict.get(m['cluster_id'], 0)
             image_token_dict[m['doc_id']][(bbox_id, m['cluster_id'])] = m['tokens']
 
-    return text_label_dict, image_label_dict, image_token_dict, event_to_roles 
+    return text_label_dict, image_label_dict, event_to_roles, type_label_dict, type_to_idx
   
   def load_text(self, idx):
     '''Load mention span embeddings for the document
@@ -252,8 +266,8 @@ class StarFeatureDataset(Dataset):
     :return labels: LongTensor of size (max num. spans,) 
     '''
     doc_id = self.doc_ids[idx]
-    event_labels_dict = self.label_dict[doc_id]['events']
-    entity_labels_dict = self.label_dict[doc_id]['entities']
+    event_labels_dict = self.text_label_dict[doc_id]['events']
+    entity_labels_dict = self.text_label_dict[doc_id]['entities']
     event_to_roles = self.event_to_roles[doc_id]
     event_num = len(event_labels_dict)
     
@@ -305,11 +319,21 @@ class StarFeatureDataset(Dataset):
     labels = fix_embedding_length(labels.unsqueeze(1), self.max_span_num).squeeze(1)
     text_mask = torch.FloatTensor([1. if j < doc_len else 0 for j in range(self.max_token_num)])
     span_mask = continuous_mappings.sum(dim=1)
-    
-    return doc_embeddings, start_mappings, end_mappings, continuous_mappings,\
-        event_mappings, entity_mappings, event_to_roles_mappings,\
-        width, labels, text_mask, span_mask
 
+    # Extract type labels
+    type_labels = [int(self.type_label_dict[self.doc_ids[idx]][(start, end)]) for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
+    type_labels = torch.LongTensor(type_labels)
+    type_labels = fix_embedding_length(type_labels.unsqueeze(1), self.max_span_num).squeeze(1)
+    return doc_embeddings,\
+        start_mappings,\
+        end_mappings,\
+        continuous_mappings,\
+        event_mappings,\
+        entity_mappings,\
+        event_to_roles_mappings,\
+        width, labels,\
+        type_labels,\
+        text_mask, span_mask
 
   def load_video(self, idx):
     '''Load video
@@ -336,13 +360,18 @@ class StarFeatureDataset(Dataset):
 
   def __getitem__(self, idx):
     img_embeddings, img_labels, video_mask = self.load_video(idx)
-    doc_embeddings, start_mappings, end_mappings, continuous_mappings,\
-        event_mappings, entity_mappings, event_to_roles_mappings,\
-        width, text_labels, text_mask, span_mask = self.load_text(idx)
+    doc_embeddings, start_mappings,\
+    end_mappings,\
+    continuous_mappings,\
+    event_mappings, entity_mappings,\
+    event_to_roles_mappings,\
+    width, text_labels,\
+    type_labels,\
+    text_mask, span_mask = self.load_text(idx)
 
     return doc_embeddings, start_mappings, end_mappings, continuous_mappings,\
         event_mappings, entity_mappings, event_to_roles_mappings, width,\
-        img_embeddings, text_labels, img_labels,\
+        img_embeddings, text_labels, type_labels, img_labels,\
         text_mask, span_mask, video_mask
 
   def __len__(self):

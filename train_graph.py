@@ -17,7 +17,7 @@ from text_models import SpanEmbedder, StarTransformerClassifier
 from image_models import VisualEncoder
 from criterion import TripletLoss
 from corpus_graph import StarFeatureDataset
-from evaluator import Evaluation, RetrievalEvaluation
+from evaluator import Evaluation, RetrievalEvaluation, CoNLLEvaluation
 from utils import make_prediction_readable
 from conll import write_output_file
 
@@ -167,10 +167,15 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
     image_model.train()
     coref_model.train()
     for i, batch in enumerate(train_loader):
-      doc_embeddings, start_mappings, end_mappings, continuous_mappings,\
-      event_mappings, entity_mappings, event_to_roles_mappings,\
+      doc_embeddings,\
+      start_mappings,\
+      end_mappings,\
+      continuous_mappings,\
+      event_mappings, entity_mappings,\
+      event_to_roles_mappings,\
       width, videos,\
-      text_labels, img_labels,\
+      text_labels, type_labels,\
+      img_labels,\
       text_mask, span_mask, video_mask = batch   
 
       B = doc_embeddings.size(0)     
@@ -185,15 +190,15 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
       width = width.to(device)
       videos = videos.to(device)
       text_labels = text_labels.to(device)
+      type_labels = type_labels.to(device)
       img_labels = img_labels.to(device)
       text_mask = text_mask.to(device)
       span_mask = span_mask.to(device)
       video_mask = video_mask.to(device)
       
-      first_grounding_idx, second_grounding_idx, pairwise_grounding_labels = get_pairwise_labels(text_labels, img_labels, is_training=False, device=device)
-      
-      event_labels = torch.bmm(event_mappings, text_labels.unsqueeze(-1)).squeeze(-1)
-      entity_labels = torch.bmm(entity_mappings, text_labels.unsqueeze(-1)).squeeze(-1)
+      first_grounding_idx, second_grounding_idx, pairwise_grounding_labels = get_pairwise_labels(text_labels, img_labels, is_training=False, device=device)      
+      event_labels = torch.bmm(event_mappings, text_labels.unsqueeze(-1).float()).squeeze(-1).long()
+      entity_labels = torch.bmm(entity_mappings, text_labels.unsqueeze(-1).float()).squeeze(-1).long()
       first_event_idx, second_event_idx, pairwise_event_labels = get_pairwise_text_labels(event_labels, is_training=False, device=device)
       first_entity_idx, second_entity_idx, pairwise_entity_labels = get_pairwise_text_labels(entity_labels, is_training=False, device=device)
  
@@ -201,34 +206,58 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
       pairwise_event_labels = pairwise_event_labels.to(torch.float).flatten()
       pairwise_entity_labels = pairwise_entity_labels.to(torch.float).flatten()
 
-      if first_grounding_idx is None or first_text_idx is None:
-        continue
       optimizer.zero_grad()
 
       text_output = text_model(doc_embeddings)
       video_output = image_model(videos)
-      mention_output = mention_model(text_output, start_mappings, end_mappings, continuous_mappings, width)
+      mention_output = mention_model(text_output,
+                                     start_mappings, end_mappings,
+                                     continuous_mappings, width,
+                                     type_labels=type_labels)
 
-      event_scores = []
+      '''
+      event_scores, entity_scores = [], []
       for idx in range(B):
-          event_scores.append(coref_model(mention_output[idx],
-                                    event_mappings[idx], 
-                                    event_to_roles_mappings[idx],
-                                    first_event_idx,
-                                    second_event_idx))
+          event_scores.append(coref_model(mention_output[idx].unsqueeze(0),
+                                          event_mappings[idx].unsqueeze(0), 
+                                          event_to_roles_mappings[idx].unsqueeze(0),
+                                          first_event_idx[idx],
+                                          second_event_idx[idx]).squeeze(0))
 
       for idx in range(B):
-          entity_scores.append(coref_model(mention_output[idx],
-                                    entity_mappings[idx],
-                                    entity_mappings[idx].unsqueeze(1),
-                                    first_entity_idx,
-                                    second_entity_idx)) # TODO Include attribute features
-      event_scores = torch.cat(event_scores).squeeze(1)
-      entity_scores = torch.cat(entity_scores).squeeze(1)
-      loss = criterion(event_scores, pairwise_event_labels)
-      loss = loss + criterion(entity_scores, pairwise_entity_labels)
-      loss = loss + multimedia_criterion(text_output, video_output, 
-                                         text_mask, video_mask)
+          entity_scores.append(coref_model(mention_output[idx].unsqueeze(0),
+                                           entity_mappings[idx].unsqueeze(0),
+                                           entity_mappings[idx].unsqueeze(1).unsqueeze(0),
+                                           first_entity_idx[idx],
+                                           second_entity_idx[idx]).squeeze(0))
+      event_scores = torch.cat(event_scores)
+      entity_scores = torch.cat(entity_scores)
+      '''
+      if first_grounding_idx is None or (first_event_idx is None and first_entity_idx is None):
+        continue
+
+      if not first_event_idx is None:
+          event_scores = coref_model(mention_output,
+                                 event_mappings,
+                                 event_to_roles_mappings,
+                                 first_event_idx[0],
+                                 second_event_idx[0]).flatten()
+          loss_event = criterion(event_scores, pairwise_event_labels)
+      else:
+          loss_event = torch.zeros((mention_output.size(0),), dtype=torch.float, device=device)
+          
+      if not first_entity_idx is None:
+          entity_scores = coref_model(mention_output,
+                                  entity_mappings,
+                                  entity_mappings.unsqueeze(-2),
+                                  first_entity_idx[0],
+                                  second_entity_idx[0]).flatten()
+          loss_entity = criterion(entity_scores, pairwise_entity_labels)
+      else:
+          loss_entity = torch.zeros((mention_output.size(0),), dtype=torch.float, device=device)
+          
+      loss = loss_event + loss_entity +  multimedia_criterion(text_output, video_output,
+                                                              text_mask, video_mask)
 
       loss.backward()
       optimizer.step()
@@ -286,25 +315,27 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
     image_model.eval()
     coref_model.eval()
 
-    out_dir = os.path.join(config['model_path'], 'pred_conll')
-    if not os.path.isdir(out_dir):
-      os.makedirs(out_dir)
-
+    conll_eval_event = CoNLLEvaluation()
+    conll_eval_entity = CoNLLEvaluation()
+    conll_eval = CoNLLEvaluation()
     best_f1 = 0. 
-    f = open(os.path.join(args.exp_dir, 'prediction.readable'), 'w')
+    f_out = open(os.path.join(args.exp_dir, 'prediction.readable'), 'w')
     with torch.no_grad():
         pred_dicts = []      
         for i, batch in enumerate(test_loader):
           doc_embeddings,\
-          start_mappings, end_mappings, continuous_mappings,\
-          event_mappings, entity_mappings, event_to_roles_mappings,\
+          start_mappings, end_mappings,\
+          continuous_mappings,\
+          event_mappings, entity_mappings,\
+          event_to_roles_mappings,\
           width, videos,\
-          text_labels, img_labels,\
-          text_mask, span_mask, video_mask = batch  # TODO Include type labels 
+          text_labels, type_labels,\
+          img_labels,\
+          text_mask, span_mask, video_mask = batch
 
           token_num = text_mask.sum(-1).long()
-          event_num = event_mappings.sum(-1).long()
-          entity_num = entity_mappings.sum(-1).long()
+          event_num = event_mappings.sum(-1).sum(-1).long()
+          entity_num = entity_mappings.sum(-1).sum(-1).long()
 
           region_num = video_mask.sum(-1).long()
           doc_embeddings = doc_embeddings.to(device)
@@ -326,72 +357,127 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
           # Extract span and video embeddings
           text_output = text_model(doc_embeddings)
           video_output = image_model(videos)
-          mention_output = mention_model(text_output, start_mappings, end_mappings, continuous_mappings, width)
+          mention_output = mention_model(text_output,
+                                         start_mappings, end_mappings,
+                                         continuous_mappings, width,
+                                         type_labels=type_labels)
+          event_labels = torch.bmm(event_mappings, text_labels.float().unsqueeze(-1)).squeeze(-1).long()
+          entity_labels = torch.bmm(entity_mappings, text_labels.float().unsqueeze(-1)).squeeze(-1).long()
+          event_num = event_mappings.sum(-1).sum(-1).long()
+          entity_num = entity_mappings.sum(-1).sum(-1).long()
+          span_num = event_num + entity_num
           
           # Compute score for each mention pair
           B = doc_embeddings.size(0) 
           for idx in range(B):
+            global_idx = i * test_loader.batch_size + idx
+            
             # Compute pairwise labels
-            event_labels = torch.bmm(event_mappings, text_labels.unsqueeze(-1)).squeeze(-1)
-            entity_labels = torch.bmm(entity_mappings, text_labels.unsqueeze(-1)).squeeze(-1)
             first_event_idx, second_event_idx, pairwise_event_labels = get_pairwise_text_labels(event_labels[idx, :event_num[idx]].unsqueeze(0), 
                                                                                              is_training=False, device=device)
-            first_entity_idx, second_entity_idx, pairwise_entity_labels = get_pairwise_text_labels(entity_labels[idx, :entity_num[idx]].unsqueeze(0))
+            first_entity_idx, second_entity_idx, pairwise_entity_labels = get_pairwise_text_labels(entity_labels[idx, :entity_num[idx]].unsqueeze(0),
+                                                                                                   is_training=False, device=device)
+            if first_event_idx is None and first_entity_idx is None:
+                continue
 
-            first_event_idx = first_event_idx.squeeze(0)
-            second_event_idx = second_evnet_idx.squeeze(0)
-            pairwise_event_labels = pairwise_text_labels.squeeze(0)
+            origin_candidate_start_ends = torch.LongTensor(test_loader.dataset.origin_candidate_start_ends[global_idx])
+            if not first_event_idx is None:
+                first_event_idx = first_event_idx[0]
+                second_event_idx = second_event_idx[0]
+                pairwise_event_labels = pairwise_event_labels.squeeze(0)
+                event_mapping = event_mappings[idx, :event_num[idx]]
+                event_start_ends = torch.mm(event_mapping[:, :span_num[idx]].cpu(), origin_candidate_start_ends.float()).long()
+                event_to_roles_mapping = event_to_roles_mappings[idx, :event_num[idx]]
+                event_label = event_labels[idx, :event_num[idx]]
+                # Compute pairwise scores
+                event_antecedents, event_scores = coref_model.module.predict_cluster(mention_output[idx],
+                                                                                 event_mapping, event_to_roles_mapping,
+                                                                                 first_event_idx, second_event_idx)
+                event_antecedents = torch.LongTensor(event_antecedents)
+                all_event_scores.append(event_scores)
+                all_event_labels.append(pairwise_event_labels.to(torch.int).cpu())
+                pred_event_clusters, gold_event_clusters = conll_eval(event_start_ends,
+                                                                  event_antecedents,
+                                                                  event_start_ends,
+                                                                  event_label)
+                _, _ = conll_eval_event(event_start_ends,
+                                        event_antecedents,
+                                        event_start_ends,
+                                        event_label)
+            else:
+                pred_event_clusters, gold_event_clusters = [], []
+                
+            if not first_entity_idx is None:
+                first_entity_idx = first_entity_idx[0]
+                second_entity_idx = second_entity_idx[0]
+                pairwise_entity_labels = pairwise_entity_labels.squeeze(0)
+                entity_mapping = entity_mappings[idx, :entity_num[idx]]
+                entity_start_ends = torch.mm(entity_mapping[:, :span_num[idx]].cpu(), origin_candidate_start_ends.float()).long()
+                entity_label = entity_labels[idx, :entity_num[idx]]
+                entity_antecedents, entity_scores = coref_model.module.predict_cluster(mention_output[idx],
+                                                                                   entity_mapping, entity_mapping.unsqueeze(1),
+                                                                                   first_entity_idx, second_entity_idx)
+                entity_antecedents = torch.LongTensor(entity_antecedents)
+                all_entity_scores.append(entity_scores)
+                all_entity_labels.append(pairwise_entity_labels.to(torch.int).cpu())
 
-            # Compute pairwise scores
-            event_clusters, event_scores = coref_model.module.predict_cluster(mention_output[idx],
-    event_mappings, event_to_roles_mappings,
-    first_event_idx, second_event_idx)
-            entity_clusters, entity_scores = coref_model.module.predict_cluster(mention_output[idx],
-    entity_mappings, entity_mappings.unsqueeze(1),
-    first_entity_idx, second_entity_idx)
-            all_event_scores.append(event_scores)
-            all_event_labels.append(pairwise_event_labels.to(torch.int).cpu())
-            all_entity_scores.append(entity_scores)
-            all_entity_labels.append(pairwise_entity_labels.to(torch.int).cpu())
+                pred_entity_clusters, gold_entity_clusters = conll_eval(entity_start_ends,
+                                                                        entity_antecedents,
+                                                                        entity_start_ends,
+                                                                        entity_label) 
+                _, _ = conll_eval_entity(entity_start_ends,
+                                         entity_antecedents,
+                                         entity_start_ends,
+                                         entity_label)
+            else:
+                pred_entity_clusters, gold_entity_clusters = [], []
 
-            # Save .conll file
-            global_idx = i * test_loader.batch_size + idx
+            # Save the output clusters
             doc_id = test_loader.dataset.doc_ids[global_idx]
-            origin_tokens = [token[2] for token in test_loader.dataset.origin_tokens[global_idx]]
-            candidate_start_ends = test_loader.dataset.origin_candidate_start_ends[global_idx]
-            event_start_ends = event_mappings.cpu().detach().numpy() @ candidate_start_ends
+            tokens = [token[2] for token in test_loader.dataset.origin_tokens[global_idx]]
 
-            doc_name = doc_id
-            document = {doc_id:test_loader.dataset.documents[doc_id]}
-            write_output_file(document, clusters,
-                              [doc_id]*event_start_ends.shape[0],
-                              event_start_ends[:, 0].tolist(),
-                              event_start_ends[:, 1].tolist(),
-                              out_dir,
-                              doc_name, 
-                              False, True) 
-            # Save pairs with the highest coreference scores
-            top_pair_list = np.argsort(-event_scores.squeeze(1).cpu().detach().numpy())[:100]
-            for top_idx in top_pair_list: 
-                first_id = first_event_idx[top_idx]
-                second_id = second_event_idx[top_idx]
-                first_tokens = ' '.join(origin_tokens[candidate_start_ends[first_id][0]:candidate_start_ends[first_id][1]+1])
-                second_tokens = ' '.join(origin_tokens[candidate_start_ends[second_id][0]:candidate_start_ends[second_id][1]+1])
-                score = event_scores[top_idx].squeeze(0).item()
-                label = pairwise_event_labels[top_idx].item()
-
-                f.write(f'{doc_id} {first_tokens} {second_tokens} {score} {label}\n')
+            pred_clusters_str, gold_clusters_str = conll_eval.make_output_readable(pred_event_clusters+pred_entity_clusters,
+                                                                                   gold_event_clusters+gold_entity_clusters,
+                                                                                   tokens)
+            token_str = ' '.join(tokens).replace('\n', '')
+            f_out.write(f"{doc_id}: {token_str}\n")
+            f_out.write(f'Pred: {pred_clusters_str}\n')
+            f_out.write(f'Gold: {gold_clusters_str}\n\n')
  
         all_scores = torch.cat(all_event_scores+all_entity_scores)
         all_labels = torch.cat(all_event_labels+all_entity_labels)
-
-        strict_preds = (all_scores > 0).to(torch.int)
+        all_event_scores = torch.cat(all_event_scores)
+        all_event_labels = torch.cat(all_event_labels)
+        all_entity_scores = torch.cat(all_entity_scores)
+        all_entity_labels = torch.cat(all_entity_labels)
+        
+        strict_preds = (all_scores > 0).to(torch.int) 
+        strict_preds_event = (all_event_scores > 0).to(torch.int)
+        strict_preds_entity = (all_entity_scores > 0).to(torch.int)
         eval = Evaluation(strict_preds, all_labels.to(device))
+        eval_event = Evaluation(strict_preds_event, all_event_labels.to(device))
+        eval_entity = Evaluation(strict_preds_entity, all_entity_labels.to(device))
         print('Number of predictions: {}/{}'.format(strict_preds.sum(), len(strict_preds)))
         print('Number of positive pairs: {}/{}'.format(len((all_labels == 1).nonzero()),
                                                      len(all_labels)))
-        print('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
+        print('Pairwise - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
                                                                 eval.get_precision(), eval.get_f1()))
+        muc, b_cubed, ceafe, avg = conll_eval.get_metrics()
+        conll_metrics = muc+b_cubed+ceafe+avg
+        print('MUC - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
+              'Bcubed - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
+              'CEAFe - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
+              'CoNLL - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*conll_metrics)) 
+        
+        print('Event Pairwise - Recall: {}, Precision: {}, F1: {}'.format(eval_event.get_recall(),
+                                                                eval_event.get_precision(), eval_event.get_f1()))
+        muc, b_cubed, ceafe, avg = conll_eval_event.get_metrics()
+        conll_metrics = muc+b_cubed+ceafe+avg
+        print('Event MUC - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
+              'Event Bcubed - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
+              'Event CEAFe - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
+              'Event CoNLL - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*conll_metrics))
+        
         logger.info('Number of predictions: {}/{}'.format(strict_preds.sum(), len(strict_preds)))
         logger.info('Number of positive pairs: {}/{}'.format(len((all_labels == 1).nonzero()),
                                                            len(all_labels)))
