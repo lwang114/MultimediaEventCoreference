@@ -374,6 +374,7 @@ class StarSimplePairWiseClassifier(nn.Module):
     if config.get('with_type_embedding', False):
         self.input_layer += config.type_embedding_dimension
     self.hidden_layer = config.hidden_layer
+    self.metric = config.get('metric', 'wasserstein')
         
     self.pairwise_mlp = nn.Sequential(
             nn.Dropout(config.dropout),
@@ -411,15 +412,16 @@ class StarSimplePairWiseClassifier(nn.Module):
 
     scores_c = self.pairwise_score(c[:, first_idxs], c[:, second_idxs])
     scores_neighbors = []
+
     for first_idx, second_idx in zip(first_idxs, second_idxs):
       arg_pair_mask = neighbor_mask[:, first_idx].unsqueeze(-1) * neighbor_mask[:, second_idx].unsqueeze(-2)
       score_neighbors = self.alignment_score(
           self.pairwise_score(neighbors[:, first_idx, first_arg_idxs],
                               neighbors[:, second_idx, second_arg_idxs]).view(batch_size, n_neighbors, n_neighbors),
-          arg_pair_mask)
+          arg_pair_mask, metric=self.metric)
       scores_neighbors.append(score_neighbors)
     scores_neighbors = torch.stack(scores_neighbors, dim=1)
-    
+
     gate_probs = torch.sigmoid(self.classifier_feature_gate(
                                 torch.cat([c[:, first_idxs],
                                            c[:, second_idxs]], dim=-1))).squeeze(-1)
@@ -441,15 +443,15 @@ class StarSimplePairWiseClassifier(nn.Module):
         mask = (mask > 0)
         max_scores = util.masked_max(score_mat, mask, dim=dim)
         return util.masked_mean(max_scores, mask2, dim=-1)
-      elif metric == 'ot':
+      elif metric == 'wasserstein':
         score_mat_arr = torch.sigmoid(score_mat).cpu().detach().numpy()
         mask = mask.cpu().detach().numpy()
 
         score_mat_arr = score_mat_arr * mask
         C = 1 - score_mat_arr
-        n = mask.sum(-1).sum(-1, keepdims=True) + 1e-6
-        a1 = mask.sum(-1) / n
-        a2 = mask.sum(-2) / n
+        n = (mask + 1e-12).sum(-1).sum(-1, keepdims=True)
+        a1 = (mask + 1e-12).sum(-1) / n
+        a2 = (mask + 1e-12).sum(-2) / n
         P = np.zeros(C.shape)
         for idx in range(batch_size):
           P[idx], _ = ipot_WD(a1[idx], a2[idx], C[idx])
