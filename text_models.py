@@ -430,12 +430,32 @@ class StarTransformerClassifier(nn.Module):
   def pairwise_score(self, first, second):
       return torch.sum(first * second, dim=-1)
 
-  def alignment_score(self, score_mat, mask, dim=-1): # TODO optimal transport
-      score_mat = score_mat * mask
-      mask2 = (mask.sum(dim) > 0)
-      mask = (mask > 0)
-      max_scores = util.masked_max(score_mat, mask, dim=dim)
-      return util.masked_mean(max_scores, mask2, dim=-1)
+  def alignment_score(self, score_mat, mask, dim=-1, metric='ot'): # TODO optimal transport
+      device = score_mat.device 
+      batch_size = score_mat.size(0)
+      if metric == 'greedy':
+        score_mat = score_mat * mask
+        mask2 = (mask.sum(dim) > 0)
+        mask = (mask > 0)
+        max_scores = util.masked_max(score_mat, mask, dim=dim)
+        return util.masked_mean(max_scores, mask2, dim=-1)
+      elif metric == 'ot':
+        score_mat_arr = F.sigmoid(score_mat).cpu().detach().numpy()
+        mask = mask.cpu().detach().numpy()
+
+        score_mat_arr = score_mat_arr * mask
+        C = 1 - score_mat_arr
+        n = mask.sum(-1).sum(-1) + 1e-12
+        a1 = mask.sum(-1) / n
+        a2 = mask.sum(-2) / n
+        P = np.zeros(C.shape)
+        for idx in range(batch_size):
+          P[idx], _ = ipot_WD(a1[idx], a2[idx], C[idx])
+        
+        P = torch.FloatTensor(P).to(device)
+        return (P * score_mat).sum(-1).sum(-1)
+      else:
+        raise ValueError(f'Invalid metric {metric}')
 
   def predict_cluster(self, x, center_map, neighbor_map, first_idxs, second_idxs): 
     span_num = center_map.size(0)
