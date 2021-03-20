@@ -165,7 +165,7 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
     for i, batch in enumerate(train_loader):
       doc_embeddings, start_mappings, end_mappings, continuous_mappings,\
       width, videos,\
-      text_labels, img_labels,\
+      text_labels, type_labels, img_labels,\
       text_mask, span_mask, video_mask = batch   
 
       B = doc_embeddings.size(0)     
@@ -178,6 +178,7 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
       videos = videos.to(device)
       text_labels = text_labels.to(device)
       img_labels = img_labels.to(device)
+      type_labels = type_labels.to(device)
       text_mask = text_mask.to(device)
       span_mask = span_mask.to(device)
       video_mask = video_mask.to(device)
@@ -191,7 +192,10 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
 
       text_output = text_model(doc_embeddings)
       video_output = image_model(videos)
-      mention_output = mention_model(text_output, start_mappings, end_mappings, continuous_mappings, width)
+      mention_output = mention_model(text_output,
+                                     start_mappings, end_mappings,
+                                     continuous_mappings, width,
+                                     type_labels=type_labels)
 
       scores = []
       for idx in range(B):
@@ -264,10 +268,10 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
         for i, batch in enumerate(test_loader):
           doc_embeddings,\
           start_mappings, end_mappings,\
-          continuous_mappings, width,\
-          videos,\
-          text_labels, img_labels,\
-          text_mask, span_mask, video_mask = batch  # TODO Include type labels and adjm 
+          continuous_mappings,\
+          width, videos,\
+          text_labels, type_labels, img_labels,\
+          text_mask, span_mask, video_mask = batch 
 
           token_num = text_mask.sum(-1).long()
           span_num = torch.where(span_mask.sum(-1) > 0, 
@@ -282,6 +286,7 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
           width = width.to(device)
           videos = videos.to(device)
           text_labels = text_labels.to(device)
+          type_labels = type_labels.to(device)
           img_labels = img_labels.to(device)
           text_mask = text_mask.to(device)
           span_mask = span_mask.to(device)
@@ -290,7 +295,10 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
           # Extract span and video embeddings
           text_output = text_model(doc_embeddings)
           video_output = image_model(videos)
-          mention_output = mention_model(text_output, start_mappings, end_mappings, continuous_mappings, width)
+          mention_output = mention_model(text_output,
+                                         start_mappings, end_mappings,
+                                         continuous_mappings, width,
+                                         type_labels=type_labels)
           
           # Compute score for each mention pair
           B = doc_embeddings.size(0) 
@@ -311,7 +319,6 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
             predicted_antecedents = torch.LongTensor(predicted_antecedents)
             origin_candidate_start_ends = torch.LongTensor(origin_candidate_start_ends)
             
-
             pred_clusters, gold_clusters = conll_eval(origin_candidate_start_ends,
                                                       predicted_antecedents,
                                                       origin_candidate_start_ends,
@@ -319,7 +326,7 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
             # Save the output clusters
             doc_id = test_loader.dataset.doc_ids[global_idx]
             tokens = [token[2] for token in test_loader.dataset.documents[doc_id]]
-            pred_clusters_str, gold_clusters_str = conll_eval.make_output_readable(pred_clusters, gold_clusters, tokens) 
+            pred_clusters_str, gold_clusters_str = conll_eval.make_output_readable(pred_clusters, gold_clusters, tokens)
             token_str = ' '.join(tokens).replace('\n', '')
             f_out.write(f"{doc_id}: {token_str}\n")
             f_out.write(f'Pred: {pred_clusters_str}\n')
@@ -364,7 +371,7 @@ def test_retrieve(text_model, image_model, grounding_model, test_loader, args):
     for i, batch in enumerate(test_loader):
       doc_embeddings, start_mappings, end_mappings, continuous_mappings,\
       width, videos,\
-      text_labels, img_labels,\
+      text_labels, type_labels, img_labels,\
       text_mask, span_mask, video_mask = batch   
 
       token_num = text_mask.sum(-1).long()

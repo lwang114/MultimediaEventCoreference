@@ -84,7 +84,7 @@ class SupervisedGroundingFeatureDataset(Dataset):
     self.docs_embeddings = np.load(bert_embed_file)
     
     # Extract coreference cluster labels
-    self.text_label_dict, self.image_label_dict, image_token_dict = self.create_dict_labels(text_mentions, image_mentions)
+    self.text_label_dict, self.image_label_dict, self.type_label_dict, self.type_to_idx = self.create_dict_labels(text_mentions, image_mentions)
 
     # Extract doc/image ids
     self.feat_keys = sorted(self.imgs_embeddings, key=lambda x:int(x.split('_')[-1])) # XXX
@@ -158,9 +158,11 @@ class SupervisedGroundingFeatureDataset(Dataset):
     :return text_label_dict: a mapping from doc id to a dict of (start token, end token) -> cluster id 
     :return image_label_dict: a mapping from image id to a dict of (bbox id, x min, y min, x max, y max) -> cluster id 
     '''
+    type_to_idx = {}
     text_label_dict = {}
     image_label_dict = {}
     image_token_dict = {}
+    type_label_dict = collections.defaultdict(dict)
     for m in text_mentions:
       if len(m['tokens_ids']) == 0:
         text_label_dict[m['doc_id']][(-1, -1)] = 0
@@ -171,6 +173,15 @@ class SupervisedGroundingFeatureDataset(Dataset):
           text_label_dict[m['doc_id']] = {}
         text_label_dict[m['doc_id']][(start, end)] = m['cluster_id']
 
+      if 'event_type' in m:
+          if not m['event_type'] in type_to_idx:
+              type_to_idx[m['event_type']] = len(type_to_idx)
+          type_label_dict[m['doc_id']][(start, end)] = type_to_idx[m['event_type']]
+      else:
+          if not m['entity_type'] in type_to_idx:
+              type_to_idx[m['entity_type']] = len(type_to_idx)
+          type_label_dict[m['doc_id']][(start, end)] = type_to_idx[m['entity_type']]
+        
     for i, m in enumerate(image_mentions):
         if not m['doc_id'] in image_label_dict:
           image_label_dict[m['doc_id']] = {}
@@ -186,7 +197,7 @@ class SupervisedGroundingFeatureDataset(Dataset):
             image_label_dict[m['doc_id']][(bbox_id, m['cluster_id'])] = cluster_dict.get(m['cluster_id'], 0)
             image_token_dict[m['doc_id']][(bbox_id, m['cluster_id'])] = m['tokens']
 
-    return text_label_dict, image_label_dict, image_token_dict 
+    return text_label_dict, image_label_dict, type_label_dict, type_to_idx
   
   def load_text(self, idx):
     '''Load mention span embeddings for the document
@@ -236,8 +247,18 @@ class SupervisedGroundingFeatureDataset(Dataset):
     labels = fix_embedding_length(labels.unsqueeze(1), self.max_span_num).squeeze(1)
     text_mask = torch.FloatTensor([1. if j < doc_len else 0 for j in range(self.max_token_num)])
     span_mask = continuous_mappings.sum(dim=1)
-    
-    return doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, labels, text_mask, span_mask
+
+    # Extract type labels
+    type_labels = [int(self.type_label_dict[self.doc_ids[idx]][(start, end)]) for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
+    type_labels = torch.LongTensor(type_labels)
+    type_labels = fix_embedding_length(type_labels.unsqueeze(1), self.max_span_num).squeeze(1)
+    return doc_embeddings,\
+        start_mappings,\
+        end_mappings,\
+        continuous_mappings,\
+        width, labels,\
+        type_labels,\
+        text_mask, span_mask
 
 
   def load_video(self, idx):
@@ -265,8 +286,14 @@ class SupervisedGroundingFeatureDataset(Dataset):
 
   def __getitem__(self, idx):
     img_embeddings, img_labels, video_mask = self.load_video(idx)
-    doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, text_labels, text_mask, span_mask = self.load_text(idx)
-    return doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, img_embeddings, text_labels, img_labels, text_mask, span_mask, video_mask
+    doc_embeddings,\
+    start_mappings,\
+    end_mappings,\
+    continuous_mappings,\
+    width, text_labels,\
+    type_labels,\
+    text_mask, span_mask = self.load_text(idx)
+    return doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, img_embeddings, text_labels, type_labels, img_labels, text_mask, span_mask, video_mask
 
   def __len__(self):
     return len(self.doc_ids)

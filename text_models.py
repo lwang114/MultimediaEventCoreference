@@ -364,7 +364,130 @@ class SpanScorer(nn.Module):
     def forward(self, span_embedding):
         return self.mlp(span_embedding)
 
+class StarSimplePairWiseClassifier(nn.Module):
+  def __init__(self, config):
+    super(StarSimplePairWiseClassifier, self).__init__()  
 
+    self.input_layer = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2 
+    if config.with_mention_width:
+        self.input_layer += config.embedding_dimension
+    if config.get('with_type_embedding', False):
+        self.input_layer += config.type_embedding_dimension
+    self.hidden_layer = config.hidden_layer
+        
+    self.pairwise_mlp = nn.Sequential(
+            nn.Dropout(config.dropout),
+            nn.Linear(self.input_layer, self.hidden_layer),
+            nn.ReLU(),
+            nn.Linear(self.hidden_layer, self.hidden_layer),
+            nn.Dropout(config.dropout),
+            nn.ReLU(),
+            nn.Linear(self.hidden_layer, 1),
+    )
+    self.pairwise_mlp.apply(init_weights)
+    self.classifier_feature_gate = nn.Linear(2*self.input_layer, 1)
+    
+  def forward(self, x, center_map, neighbor_map,
+              first_idxs=None, second_idxs=None):
+    '''
+    :param x: FloatTensor of size (batch size, max num. of spans, embed dim)
+    :param center_map: FloatTensor of size (batch size, max num. of centers, max num. of spans)
+    :param neighbor_map: FloatTensor of size (batch size, max num. of centers, max num. of neighbors, max num. of spans)
+    :return scores: FloatTensor of size (num. pairs,) 
+    '''
+    batch_size = x.size(0)
+    neighbor_mask = neighbor_map.sum(-1)
+    
+    c = torch.matmul(center_map, x)
+    # (batch size, max num. of centers, max num. of roles, embed dim)
+    neighbors = torch.matmul(neighbor_map, x.unsqueeze(1))
+
+    n = c.size(1)
+    n_neighbors = neighbors.size(-2)
+     
+    if first_idxs is None or second_idxs is None:
+      first_idxs, second_idxs = zip(*list(combinations(range(n), 2)))
+    first_arg_idxs, second_arg_idxs = zip(*list((i, j) for i in range(n_neighbors) for j in range(n_neighbors)))
+
+    scores_c = self.pairwise_score(c[:, first_idxs], c[:, second_idxs])
+    scores_neighbors = []
+    for first_idx, second_idx in zip(first_idxs, second_idxs):
+      arg_pair_mask = neighbor_mask[:, first_idx].unsqueeze(-1) * neighbor_mask[:, second_idx].unsqueeze(-2)
+      score_neighbors = self.alignment_score(
+          self.pairwise_score(neighbors[:, first_idx, first_arg_idxs],
+                              neighbors[:, second_idx, second_arg_idxs]).view(batch_size, n_neighbors, n_neighbors),
+          arg_pair_mask)
+      scores_neighbors.append(score_neighbors)
+    scores_neighbors = torch.stack(scores_neighbors, dim=1)
+    
+    gate_probs = torch.sigmoid(self.classifier_feature_gate(
+                                torch.cat([c[:, first_idxs],
+                                           c[:, second_idxs]], dim=-1))).squeeze(-1)
+    return gate_probs * scores_c + (1 - gate_probs) * scores_neighbors
+
+  def pairwise_score(self, first, second):
+      batch_size = first.size(0)
+      num_pairs = first.size(1)
+      return self.pairwise_mlp(first.view(-1, self.input_layer) *\
+                               second.view(-1, self.input_layer)).\
+          view(batch_size, num_pairs)
+
+  def alignment_score(self, score_mat, mask, dim=-1, metric='greedy'):
+      device = score_mat.device 
+      batch_size = score_mat.size(0)
+      if metric == 'greedy':
+        score_mat = score_mat * mask
+        mask2 = (mask.sum(dim) > 0)
+        mask = (mask > 0)
+        max_scores = util.masked_max(score_mat, mask, dim=dim)
+        return util.masked_mean(max_scores, mask2, dim=-1)
+      elif metric == 'ot':
+        score_mat_arr = torch.sigmoid(score_mat).cpu().detach().numpy()
+        mask = mask.cpu().detach().numpy()
+
+        score_mat_arr = score_mat_arr * mask
+        C = 1 - score_mat_arr
+        n = mask.sum(-1).sum(-1, keepdims=True) + 1e-6
+        a1 = mask.sum(-1) / n
+        a2 = mask.sum(-2) / n
+        P = np.zeros(C.shape)
+        for idx in range(batch_size):
+          P[idx], _ = ipot_WD(a1[idx], a2[idx], C[idx])
+        
+        P = torch.FloatTensor(P).to(device)
+        return (P * score_mat).sum(-1).sum(-1)
+      else:
+        raise ValueError(f'Invalid metric {metric}')
+
+  def predict_cluster(self, x, center_map, neighbor_map, first_idxs, second_idxs): 
+    span_num = center_map.size(0)
+    thres = 0
+    
+    # Compute pairwise scores for mention pairs specified
+    scores = self(x.unsqueeze(0),
+                  center_map.unsqueeze(0),
+                  neighbor_map.unsqueeze(0),
+                  first_idxs, second_idxs).squeeze(0)
+    antecedents = -1 * np.ones(span_num, dtype=np.int64)
+
+    # Antecedent prediction
+    for idx2 in range(span_num):
+      candidate_scores = []
+      for idx1 in range(idx2):
+        score_idx = idx1 * (2 * span_num - idx1 - 1) // 2 - 1
+        score_idx += (idx2 - idx1)
+        score = scores[score_idx].squeeze().cpu().detach().data.numpy()
+        candidate_scores.append(score)
+
+      if len(candidate_scores) > 0:
+        candidate_scores = np.asarray(candidate_scores)
+        max_score = candidate_scores.max()
+        if max_score > thres:
+          antecedent = np.argmax(candidate_scores)
+          antecedents[idx2] = antecedent
+    
+    return antecedents, scores
+    
 class StarTransformerClassifier(nn.Module):
   def __init__(self, config):
     super(StarTransformerClassifier, self).__init__()  
@@ -374,19 +497,13 @@ class StarTransformerClassifier(nn.Module):
         self.input_layer += config.embedding_dimension
     if config.get('with_type_embedding', False):
         self.input_layer += config.type_embedding_dimension
-
-    if config.get('num_encoder_layers', 1) > 0:
-      self.transformer = torch.nn.Transformer(d_model=self.input_layer, 
-                                              nhead=1, 
-                                              num_encoder_layers=1, 
-                                              num_decoder_layers=1)
-    else:
-      transformer_decoder = nn.TransformerDecoderLayer(d_model=self.input_layer,
+ 
+    transformer_decoder = nn.TransformerDecoderLayer(d_model=self.input_layer,
                                                        nheads=1)
-      self.transformer = torch.nn.TransformerDecoder(transformer_decoder,
-                                                     num_decoder_layers=1)
+    self.transformer = torch.nn.TransformerDecoder(transformer_decoder,
+                                                    num_decoder_layers=1)
     self.classifier_feature_gate = nn.Linear(2*self.input_layer, 1)
-
+    
   def forward(self, x, center_map, neighbor_map,
               first_idxs=None, second_idxs=None):
     '''
@@ -431,7 +548,7 @@ class StarTransformerClassifier(nn.Module):
   def pairwise_score(self, first, second):
       return torch.sum(first * second, dim=-1)
 
-  def alignment_score(self, score_mat, mask, dim=-1, metric='greedy'):
+  def alignment_score(self, score_mat, mask, dim=-1, metric='ot'):
       device = score_mat.device 
       batch_size = score_mat.size(0)
       if metric == 'greedy':
@@ -441,12 +558,12 @@ class StarTransformerClassifier(nn.Module):
         max_scores = util.masked_max(score_mat, mask, dim=dim)
         return util.masked_mean(max_scores, mask2, dim=-1)
       elif metric == 'ot':
-        score_mat_arr = F.sigmoid(score_mat).cpu().detach().numpy()
+        score_mat_arr = torch.sigmoid(score_mat).cpu().detach().numpy()
         mask = mask.cpu().detach().numpy()
 
         score_mat_arr = score_mat_arr * mask
         C = 1 - score_mat_arr
-        n = mask.sum(-1).sum(-1) + 1e-12
+        n = mask.sum(-1).sum(-1, keepdim=True) + 1e-12
         a1 = mask.sum(-1) / n
         a2 = mask.sum(-2) / n
         P = np.zeros(C.shape)
@@ -552,9 +669,9 @@ class SimplePairWiseClassifier(nn.Module):
       
       return antecedents, scores
 
-class TransformerPairWiseClassifier(nn.Module):
+class TransformerClassifier(nn.Module):
   def __init__(self, config):
-    super(TransformerPairWiseClassifier, self).__init__()  
+    super(TransformerClassifier, self).__init__()  
 
     self.input_layer = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2 
     if config.with_mention_width:

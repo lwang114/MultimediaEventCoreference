@@ -39,7 +39,7 @@ def get_all_mention_mapping(origin_candidate_start_ends,
                             max_event_num,
                             max_role_num,
                             max_mention_num):
-    span_num = origin_candidate_start_ends.shape[0]
+    span_num = origin_candidate_start_ends[:max_mention_num].shape[0]
     event_mappings = torch.zeros((max_event_num, max_mention_num))
     entity_mappings = torch.zeros((max_mention_num, max_mention_num))
     event_to_roles_mappings = torch.zeros((max_event_num, max_role_num, max_mention_num))
@@ -48,19 +48,29 @@ def get_all_mention_mapping(origin_candidate_start_ends,
     span_to_idx = {tuple(origin_candidate_start_ends[i].tolist()):i for i in range(span_num)}
     for i in range(span_num):
         span = tuple(origin_candidate_start_ends[i].tolist())
-        if span in event_labels_dict:
+        used = set()
+        if span in event_labels_dict and not span in used:
             labels[i] = event_labels_dict[span]
+            used.add(span) 
         else:
             labels[i] = entity_labels_dict[span]
-        
+            
     for event_idx, span in enumerate(sorted(event_labels_dict)):
+        if event_idx >= max_event_num:
+            break
         span_idx = span_to_idx[span]
         event_mappings[event_idx, span_idx] = 1.
         for role_idx, span_role in enumerate(event_to_roles[span]):
+            if not span_role in span_to_idx:
+                continue
             span_idx2 = span_to_idx[span_role]
             event_to_roles_mappings[event_idx, role_idx, span_idx2] = 1.
         
     for entity_idx, span in enumerate(sorted(entity_labels_dict)):
+        if entity_idx >= max_mention_num:
+            break
+        if not span in span_to_idx:
+            continue
         span_idx = span_to_idx[span]
         entity_mappings[entity_idx, span_idx] = 1.
     
@@ -98,7 +108,7 @@ class StarFeatureDataset(Dataset):
     self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     self.max_token_num = config.get('max_token_num', 512)
     self.max_span_num = config.get('max_span_num', 80)
-    self.max_event_num = config.get('max_event_num', 20)
+    self.max_event_num = config.get('max_event_num', 25)
     self.max_role_num = config.get('max_role_num', 10)
     self.max_frame_num = config.get('max_frame_num', 100)
     self.max_mention_span = config.get('max_mention_span', 15)
@@ -148,7 +158,7 @@ class StarFeatureDataset(Dataset):
 
     # Extract spans
     self.origin_candidate_start_ends = [np.asarray(sorted(self.text_label_dict[doc_id]['events'])+
-                                                   sorted(self.text_label_dict[doc_id]['entities']))
+                                                   sorted(self.text_label_dict[doc_id]['entities']))[:self.max_span_num]
                                         for doc_id in self.doc_ids]
     for doc_id, start_ends in zip(self.doc_ids, self.origin_candidate_start_ends):
       for start, end in start_ends:
@@ -253,7 +263,7 @@ class StarFeatureDataset(Dataset):
     return text_label_dict, image_label_dict, event_to_roles, type_label_dict, type_to_idx
   
   def load_text(self, idx):
-    '''Load mention span embeddings for the document
+    ''' Load mention span embeddings for the document
     :param idx: int, doc index
     :return start_mappings: FloatTensor of size (max num. spans, max num. tokens)
     :return end_mappings: FloatTensor of size (max num. spans, max num. tokens)
@@ -321,7 +331,8 @@ class StarFeatureDataset(Dataset):
     span_mask = continuous_mappings.sum(dim=1)
 
     # Extract type labels
-    type_labels = [int(self.type_label_dict[self.doc_ids[idx]][(start, end)]) for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
+    type_labels = [int(self.type_label_dict[self.doc_ids[idx]][(start, end)]) for start, end in\
+                   zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
     type_labels = torch.LongTensor(type_labels)
     type_labels = fix_embedding_length(type_labels.unsqueeze(1), self.max_span_num).squeeze(1)
     return doc_embeddings,\

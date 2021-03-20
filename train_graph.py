@@ -13,7 +13,7 @@ import random
 import numpy as np
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
-from text_models import SpanEmbedder, StarTransformerClassifier
+from text_models import SpanEmbedder, StarSimplePairWiseClassifier
 from image_models import VisualEncoder
 from criterion import TripletLoss
 from corpus_graph import StarFeatureDataset
@@ -625,7 +625,7 @@ if __name__ == '__main__':
   image_model = VisualEncoder(400, config.hidden_layer)
 
   mention_model = SpanEmbedder(config, device)
-  coref_model = StarTransformerClassifier(config).to(device)
+  coref_model = StarSimplePairWiseClassifier(config).to(device)
 
   if config['training_method'] in ('pipeline', 'continue'):
       # text_model.load_state_dict(torch.load(config['text_model_path'], map_location=device))

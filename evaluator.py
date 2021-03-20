@@ -86,7 +86,7 @@ class CoNLLEvaluation:
     pred_clusters = self.get_predicted_clusters(top_spans, 
                                                 antecedent_indices,
                                                 predicted_antecedents)
-
+    
     antecedent_indices = antecedent_indices.unsqueeze(0)
     top_spans = top_spans.unsqueeze(0).cpu()
     predicted_antecedents = predicted_antecedents.unsqueeze(0).cpu()
@@ -97,20 +97,20 @@ class CoNLLEvaluation:
     return pred_clusters, gold_clusters
 
   def get_predicted_clusters(self, top_spans, antecedent_indices, predicted_antecedents): 
-    predicted_clusters, _ = self.scorer.get_predicted_clusters(
+    predicted_clusters, mention_to_pred = self.scorer.get_predicted_clusters(
                                           top_spans, 
                                           antecedent_indices, 
                                           predicted_antecedents)
     return predicted_clusters
      
   def get_gold_clusters(self, gold_spans, gold_labels):
+    gold_spans = gold_spans.cpu().detach().numpy().tolist()  
     gold_labels = gold_labels.cpu().detach().numpy().tolist()
     cluster_dict = collections.defaultdict(list)
     
     for cluster_id, span in zip(gold_labels, gold_spans):
         if cluster_id > 0:
             cluster_dict[cluster_id].append(span)
-
     return list(cluster_dict.values())
 
   def get_metrics(self):
