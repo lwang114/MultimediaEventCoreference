@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 import json
 import allennlp.nn.util as util 
+from IPOT.ipot import ipot_WD  
 
 def init_weights(m):
     if isinstance(m, nn.Linear) or isinstance(m, nn.Bilinear):
@@ -430,7 +431,7 @@ class StarTransformerClassifier(nn.Module):
   def pairwise_score(self, first, second):
       return torch.sum(first * second, dim=-1)
 
-  def alignment_score(self, score_mat, mask, dim=-1, metric='ot'): # TODO optimal transport
+  def alignment_score(self, score_mat, mask, dim=-1, metric='greedy'):
       device = score_mat.device 
       batch_size = score_mat.size(0)
       if metric == 'greedy':

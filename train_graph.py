@@ -334,9 +334,6 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
           text_mask, span_mask, video_mask = batch
 
           token_num = text_mask.sum(-1).long()
-          event_num = event_mappings.sum(-1).sum(-1).long()
-          entity_num = entity_mappings.sum(-1).sum(-1).long()
-
           region_num = video_mask.sum(-1).long()
           doc_embeddings = doc_embeddings.to(device)
           start_mappings = start_mappings.to(device)
@@ -361,11 +358,11 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
                                          start_mappings, end_mappings,
                                          continuous_mappings, width,
                                          type_labels=type_labels)
+
           event_labels = torch.bmm(event_mappings, text_labels.float().unsqueeze(-1)).squeeze(-1).long()
           entity_labels = torch.bmm(entity_mappings, text_labels.float().unsqueeze(-1)).squeeze(-1).long()
           event_num = event_mappings.sum(-1).sum(-1).long()
           entity_num = entity_mappings.sum(-1).sum(-1).long()
-          span_num = event_num + entity_num
           
           # Compute score for each mention pair
           B = doc_embeddings.size(0) 
@@ -381,12 +378,14 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
                 continue
 
             origin_candidate_start_ends = torch.LongTensor(test_loader.dataset.origin_candidate_start_ends[global_idx])
+            mention_num = origin_candidate_start_ends.shape[0]
             if not first_event_idx is None:
                 first_event_idx = first_event_idx[0]
                 second_event_idx = second_event_idx[0]
                 pairwise_event_labels = pairwise_event_labels.squeeze(0)
                 event_mapping = event_mappings[idx, :event_num[idx]]
-                event_start_ends = torch.mm(event_mapping[:, :span_num[idx]].cpu(), origin_candidate_start_ends.float()).long()
+                
+                event_start_ends = torch.mm(event_mapping[:, :mention_num].cpu(), origin_candidate_start_ends.float()).long()
                 event_to_roles_mapping = event_to_roles_mappings[idx, :event_num[idx]]
                 event_label = event_labels[idx, :event_num[idx]]
                 # Compute pairwise scores
@@ -397,9 +396,9 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
                 all_event_scores.append(event_scores)
                 all_event_labels.append(pairwise_event_labels.to(torch.int).cpu())
                 pred_event_clusters, gold_event_clusters = conll_eval(event_start_ends,
-                                                                  event_antecedents,
-                                                                  event_start_ends,
-                                                                  event_label)
+                                                                      event_antecedents,
+                                                                      event_start_ends,
+                                                                      event_label)
                 _, _ = conll_eval_event(event_start_ends,
                                         event_antecedents,
                                         event_start_ends,
@@ -412,7 +411,7 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
                 second_entity_idx = second_entity_idx[0]
                 pairwise_entity_labels = pairwise_entity_labels.squeeze(0)
                 entity_mapping = entity_mappings[idx, :entity_num[idx]]
-                entity_start_ends = torch.mm(entity_mapping[:, :span_num[idx]].cpu(), origin_candidate_start_ends.float()).long()
+                entity_start_ends = torch.mm(entity_mapping[:, :mention_num].cpu(), origin_candidate_start_ends.float()).long()
                 entity_label = entity_labels[idx, :entity_num[idx]]
                 entity_antecedents, entity_scores = coref_model.module.predict_cluster(mention_output[idx],
                                                                                    entity_mapping, entity_mapping.unsqueeze(1),
@@ -434,7 +433,7 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
 
             # Save the output clusters
             doc_id = test_loader.dataset.doc_ids[global_idx]
-            tokens = [token[2] for token in test_loader.dataset.origin_tokens[global_idx]]
+            tokens = [token[2] for token in test_loader.dataset.documents[doc_id]]
 
             pred_clusters_str, gold_clusters_str = conll_eval.make_output_readable(pred_event_clusters+pred_entity_clusters,
                                                                                    gold_event_clusters+gold_entity_clusters,
