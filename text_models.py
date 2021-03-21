@@ -405,23 +405,24 @@ class StarSimplePairWiseClassifier(nn.Module):
 
     n = c.size(1)
     n_neighbors = neighbors.size(-2)
-     
+    
     if first_idxs is None or second_idxs is None:
       first_idxs, second_idxs = zip(*list(combinations(range(n), 2)))
     first_arg_idxs, second_arg_idxs = zip(*list((i, j) for i in range(n_neighbors) for j in range(n_neighbors)))
-
+    n_pairs = len(first_idxs)
+    n_arg_pairs = len(first_arg_idxs)
+    
     scores_c = self.pairwise_score(c[:, first_idxs], c[:, second_idxs])
     scores_neighbors = []
 
-    for first_idx, second_idx in zip(first_idxs, second_idxs):
-      arg_pair_mask = neighbor_mask[:, first_idx].unsqueeze(-1) * neighbor_mask[:, second_idx].unsqueeze(-2)
-      score_neighbors = self.alignment_score(
-          self.pairwise_score(neighbors[:, first_idx, first_arg_idxs],
-                              neighbors[:, second_idx, second_arg_idxs]).view(batch_size, n_neighbors, n_neighbors),
-          arg_pair_mask, metric=self.metric)
-      scores_neighbors.append(score_neighbors)
-    scores_neighbors = torch.stack(scores_neighbors, dim=1)
-
+    arg_pair_masks = neighbor_mask[:, first_idxs].unsqueeze(-1) * neighbor_mask[:, second_idxs].unsqueeze(-2)
+    scores_neighbors = self.alignment_score(
+          self.pairwise_score(neighbors[:, first_idxs][:, :, first_arg_idxs].view(batch_size*n_pairs, n_arg_pairs, -1),
+                              neighbors[:, second_idxs][:, :, second_arg_idxs].view(batch_size*n_pairs, n_arg_pairs, -1)).\
+        view(batch_size*n_pairs, n_neighbors, n_neighbors),
+        arg_pair_masks.view(batch_size*n_pairs, n_neighbors, n_neighbors), metric=self.metric)
+    scores_neighbors = scores_neighbors.view(batch_size, n_pairs)
+    
     gate_probs = torch.sigmoid(self.classifier_feature_gate(
                                 torch.cat([c[:, first_idxs],
                                            c[:, second_idxs]], dim=-1))).squeeze(-1)
@@ -431,8 +432,7 @@ class StarSimplePairWiseClassifier(nn.Module):
       batch_size = first.size(0)
       num_pairs = first.size(1)
       return self.pairwise_mlp(first.view(-1, self.input_layer) *\
-                               second.view(-1, self.input_layer)).\
-          view(batch_size, num_pairs)
+                               second.view(-1, self.input_layer)).view(batch_size, num_pairs)
 
   def alignment_score(self, score_mat, mask, dim=-1, metric='greedy'):
       device = score_mat.device 
@@ -446,15 +446,19 @@ class StarSimplePairWiseClassifier(nn.Module):
       elif metric == 'wasserstein':
         score_mat_arr = torch.sigmoid(score_mat).cpu().detach().numpy()
         mask = mask.cpu().detach().numpy()
-
         score_mat_arr = score_mat_arr * mask
+        
         C = 1 - score_mat_arr
+        n_pairs = mask.sum(-1).sum(-1)
         n = (mask + 1e-12).sum(-1).sum(-1, keepdims=True)
         a1 = (mask + 1e-12).sum(-1) / n
         a2 = (mask + 1e-12).sum(-2) / n
         P = np.zeros(C.shape)
         for idx in range(batch_size):
-          P[idx], _ = ipot_WD(a1[idx], a2[idx], C[idx])
+            if n_pairs[idx] <= 1:
+                P[idx][0, 0] = 1.
+            else:
+                P[idx], _ = ipot_WD(a1[idx], a2[idx], C[idx])
         
         P = torch.FloatTensor(P).to(device)
         return (P * score_mat).sum(-1).sum(-1)
