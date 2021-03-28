@@ -113,7 +113,6 @@ class StarFeatureDataset(Dataset):
     self.max_frame_num = config.get('max_frame_num', 100)
     self.max_mention_span = config.get('max_mention_span', 15)
     self.img_feat_type = config.get('img_feat_type', 'mmaction_feat')
-    test_id_file = config.get('test_id_file', '')
 
     documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
     self.documents = documents
@@ -140,14 +139,6 @@ class StarFeatureDataset(Dataset):
     # Extract doc/image ids
     self.feat_keys = sorted(self.imgs_embeddings, key=lambda x:int(x.split('_')[-1])) # XXX
     self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in self.text_label_dict]
-    if test_id_file:
-      with open(test_id_file) as f:
-        test_ids = ['_'.join(k.split('_')[:-1]) for k in f.read().strip().split()]
-
-      if split == 'train':
-        self.feat_keys = [k for k in self.feat_keys if not '_'.join(k.split('_')[:-1]) in test_ids]
-      else:
-        self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in test_ids]
     self.doc_ids = ['_'.join(k.split('_')[:-1]) for k in self.feat_keys]
     documents = {doc_id:documents[doc_id] for doc_id in self.doc_ids}
     print('Number of documents: ', len(self.doc_ids))
@@ -230,12 +221,6 @@ class StarFeatureDataset(Dataset):
             if not m['event_type'] in type_to_idx:
                 type_to_idx[m['event_type']] = len(type_to_idx)
             type_label_dict[m['doc_id']][(start, end)] = type_to_idx[m['event_type']]
-        else:
-            if not m['entity_type'] in type_to_idx:
-                type_to_idx[m['entity_type']] = len(type_to_idx)
-            type_label_dict[m['doc_id']][(start, end)] = type_to_idx[m['entity_type']]
-            
-        if 'arguments' in m:
             text_label_dict[m['doc_id']]['events'][(start, end)] = m['cluster_id'] 
             event_to_roles[m['doc_id']][(start, end)] = []
             for a in m['arguments']:
@@ -243,6 +228,9 @@ class StarFeatureDataset(Dataset):
                 a_end = a['end']
                 event_to_roles[m['doc_id']][(start, end)].append((a_start, a_end))
         else:
+            if not m['entity_type'] in type_to_idx:
+                type_to_idx[m['entity_type']] = len(type_to_idx)
+            type_label_dict[m['doc_id']][(start, end)] = type_to_idx[m['entity_type']]
             text_label_dict[m['doc_id']]['entities'][(start, end)] = m['cluster_id']
 
     for i, m in enumerate(image_mentions):

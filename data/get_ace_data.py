@@ -41,8 +41,37 @@ def get_mention_doc(data_json, out_prefix):
   documents = {}
   entities = []
   events = []
-  cluster_ids = {'###SINGLETON###': 0}
   sen_start = 0
+  
+  cluster_ids = {'###SINGLETON###': 0}
+  cluster_count = {'###SINGLETON###': 0}
+  with open(data_json, 'r') as f:
+    # Extract cluster ids
+    for line in f:
+      inst = json.loads(line)
+      entity_mentions = inst['entity_mentions']
+      event_mentions = inst['event_mentions']
+
+      for entity_mention in entity_mentions:
+        mention_id = entity_mention['id']
+        entity_id = '-'.join(mention_id.split('-')[:-1])
+        if not entity_id in cluster_count:
+          cluster_count[entity_id] = 1
+          cluster_ids[entity_id] = 0
+        else:
+          cluster_count[entity_id] += 1
+          cluster_ids[entity_id] = len(cluster_ids)
+      
+      for event_mention in event_mentions:
+        mention_id = event_mention['id']
+        event_id = '-'.join(mention_id.split('-')[:-1])
+        if not event_id in cluster_count:
+          cluster_count[event_id] = 1
+          cluster_ids[event_id] = 0
+        else:
+          cluster_count[event_id] += 1
+          cluster_ids[event_id] = len(cluster_ids)
+  
   with open(data_json, 'r') as f:
     i = 0
     for line in f:
@@ -64,8 +93,6 @@ def get_mention_doc(data_json, out_prefix):
       for entity_mention in entity_mentions:
         mention_id = entity_mention['id']
         entity_id = '-'.join(mention_id.split('-')[:-1])
-        if not entity_id in cluster_ids:
-          cluster_ids[entity_id] = len(cluster_ids)
         cluster_id = cluster_ids[entity_id]
         start = entity_mention['start']
         end = entity_mention['end']
@@ -84,8 +111,6 @@ def get_mention_doc(data_json, out_prefix):
       for event_mention in event_mentions:
         mention_id = event_mention['id']
         event_id = '-'.join(mention_id.split('-')[:-1])
-        if not event_id in cluster_ids:
-          cluster_ids[event_id] = len(cluster_ids) 
         cluster_id = cluster_ids[event_id]
         start = event_mention['trigger']['start']
         end = event_mention['trigger']['end']

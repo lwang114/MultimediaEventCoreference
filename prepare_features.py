@@ -14,7 +14,7 @@ import PIL.Image as Image
 from tqdm import tqdm
 from datetime import datetime
 from transformers import AutoTokenizer, AutoModel
-from image_models import ResNet101
+# from image_models import ResNet101
 from coref.model_utils import pad_and_read_bert
 from coref.utils import create_corpus
 
@@ -190,9 +190,9 @@ def extract_bert_embeddings(config, split, out_prefix='bert_embedding'):
                     docs_embeddings[emb_id] = np.concatenate([docs_embeddings[emb_id], bert_embedding], axis=0)
                 else:
                     docs_embeddings[emb_id] = bert_embedding
-    np.savez(out_prefix+'.npz', **docs_embeddings)
+    np.savez(f"{out_prefix}_{config['bert_model']}.npz", **docs_embeddings)
 
-def extract_type_embeddings(type_to_idx, glove_file): # TODO
+def extract_type_embeddings(type_to_idx, glove_file):
     vocab_embs = sorted(type_to_idx, key=lambda x:type_to_idx[x])
     vocab_emb = {''}
     embed_matrix = [[0.0] * dimension] 
@@ -283,7 +283,7 @@ def main():
     glove_file = 'm2e2/data/glove/glove.840B.300d.txt'
     extract_glove_embeddings(config, args.split, glove_file, out_prefix='{}_glove_embeddings'.format(args.split))
   if 2 in tasks:
-    extract_bert_embeddings(config, args.split, out_prefix='{}_bert_embeddings'.format(args.split))
+    extract_bert_embeddings(config, args.split, out_prefix=args.split)
   if 3 in tasks:
     save_frame_rate(config)
 

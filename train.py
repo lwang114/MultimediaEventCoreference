@@ -13,7 +13,7 @@ import random
 import numpy as np
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
-from text_models import SpanEmbedder, BiLSTM, TransformerPairWiseClassifier, SimplePairWiseClassifier
+from text_models import SpanEmbedder, BiLSTM, SimplePairWiseClassifier
 from image_models import VisualEncoder
 from criterion import TripletLoss
 from corpus import SupervisedGroundingFeatureDataset
@@ -112,11 +112,12 @@ def get_pairwise_text_labels(labels, is_training, device):
 
     return first_idxs, second_idxs, pairwise_labels_all    
 
-def train(text_model, mention_model, image_model, coref_model, train_loader, test_loader, args):
+def train(text_model, mention_model, image_model, coref_model, train_loader, test_loader, args, random_seed=None):
   config = pyhocon.ConfigFactory.parse_file(args.config)
+  if random_seed:
+      config.random_seed = random_seed
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
   torch.set_grad_enabled(True)
-  fix_seed(config)
   
   if not isinstance(text_model, torch.nn.DataParallel):
     text_model = nn.DataParallel(text_model)
@@ -146,7 +147,7 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
   multimedia_criterion = TripletLoss(config) 
 
   # Set up the optimizer  
-  optimizer = get_optimizer(config, [text_model, image_model, coref_model])
+  optimizer = get_optimizer(config, [text_model, image_model, mention_model, coref_model])
    
   # Start training
   total_loss = 0.
@@ -154,6 +155,7 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
   best_text_f1 = 0.
   best_grounding_f1 = 0.
   best_retrieval_recall = 0.
+  results = {}
   begin_time = time.time()
   if args.evaluate_only:
     config.epochs = 0
@@ -190,8 +192,11 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
         continue
       optimizer.zero_grad()
 
-      text_output = text_model(doc_embeddings)
       video_output = image_model(videos)
+      text_output = text_model(doc_embeddings)
+      # XXX combined_output = text_model(torch.cat([video_output, doc_embeddings], dim=1))
+      # video_output2 = combined_output[:, :video_output.size(1)]
+      # text_output = combined_output[:, video_output.size(1):]      
       mention_output = mention_model(text_output,
                                      start_mappings, end_mappings,
                                      continuous_mappings, width,
@@ -203,8 +208,9 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
                                     mention_output[idx, second_text_idx[idx]]))
       scores = torch.cat(scores).squeeze(1)
       loss = criterion(scores, pairwise_text_labels)
+      # loss = loss + multimedia_criterion(doc_embeddings, video_output, text_mask, video_mask) # XXX
       loss = loss + multimedia_criterion(text_output, video_output, text_mask, video_mask)
-
+      
       loss.backward()
       optimizer.step()
 
@@ -219,21 +225,26 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
     print(info)
     logger.info(info)
 
-    torch.save(text_model.module.state_dict(), '{}/text_model.pth'.format(config['model_path']))
-    torch.save(image_model.module.state_dict(), '{}/image_model.pth'.format(config['model_path']))
-    torch.save(mention_model.module.state_dict(), '{}/mention_model.pth'.format(config['model_path']))
-    torch.save(coref_model.module.state_dict(), '{}/text_scorer.pth'.format(config['model_path']))
+    torch.save(text_model.module.state_dict(), '{}/text_model-{}.pth'.format(config['model_path'], config['random_seed']))
+    torch.save(image_model.module.state_dict(), '{}/image_model-{}.pth'.format(config['model_path'], config['random_seed']))
+    torch.save(mention_model.module.state_dict(), '{}/mention_model-{}.pth'.format(config['model_path'], config['random_seed']))
+    torch.save(coref_model.module.state_dict(), '{}/coref_model-{}.pth'.format(config['model_path'], config['random_seed']))
  
     if epoch % 1 == 0:
       task = config.get('task', 'coreference')
       if task in ('coreference', 'both'):
-        text_f1 = test(text_model, mention_model, image_model, coref_model, test_loader, args)
-        if text_f1 > best_text_f1:
-          best_text_f1 = text_f1
-          torch.save(text_model.module.state_dict(), '{}/best_text_model.pth'.format(config['model_path']))
-          torch.save(image_model.module.state_dict(), '{}/best_image_model.pth'.format(config['model_path']))
-          torch.save(mention_model.module.state_dict(), '{}/best_mention_model.pth'.format(config['model_path']))
-          torch.save(coref_model.module.state_dict(), '{}/best_text_scorer.pth'.format(config['model_path']))
+        res = test(text_model, mention_model, image_model, coref_model, test_loader, args)
+        if res['pairwise'][-1] >= best_text_f1:
+          best_text_f1 = res['pairwise'][-1]
+          results['pairwise'] = res['pairwise']
+          results['muc'] = res['muc']
+          results['ceafe'] = res['ceafe']
+          results['bcubed'] = res['bcubed']
+          results['avg'] = res['avg']
+          torch.save(text_model.module.state_dict(), '{}/best_text_model-{}.pth'.format(config['model_path'], config['random_seed']))
+          torch.save(image_model.module.state_dict(), '{}/best_image_model-{}.pth'.format(config['model_path'], config['random_seed']))
+          torch.save(mention_model.module.state_dict(), '{}/best_mention_model-{}.pth'.format(config['model_path'], config['random_seed']))
+          torch.save(coref_model.module.state_dict(), '{}/best_coref_model-{}.pth'.format(config['model_path'], config['random_seed']))
         print('Best text coreference F1={}'.format(best_text_f1))
       if task in ('retrieval', 'both'):
         I2S_r10, S2I_r10 = test_retrieve(text_model, image_model, grounding_model, test_loader, args)
@@ -246,10 +257,11 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
     print(task)
     task = config.get('task', 'coreference')
     if task in ('coreference', 'both'):
-      text_f1 = test(text_model, mention_model, image_model, coref_model, test_loader, args)
+      results = test(text_model, mention_model, image_model, coref_model, test_loader, args)
     if task in ('retrieval', 'both'):
       I2S_r10, S2I_r10 = test_retrieve(text_model, image_model, test_loader, args)
-
+  return results
+      
 def test(text_model, mention_model, image_model, coref_model, test_loader, args): 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     config = pyhocon.ConfigFactory.parse_file(args.config)
@@ -264,6 +276,7 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
     conll_eval = CoNLLEvaluation()
     f_out = open(os.path.join(config['model_path'], 'prediction.readable'), 'w')
     best_f1 = 0.
+    results = {} 
     with torch.no_grad():     
         for i, batch in enumerate(test_loader):
           doc_embeddings,\
@@ -293,8 +306,11 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
           video_mask = video_mask.to(device)
 
           # Extract span and video embeddings
-          text_output = text_model(doc_embeddings)
           video_output = image_model(videos)
+          text_output = text_model(doc_embeddings)
+          # XXX combined_output = text_model(torch.cat([video_output, doc_embeddings], dim=1))
+          # video_output = combined_output[:, :video_output.size(1)]
+          # text_output = combined_output[:, video_output.size(1):]
           mention_output = mention_model(text_output,
                                          start_mappings, end_mappings,
                                          continuous_mappings, width,
@@ -347,12 +363,17 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
                                                                 eval.get_precision(), eval.get_f1()))
         
         muc, b_cubed, ceafe, avg = conll_eval.get_metrics()
+        results['pairwise'] = (eval.get_precision().item(), eval.get_recall().item(), eval.get_f1().item())
+        results['muc'] = muc
+        results['bcubed'] = b_cubed
+        results['ceafe'] = ceafe
+        results['avg'] = avg
         conll_metrics = muc+b_cubed+ceafe+avg
         print('MUC - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
               'Bcubed - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
               'CEAFe - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
               'CoNLL - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*conll_metrics)) 
-        return eval.get_f1()
+        return results
 
 
 def test_retrieve(text_model, image_model, grounding_model, test_loader, args):
@@ -451,24 +472,25 @@ def test_retrieve(text_model, image_model, grounding_model, test_loader, args):
 if __name__ == '__main__':
   # Set up argument parser
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-  parser.add_argument('--config', type=str, default='configs/config_grounded.json')
+  parser.add_argument('--config', type=str, default='configs/config_coref_simple_video_m2e2.json')
   parser.add_argument('--start_epoch', type=int, default=0)
   parser.add_argument('--evaluate_only', action='store_true')
+  parser.add_argument('--compute_confidence_bound', action='store_true')
   args = parser.parse_args()
 
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
   # Set up logger
   config = pyhocon.ConfigFactory.parse_file(args.config)
-    
+
+  print(config['model_path'])
   if not os.path.isdir(config['model_path']):
-    os.makedirs(config['model_path'])
+      os.makedirs(config['model_path'])
   if not os.path.isdir(os.path.join(config['model_path'], 'log')):
-    os.mkdir(os.path.join(config['model_path'], 'log')) 
+      os.mkdir(os.path.join(config['model_path'], 'log')) 
 
   logging.basicConfig(filename=os.path.join(config['model_path'],'log/{}.txt'.format(datetime.now().strftime("%Y_%m_%d_%H_%M_%S"))),\
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
 
-  # Initialize dataloaders
   train_set = SupervisedGroundingFeatureDataset(os.path.join(config['data_folder'], 'train.json'), 
                                                 os.path.join(config['data_folder'], f'train_{config.mention_type}.json'), 
                                                 os.path.join(config['data_folder'], 'train_bboxes.json'),
@@ -477,32 +499,86 @@ if __name__ == '__main__':
                                                os.path.join(config['data_folder'], f'test_{config.mention_type}.json'), 
                                                os.path.join(config['data_folder'], 'test_bboxes.json'), 
                                                config, split='test')
- 
-  train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
-  test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
 
-  # Initialize models
-  text_model = nn.TransformerEncoderLayer(d_model=config.hidden_layer, nhead=1)
-  image_model = VisualEncoder(400, config.hidden_layer)
+  pairwises  = []
+  mucs = []
+  bcubeds = []
+  ceafes = []
+  avgs = []
 
-  mention_model = SpanEmbedder(config, device)
-  if config['classifier'] == 'simple':
-      coref_model = SimplePairWiseClassifier(config).to(device)
-  elif config['classifier'] == 'attention':
-      coref_model = TransformerPairWiseClassifier(config).to(device)
+  if args.compute_confidence_bound:
+      seeds = [1111, 2222, 3333, 4444]
   else:
-      raise ValueError(f"Invalid classifier type {config['classifier']}")
+      seeds = [1111]
       
-  if config['training_method'] in ('pipeline', 'continue'):
-      text_model.load_state_dict(torch.load(config['text_model_path'], map_location=device))
-      for p in text_model.parameters():
-        p.requires_grad = False
-      mention_model.load_state_dict(torch.load(config['mention_model_path']))
-      for p in mention_model.parameters():
-        p.requires_grad = False
-      coref_model.load_state_dict(torch.load(config['coref_model_path'], map_location=device))
-      for p in coref_model.parameters():
-        p.requires_grad = False
+  for seed in seeds:
+      config.random_seed = seed
+      config['random_seed'] = seed
+      fix_seed(config)
+  
+      # Initialize dataloaders 
+      train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
+      test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
 
-  # Training
-  train(text_model, mention_model, image_model, coref_model, train_loader, test_loader, args)
+      # Initialize models
+      text_model = nn.TransformerEncoderLayer(d_model=config.hidden_layer, nhead=1)
+      image_model = VisualEncoder(400, config.hidden_layer)
+
+      mention_model = SpanEmbedder(config, device)
+      if config['classifier'] == 'simple':
+          coref_model = SimplePairWiseClassifier(config).to(device)
+      elif config['classifier'] == 'attention':
+          coref_model = TransformerPairWiseClassifier(config).to(device)
+      else:
+          raise ValueError(f"Invalid classifier type {config['classifier']}")
+      
+      if config['training_method'] in ('pipeline', 'continue'):
+          text_model.load_state_dict(torch.load(config['text_model_path'], map_location=device))
+          for p in text_model.parameters():
+              p.requires_grad = False
+          mention_model.load_state_dict(torch.load(config['mention_model_path']))
+          for p in mention_model.parameters():
+              p.requires_grad = False
+          coref_model.load_state_dict(torch.load(config['coref_model_path'], map_location=device))
+          for p in coref_model.parameters():
+              p.requires_grad = False
+
+      # Training
+      n_params = 0
+      for p in text_model.parameters():
+          n_params += p.numel()
+
+      for p in mention_model.parameters():
+          n_params += p.numel()
+
+      for p in coref_model.parameters():
+          n_params += p.numel()
+
+      print('Number of parameters in coref classifier: {}'.format(n_params))
+      results = train(text_model, mention_model, image_model, coref_model, train_loader, test_loader, args, random_seed=seed)
+      pairwises.append(results['pairwise'])
+      mucs.append(results['muc'])
+      bcubeds.append(results['bcubed'])
+      ceafes.append(results['ceafe'])
+      avgs.append(results['avg'])
+
+  mean_pairwise, std_pairwise = np.mean(np.asarray(pairwises), axis=0), np.std(np.asarray(pairwises), axis=0)
+  mean_muc, std_muc = np.mean(np.asarray(mucs), axis=0), np.std(np.asarray(mucs), axis=0)
+  mean_bcubed, std_bcubed = np.mean(np.asarray(bcubeds), axis=0), np.std(np.asarray(bcubeds), axis=0)
+  mean_ceafe, std_ceafe = np.mean(np.asarray(ceafes), axis=0), np.std(np.asarray(ceafes), axis=0)
+  mean_avg, std_avg = np.mean(np.asarray(avgs), axis=0), np.std(np.asarray(avgs), axis=0)
+  print(f'Pairwise: precision {mean_pairwise[0]} +/- {std_pairwise[0]}, '
+        f'recall {mean_pairwise[1]} +/- {std_pairwise[1]}, '
+        f'f1 {mean_pairwise[2]} +/- {std_pairwise[2]}')
+  print(f'MUC: precision {mean_muc[0]} +/- {std_muc[0]}, '
+        f'recall {mean_muc[1]} +/- {std_muc[1]}, '
+        f'f1 {mean_muc[2]} +/- {std_muc[2]}')
+  print(f'Bcubed: precision {mean_bcubed[0]} +/- {std_bcubed[0]}, '
+        f'recall {mean_bcubed[1]} +/- {std_bcubed[1]}, '
+        f'f1 {mean_bcubed[2]} +/- {std_bcubed[2]}')
+  print(f'CEAFe: precision {mean_ceafe[0]} +/- {std_ceafe[0]}, '
+        f'recall {mean_ceafe[1]} +/- {std_ceafe[1]}, '
+        f'f1 {mean_ceafe[2]} +/- {std_ceafe[2]}')
+  print(f'CoNLL: precision {mean_avg[0]} +/- {std_avg[0]}, '
+        f'recall {mean_avg[1]} +/- {std_avg[1]}, '
+        f'f1 {mean_avg[2]} +/- {std_avg[2]}')

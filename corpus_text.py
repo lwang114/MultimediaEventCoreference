@@ -31,6 +31,50 @@ def get_all_token_mapping(start, end, max_token_num, max_mention_span):
         length.append(e-s+1)
     return start_mappings, end_mappings, span_mappings, length
 
+def get_all_mention_mapping(origin_candidate_start_ends,
+                            event_labels_dict,
+                            entity_labels_dict,
+                            event_to_roles,
+                            max_event_num,
+                            max_role_num,
+                            max_mention_num):
+    span_num = origin_candidate_start_ends[:max_mention_num].shape[0]
+    event_mappings = torch.zeros((max_event_num, max_mention_num))
+    entity_mappings = torch.zeros((max_mention_num, max_mention_num))
+    event_to_roles_mappings = torch.zeros((max_event_num, max_role_num, max_mention_num))
+    labels = torch.zeros(max_mention_num, dtype=torch.long)
+
+    span_to_idx = {tuple(origin_candidate_start_ends[i].tolist()):i for i in range(span_num)}
+    for i in range(span_num):
+        span = tuple(origin_candidate_start_ends[i].tolist())
+        used = set()
+        if span in event_labels_dict and not span in used:
+            labels[i] = event_labels_dict[span]
+            used.add(span) 
+        else:
+            labels[i] = entity_labels_dict[span]
+            
+    for event_idx, span in enumerate(sorted(event_labels_dict)):
+        if event_idx >= max_event_num:
+            break
+        span_idx = span_to_idx[span]
+        event_mappings[event_idx, span_idx] = 1.
+        for role_idx, span_role in enumerate(event_to_roles[span]):
+            if role_idx >= max_role_num or not span_role in span_to_idx:
+                continue
+            span_idx2 = span_to_idx[span_role]
+            event_to_roles_mappings[event_idx, role_idx, span_idx2] = 1.
+        
+    for entity_idx, span in enumerate(sorted(entity_labels_dict)):
+        if entity_idx >= max_mention_num:
+            break
+        if not span in span_to_idx:
+            continue
+        span_idx = span_to_idx[span]
+        entity_mappings[entity_idx, span_idx] = 1.
+    
+    return event_mappings, entity_mappings, event_to_roles_mappings, labels
+
 def fix_embedding_length(emb, L):
   size = emb.size()[1:]
   if emb.size(0) < L:
@@ -63,14 +107,15 @@ class TextFeatureDataset(Dataset):
     super(TextFeatureDataset, self).__init__()
     self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     self.max_token_num = config.get('max_token_num', 512)
-    self.max_span_num = config.get('max_span_num', 80)
+    self.max_span_num = config.get('max_span_num', 256)
+    self.max_event_num = config.get('max_event_num', 50)
+    self.max_role_num = config.get('max_role_num', 5)
     self.max_frame_num = config.get('max_frame_num', 500)
     self.max_mention_span = config.get('max_mention_span', 15)
     self.is_one_indexed = config.get('is_one_indexed', False)
     self.type_to_idx = type_to_idx
     self.role_to_idx = role_to_idx
     self.num_role_types = len(self.role_to_idx)
-    test_id_file = config.get('test_id_file', '')
     self.split = split
     self.config = config
 
@@ -85,23 +130,9 @@ class TextFeatureDataset(Dataset):
     bert_embed_file = '{}_bert_embeddings.npz'.format(doc_json.split('.')[0])
     self.docs_embeddings = np.load(bert_embed_file)
     self.feat_keys = sorted(self.docs_embeddings, key=lambda x:int(x.split('_')[-1]))
-    self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in documents]
-    self.doc_ids = ['_'.join(k.split('_')[:-1]) for k in self.feat_keys] 
-
-    if test_id_file:
-      with open(test_id_file) as f:
-        test_ids = ['_'.join(k.split('_')[:-1]) for k in f.read().strip().split()]
-
-      if split == 'train':
-        self.doc_ids = [doc_id for doc_id in self.doc_ids if not doc_id in test_ids]
-        self.feat_keys = [k for k in self.feat_keys if not '_'.join(k.split('_')[:-1]) in test_ids]
-      else:
-        self.doc_ids = [doc_id for doc_id in self.doc_ids if doc_id in test_ids]
-        self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in test_ids]
-      assert len(self.doc_ids) == len(self.feat_keys)
+    self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in documents] # XXX
+    self.doc_ids = ['_'.join(k.split('_')[:-1]) for k in self.feat_keys]
     
-    self.doc_ids = self.doc_ids # XXX
-    self.feat_keys = self.feat_keys # XXX
     documents = {doc_id:documents[doc_id] for doc_id in self.doc_ids}
     self.documents = documents
     print('Number of documents: {}'.format(len(self.doc_ids)))
@@ -111,10 +142,15 @@ class TextFeatureDataset(Dataset):
     self.origin_tokens, self.bert_tokens, self.bert_start_ends, clean_start_end_dict = self.tokenize(documents) 
 
     # Extract coreference cluster labels
-    self.label_dict, self.type_label_dict, self.argument_dict = self.create_dict_labels(mentions)
+    self.label_dict,\
+    self.event_to_roles,\
+    self.type_label_dict,\
+    self.type_to_idx = self.create_dict_labels(mentions)
 
     # Extract original mention spans
-    self.origin_candidate_start_ends = [np.asarray([[start, end] for start, end in sorted(self.label_dict[doc_id])]) for doc_id in self.doc_ids]
+    self.origin_candidate_start_ends = [np.asarray(sorted(self.label_dict[doc_id]['events'])+\
+                                                   sorted(self.label_dict[doc_id]['entities']))[:self.max_span_num]
+                                        for doc_id in self.doc_ids]
     for idx, doc_id in enumerate(self.doc_ids):
       for start_end in self.origin_candidate_start_ends[idx]:
         if np.max(start_end) >= len(clean_start_end_dict[doc_id]):
@@ -168,63 +204,38 @@ class TextFeatureDataset(Dataset):
     '''
     label_dict = collections.defaultdict(dict)
     type_label_dict = collections.defaultdict(dict)
-    argument_dict = collections.defaultdict(dict)
+    event_to_roles = collections.defaultdict(dict)
+    type_to_idx = {}
     id_to_span = {}
     for m in mentions:
         start = min(m['tokens_ids'])
         end = max(m['tokens_ids']) 
-        label_dict[m['doc_id']][(start, end)] = m['cluster_id']
+        if not m['doc_id'] in label_dict:
+            label_dict[m['doc_id']] = {'events':{}, 'entities':{}}
+            event_to_roles[m['doc_id']] = {}
+            type_label_dict[m['doc_id']] = {}
+            
         if 'entity_type' in m:
-          type_label_dict[m['doc_id']][(start, end)] = self.type_to_idx[m['entity_type']]
+            if not m['entity_type'] in type_to_idx:
+                type_to_idx[m['entity_type']] = len(type_to_idx)
+
+            if not m['m_id'] in id_to_span:
+                id_to_span[m['m_id']] = (start, end)
+            type_label_dict[m['doc_id']][(start, end)] = self.type_to_idx[m['entity_type']]
+            label_dict[m['doc_id']]['entities'][(start, end)] = m['cluster_id']
         else:
-          type_label_dict[m['doc_id']][(start, end)] = self.type_to_idx[m['event_type']]
-        id_to_span[m['m_id']] = (start, end) 
-          
-    # Extract event-argument graphs
-    for m in mentions:
-        if 'event_type' in m:
-            start = min(m['tokens_ids'])
-            end = max(m['tokens_ids'])
-            event_span = id_to_span[m['m_id']]
-            arguments = m['arguments']
-            argument_dict[m['doc_id']][(start, end)] = []
-            for a in arguments:
-                entity_id = a['entity_id']
-                role = a['role']
-                entity_span = id_to_span[entity_id]
-                argument_dict[m['doc_id']][(start, end)].append(list(entity_span)+[role])
-    return label_dict, type_label_dict, argument_dict
+            if not m['event_type'] in type_to_idx:
+                type_to_idx[m['event_type']] = len(type_to_idx)
+            type_label_dict[m['doc_id']][(start, end)] = self.type_to_idx[m['event_type']]
+            label_dict[m['doc_id']]['events'][(start, end)] = m['cluster_id']
+            
+            # Extract event-argument graphs
+            event_to_roles[m['doc_id']][(start, end)] = []
+            for a in m['arguments']:
+                a_start, a_end = id_to_span[a['entity_id']]
+                event_to_roles[m['doc_id']][(start, end)].append((a_start, a_end))
 
-  def create_adjacency_matrix(self, argument_dict, starts, ends, with_self_loop=True):
-    span_to_idx = {(start, end): span_idx for span_idx, (start, end) in enumerate(zip(starts, ends))}
-    adj_idxs = [[], [], []]
-    adj_vals = []
-    span_num = min(len(starts), self.max_span_num-1)
-    if with_self_loop:
-        adj_idxs[0].extend([0]*span_num)
-        adj_idxs[1].extend(list(range(span_num)))
-        adj_idxs[2].extend(list(range(span_num)))
-        adj_vals.extend([1.]*span_num)
-        
-    for event_span, arguments in argument_dict.items():
-        event_idx = span_to_idx[event_span]
-        if event_idx >= self.max_span_num:
-            continue
-        
-        for a in arguments:
-            r = self.role_to_idx[a[2]]
-            arg_idx = span_to_idx[(a[0], a[1])]
-            if arg_idx >= self.max_span_num:
-                continue
-            adj_idxs[0].extend([r, r])
-            adj_idxs[1].extend([event_idx, arg_idx])
-            adj_idxs[2].extend([arg_idx, event_idx])
-            adj_vals.extend([1., 1.])
-
-    adj_idxs = torch.LongTensor(adj_idxs)
-    adj_vals = torch.FloatTensor(adj_vals)
-    adjm = torch.sparse.FloatTensor(adj_idxs, adj_vals, torch.Size([self.num_role_types, self.max_span_num, self.max_span_num]))
-    return adjm
+    return label_dict, event_to_roles, type_label_dict, type_to_idx
 
 
   def __getitem__(self, idx):
@@ -236,13 +247,17 @@ class TextFeatureDataset(Dataset):
     :return width: LongTensor of size (max num. spans,)
     :return labels: LongTensor of size (max num. spans,) 
     '''
+    doc_id = self.doc_ids[idx]
+    event_labels_dict = self.label_dict[doc_id]['events']
+    entity_labels_dict = self.label_dict[doc_id]['entities']
+    event_to_roles = self.event_to_roles[doc_id]
+    event_num = len(event_labels_dict)
+    
     # Extract the original spans of the current doc
     origin_candidate_start_ends = self.origin_candidate_start_ends[idx]
     candidate_starts = self.candidate_start_ends[idx][:, 0]
     candidate_ends = self.candidate_start_ends[idx][:, 1]
     span_num = candidate_starts.shape[0]
-    # candidate_starts = torch.LongTensor(candidate_starts)
-    # candidate_ends = torch.LongTensor(candidate_ends)    
 
     # Extract the current doc embedding
     doc_len = len(self.bert_tokens[idx])
@@ -263,6 +278,16 @@ class TextFeatureDataset(Dataset):
                            bert_candidate_ends,
                            self.max_token_num,
                            self.max_mention_span)
+
+    event_mappings, entity_mappings, event_to_roles_mappings, labels =\
+     get_all_mention_mapping(origin_candidate_start_ends,
+                             event_labels_dict,
+                             entity_labels_dict,
+                             event_to_roles,
+                             self.max_event_num,
+                             self.max_role_num,
+                             self.max_span_num)
+    
     width = torch.LongTensor([min(w, self.max_mention_span) for w in width])
 
     # Pad/truncate the outputs to max num. of spans
@@ -272,31 +297,24 @@ class TextFeatureDataset(Dataset):
     width = fix_embedding_length(width.unsqueeze(1), self.max_span_num).squeeze(1)
  
     # Extract coreference cluster labels
-    labels = [int(self.label_dict[self.doc_ids[idx]][(start, end)]) for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
-    type_labels = [int(self.type_label_dict[self.doc_ids[idx]][(start, end)]) for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
     labels = torch.LongTensor(labels)
-    type_labels = torch.LongTensor(type_labels)
     labels = fix_embedding_length(labels.unsqueeze(1), self.max_span_num).squeeze(1)
-    type_labels = fix_embedding_length(type_labels.unsqueeze(1), self.max_span_num).squeeze(1)
     text_mask = torch.FloatTensor([1. if j < doc_len else 0 for j in range(self.max_token_num)])
-    span_mask = torch.FloatTensor([1. if i < span_num else 0 for i in range(self.max_span_num)])
+    span_mask = continuous_mappings.sum(dim=1)
 
-    # Compute adjacency matrix
-    # if origin_candidate_start_ends.shape[0] > self.max_span_num:
-    #     print('{} exceeds the limit on the number of spans: {} > {}'.format(self.doc_ids[idx],
-    #                                                                         origin_candidate_start_ends.shape[0],
-    #                                                                         self.max_span_num))
-    adjm = self.create_adjacency_matrix(self.argument_dict[self.doc_ids[idx]],
-                                        origin_candidate_start_ends[:, 0],
-                                        origin_candidate_start_ends[:, 1]).to_dense()
-
+    # Extract type labels
+    type_labels = [int(self.type_label_dict[self.doc_ids[idx]][(start, end)]) for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
+    type_labels = torch.LongTensor(type_labels)
+    type_labels = fix_embedding_length(type_labels.unsqueeze(1), self.max_span_num).squeeze(1)
     return doc_embeddings,\
            start_mappings,\
            end_mappings,\
            continuous_mappings,\
+           event_mappings,\
+           entity_mappings,\
+           event_to_roles_mappings,\
            width, labels,\
            type_labels,\
-           adjm,\
            text_mask, span_mask
 
   def __len__(self):

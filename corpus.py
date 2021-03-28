@@ -80,7 +80,7 @@ class SupervisedGroundingFeatureDataset(Dataset):
         self.imgs_embeddings = np.load('{}_{}.npz'.format(doc_json.split('.')[0], self.img_feat_type))
        
     # Extract word embeddings
-    bert_embed_file = '{}_bert_embeddings.npz'.format(doc_json.split('.')[0])
+    bert_embed_file = '{}_{}.npz'.format(doc_json.split('.')[0], config.bert_model)
     self.docs_embeddings = np.load(bert_embed_file)
     
     # Extract coreference cluster labels

@@ -122,7 +122,6 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
         if not mention_id in entity2coref:
           n_entity_cluster += 1
           entity2coref[mention_id] = n_entity_cluster + n_event_cluster 
-
       
     coref2event = collections.defaultdict(list)
     coref2entity = collections.defaultdict(list)

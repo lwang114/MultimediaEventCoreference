@@ -426,7 +426,7 @@ class StarSimplePairWiseClassifier(nn.Module):
     gate_probs = torch.sigmoid(self.classifier_feature_gate(
                                 torch.cat([c[:, first_idxs],
                                            c[:, second_idxs]], dim=-1))).squeeze(-1)
-    return gate_probs * scores_c + (1 - gate_probs) * scores_neighbors
+    return scores_c # XXX gate_probs * scores_c + (1 - gate_probs) * scores_neighbors
 
   def pairwise_score(self, first, second):
       batch_size = first.size(0)
@@ -554,7 +554,7 @@ class StarTransformerClassifier(nn.Module):
   def pairwise_score(self, first, second):
       return torch.sum(first * second, dim=-1)
 
-  def alignment_score(self, score_mat, mask, dim=-1, metric='ot'):
+  def alignment_score(self, score_mat, mask, dim=-1, metric='wasserstein'):
       device = score_mat.device 
       batch_size = score_mat.size(0)
       if metric == 'greedy':
@@ -563,7 +563,7 @@ class StarTransformerClassifier(nn.Module):
         mask = (mask > 0)
         max_scores = util.masked_max(score_mat, mask, dim=dim)
         return util.masked_mean(max_scores, mask2, dim=-1)
-      elif metric == 'ot':
+      elif metric == 'wasserstein':
         score_mat_arr = torch.sigmoid(score_mat).cpu().detach().numpy()
         mask = mask.cpu().detach().numpy()
 

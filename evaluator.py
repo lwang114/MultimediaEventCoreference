@@ -19,8 +19,8 @@ class Evaluation:
 
 
 
-        self.precision = self.tp_num / (self.tp_num + self.fp_num) if self.tp_num + self.fp_num != 0 else 0
-        self.recall = self.tp_num / (self.tp_num + self.fn_num) if self.tp_num + self.fn_num != 0 else 0
+        self.precision = self.tp_num / (self.tp_num + self.fp_num) if self.tp_num + self.fp_num != 0 else torch.zeros(1, device=predictions.device)
+        self.recall = self.tp_num / (self.tp_num + self.fn_num) if self.tp_num + self.fn_num != 0 else torch.zeros(1, device=predictions.device)
 
 
     def get_fp(self):
@@ -45,7 +45,7 @@ class Evaluation:
         return self.recall
 
     def get_f1(self):
-        return 2 * self.precision * self.recall / (self.precision + self.recall) if (self.precision + self.recall) > 0 else 0
+        return 2 * self.precision * self.recall / (self.precision + self.recall) if (self.precision + self.recall) > 0 else torch.zeros(1, device=self.precision.device)
 
 class RetrievalEvaluation:
   def __init__(self, predictions, labels=None):

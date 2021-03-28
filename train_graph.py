@@ -34,7 +34,7 @@ def get_optimizer(config, models):
     parameters = []
     for model in models:
         parameters += [p for p in model.parameters() if p.requires_grad]
-
+        
     if config.optimizer == "adam":
         return optim.Adam(parameters, lr=config.learning_rate, weight_decay=config.weight_decay, eps=config.adam_epsilon)
     elif config.optimizer == "adamw":
@@ -117,7 +117,6 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
   config = pyhocon.ConfigFactory.parse_file(args.config)
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
   torch.set_grad_enabled(True)
-  fix_seed(config)
   
   if not isinstance(text_model, torch.nn.DataParallel):
     text_model = nn.DataParallel(text_model)
@@ -150,7 +149,7 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
   multimedia_criterion = TripletLoss(config) 
 
   # Set up the optimizer  
-  optimizer = get_optimizer(config, [text_model, image_model, coref_model])
+  optimizer = get_optimizer(config, [text_model, image_model, mention_model, coref_model])
    
   # Start training
   total_loss = 0.
@@ -590,6 +589,8 @@ if __name__ == '__main__':
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
   # Set up logger
   config = pyhocon.ConfigFactory.parse_file(args.config)
+  fix_seed(config)
+  
   if not args.exp_dir:
     args.exp_dir = config['model_path']
   else:
@@ -628,16 +629,28 @@ if __name__ == '__main__':
   coref_model = StarSimplePairWiseClassifier(config).to(device)
 
   if config['training_method'] in ('pipeline', 'continue'):
-      # text_model.load_state_dict(torch.load(config['text_model_path'], map_location=device))
-      # for p in text_model.parameters():
-      #   p.requires_grad = False
+      text_model.load_state_dict(torch.load(config['text_model_path'], map_location=device))
+      for p in text_model.parameters():
+        p.requires_grad = False
       # image_model.load_state_dict(torch.load(config['image_model_path'], map_location=device))
       mention_model.load_state_dict(torch.load(config['mention_model_path']))
       for p in mention_model.parameters():
         p.requires_grad = False
       coref_model.load_state_dict(torch.load(config['coref_model_path'], map_location=device))
-      for p in coref_model.parameters():
+      for p in coref_model.parameters():  
         p.requires_grad = False
-
+        
   # Training
+  n_params = 0
+  for p in text_model.parameters():
+      n_params += p.numel()
+  
+  for p in mention_model.parameters():
+      n_params += p.numel()
+
+  for child in coref_model.children():
+      for p in child.parameters():
+          n_params += p.numel()
+
+  print('Number of parameters in coref classifier: {}'.format(n_params))
   train(text_model, mention_model, image_model, coref_model, train_loader, test_loader, args)
