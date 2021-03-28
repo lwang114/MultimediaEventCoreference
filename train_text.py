@@ -353,7 +353,7 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
 
             pred_clusters_str, gold_clusters_str = conll_eval.make_output_readable(pred_event_clusters+pred_entity_clusters,
                                                                                    gold_event_clusters+gold_entity_clusters,
-                                                                                   tokens)
+                                                                                   tokens, arguments=test_loader.dataset.event_to_roles[doc_id])
             token_str = ' '.join(tokens).replace('\n', '')
             f_out.write(f"{doc_id}: {token_str}\n")
             f_out.write(f'Pred: {pred_clusters_str}\n')

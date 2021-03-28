@@ -120,7 +120,13 @@ class CoNLLEvaluation:
     avg = self.scorer.get_metric()
     return muc, b_cubed, ceafe, avg
 
-  def make_output_readable(self, pred_clusters, gold_clusters, tokens):
-    pred_clusters_str = [[' '.join(tokens[m[0]:m[1]+1]) for m in cluster] for cluster in pred_clusters]
-    gold_clusters_str = [[' '.join(tokens[m[0]:m[1]+1]) for m in cluster] for cluster in gold_clusters]
+  def make_output_readable(self, pred_clusters, gold_clusters, tokens, arguments=None):
+    if arguments:
+      pred_clusters_str = [[' '.join(tokens[m[0]:m[1]+1]) for m in cluster] for cluster in pred_clusters]
+      gold_clusters_str = [[[' '.join(tokens[m[0]:m[1]+1]), [' '.join(tokens[a[0]:a[1]+1]) for a in arguments.get(m, [])]] for m in cluster] for cluster in gold_clusters]
+    else:
+      pred_clusters_str = [[' '.join(tokens[m[0]:m[1]+1]) for m in cluster] for cluster in pred_clusters]
+      gold_clusters_str = [[' '.join(tokens[m[0]:m[1]+1]) for m in cluster] for cluster in gold_clusters]
     return pred_clusters_str, gold_clusters_str
+
+
