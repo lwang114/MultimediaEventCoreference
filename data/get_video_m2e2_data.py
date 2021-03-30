@@ -243,6 +243,10 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, annotation_
   :param split: str, 'train' or 'test',
   :param in_feat_file: str, frame-level video feature file,
   :param mapping_file: str, filename of a mapping from doc id to video id
+  :param duration_file: str, filename of duration info of the videos of the format
+      {
+        'duration_second': float,
+        }
   :param annotation_file: str, filename of the visual event annotations of the format
       {
         [description_id]: list of mapping of 
@@ -258,6 +262,7 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, annotation_
   :return out_prefix: str
   '''
   mapping_dict = json.load(open(mapping_file))
+  dur_dict = json.load(open(duration_file))
   ann_dict = json.load(open(annotation_file))
   id2desc = {v['id'].split('v=')[-1]:k for k, v in mapping_dict.items()}
   doc_ids = sorted(id2desc)
@@ -279,7 +284,6 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, annotation_
     is_csv_used[desc+'.csv'] = 1
     
     # Extract frame-level features
-    '''
     frame_feats = []
     skip_header = 1
     for line in codecs.open(csv_file, 'r', 'utf-8'):
@@ -292,7 +296,7 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, annotation_
         break
       frame_feats.append([float(x) for x in segments[-400:]])
     frame_feats = np.asarray(frame_feats)
-    '''
+    nframes = frame_feats.shape[0] 
 
     # Extract event features
     event_label = []
@@ -306,17 +310,16 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, annotation_
       else:
         event_frequency[event_type] += 1 
       start_time, end_time = event_dict['Temporal_Boundary']
-      start, end = int(start_time * 24 / 15.), int(end_time * 24 / 15.)
+      start, end = int(start_time / dur * nframes), int(end_time / dur * nframes)
       
       # Extract the top k subspace vectors
-      '''
       if end - start + 1 > k:
         event_feat.append(PCA(n_components=k).fit(frame_feats[start:end+1]).components_)
       else:
         feat = PCA(n_components=end-start+1).fit(frame_feats[start:end+1]).components_
         feat = np.concatenate([feat, np.zeros((k-(end-start+1), feat.shape[-1]))], axis=0)
         event_feat.append(feat)
-      '''
+    
     # event_feat = np.stack(event_feat, axis=0)
     feat_id = '{}_{}'.format(doc_id, idx)
     
@@ -520,5 +523,6 @@ if __name__ == '__main__':
     json.dump(event_mentions_test, open(os.path.join(out_dir, 'test_events.json'), 'w'), indent=2)
   elif args.task == 6:
     annotation_file = os.path.join(data_dir, 'master.json')
+    duration_file = os.path.join(data_dir, 'anet_anno_train.json')
     out_prefix = os.path.join(data_dir, 'train_mmaction_event_feat')
     extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, annotation_file, out_prefix=out_prefix)
