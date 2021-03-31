@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 import json
+import time
 import allennlp.nn.util as util 
 from IPOT.ipot import ipot_WD  
 
@@ -378,7 +379,7 @@ class StarSimplePairWiseClassifier(nn.Module):
         
     self.pairwise_mlp = nn.Sequential(
             nn.Dropout(config.dropout),
-            nn.Linear(self.input_layer, self.hidden_layer),
+            nn.Linear(3*self.input_layer, self.hidden_layer),
             nn.ReLU(),
             nn.Linear(self.hidden_layer, self.hidden_layer),
             nn.Dropout(config.dropout),
@@ -389,7 +390,8 @@ class StarSimplePairWiseClassifier(nn.Module):
     self.classifier_feature_gate = nn.Linear(2*self.input_layer, 1)
     
   def forward(self, x, center_map, neighbor_map,
-              first_idxs=None, second_idxs=None):
+              first_idxs=None, second_idxs=None,
+              edge_labels=None):
     '''
     :param x: FloatTensor of size (batch size, max num. of spans, embed dim)
     :param center_map: FloatTensor of size (batch size, max num. of centers, max num. of spans)
@@ -399,41 +401,66 @@ class StarSimplePairWiseClassifier(nn.Module):
     batch_size = x.size(0)
     neighbor_mask = neighbor_map.sum(-1)
     
-    c = torch.matmul(center_map, x)
+    # (batch size, max num. of centers, embed dim)
+    c = torch.matmul(center_map, x) 
+    
     # (batch size, max num. of centers, max num. of roles, embed dim)
     neighbors = torch.matmul(neighbor_map, x.unsqueeze(1))
 
     n = c.size(1)
     n_neighbors = neighbors.size(-2)
-    
+
     if first_idxs is None or second_idxs is None:
       first_idxs, second_idxs = zip(*list(combinations(range(n), 2)))
     first_arg_idxs, second_arg_idxs = zip(*list((i, j) for i in range(n_neighbors) for j in range(n_neighbors)))
     n_pairs = len(first_idxs)
     n_arg_pairs = len(first_arg_idxs)
     
+    # (batch size, max num. of pairs)
     scores_c = self.pairwise_score(c[:, first_idxs], c[:, second_idxs])
     scores_neighbors = []
 
-    arg_pair_masks = neighbor_mask[:, first_idxs].unsqueeze(-1) * neighbor_mask[:, second_idxs].unsqueeze(-2)
-    scores_neighbors = self.alignment_score(
-          self.pairwise_score(neighbors[:, first_idxs][:, :, first_arg_idxs].view(batch_size*n_pairs, n_arg_pairs, -1),
-                              neighbors[:, second_idxs][:, :, second_arg_idxs].view(batch_size*n_pairs, n_arg_pairs, -1)).\
-        view(batch_size*n_pairs, n_neighbors, n_neighbors),
-        arg_pair_masks.view(batch_size*n_pairs, n_neighbors, n_neighbors), metric=self.metric)
+    arg_pair_masks = neighbor_mask[:, first_idxs].unsqueeze(-1) *\
+                     neighbor_mask[:, second_idxs].unsqueeze(-2)
+
+    pairwise_scores = self.pairwise_score(neighbors[:, first_idxs][:, :, first_arg_idxs].view(batch_size*n_pairs, n_arg_pairs, -1),
+                                          neighbors[:, second_idxs][:, :, second_arg_idxs].view(batch_size*n_pairs, n_arg_pairs, -1))
+
+    if edge_labels is not None:
+        first_edge_labels = edge_labels[:, first_idxs].unsqueeze(-1)
+        second_edge_labels = edge_labels[:, second_idxs].unsqueeze(-2)
+        pairwise_edge_labels = (first_edge_labels == second_edge_labels) &\
+                               (first_edge_labels != 0) &\
+                               (second_edge_labels != 0)
+        # json.dump(first_edge_labels.cpu().detach().numpy().tolist(), open('first_edge_labels_{}.json'.format(time.strftime('%H_%M_%S'.format(time.localtime()))), 'w'), indent=2)
+        # json.dump(second_edge_labels.cpu().detach().numpy().tolist(), open('second_edge_labels_{}.json'.format(time.strftime('%H_%M_%S'.format(time.localtime()))), 'w'), indent=2)
+        # json.dump(pairwise_edge_labels.cpu().detach().numpy().tolist(), open('pairwise_edge_labels_{}.json'.format(time.strftime('%H_%M_%S'.format(time.localtime()))), 'w'), indent=2) # XXX
+        
+        pairwise_edge_labels = pairwise_edge_labels.float()
+        scores_neighbors = self.alignment_score(
+            pairwise_scores.view(batch_size*n_pairs, n_neighbors, n_neighbors),
+            pairwise_edge_labels.view(batch_size*n_pairs, n_neighbors, n_neighbors),
+            metric="greedy")
+    else:
+        scores_neighbors = self.alignment_score(
+            pairwise_scores.view(batch_size*n_pairs, n_neighbors, n_neighbors),
+            arg_pair_masks.view(batch_size*n_pairs, n_neighbors, n_neighbors),
+            metric=self.metric)
     scores_neighbors = scores_neighbors.view(batch_size, n_pairs)
     
     gate_probs = torch.sigmoid(self.classifier_feature_gate(
                                 torch.cat([c[:, first_idxs],
                                            c[:, second_idxs]], dim=-1))).squeeze(-1)
-    return scores_c # XXX gate_probs * scores_c + (1 - gate_probs) * scores_neighbors
+    return gate_probs * scores_c + (1 - gate_probs) * scores_neighbors
 
   def pairwise_score(self, first, second):
       batch_size = first.size(0)
       num_pairs = first.size(1)
-      return self.pairwise_mlp(first.view(-1, self.input_layer) *\
-                               second.view(-1, self.input_layer)).view(batch_size, num_pairs)
-
+      first = first.view(-1, self.input_layer)
+      second = second.view(-1, self.input_layer)
+      scores = self.pairwise_mlp(torch.cat((first, second, first * second), dim=1)).view(batch_size, num_pairs)
+      return scores
+      
   def alignment_score(self, score_mat, mask, dim=-1, metric='greedy'):
       device = score_mat.device 
       batch_size = score_mat.size(0)
@@ -465,15 +492,23 @@ class StarSimplePairWiseClassifier(nn.Module):
       else:
         raise ValueError(f'Invalid metric {metric}')
 
-  def predict_cluster(self, x, center_map, neighbor_map, first_idxs, second_idxs): 
+  def predict_cluster(self, x,
+                      center_map,
+                      neighbor_map,
+                      first_idxs,
+                      second_idxs,
+                      edge_labels=None): 
     span_num = center_map.size(0)
     thres = 0
     
     # Compute pairwise scores for mention pairs specified
+    if edge_labels is not None:
+        edge_labels = edge_labels.unsqueeze(0)
     scores = self(x.unsqueeze(0),
                   center_map.unsqueeze(0),
                   neighbor_map.unsqueeze(0),
-                  first_idxs, second_idxs).squeeze(0)
+                  first_idxs, second_idxs,
+                  edge_labels=edge_labels).squeeze(0)
     antecedents = -1 * np.ones(span_num, dtype=np.int64)
 
     # Antecedent prediction

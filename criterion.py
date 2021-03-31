@@ -75,10 +75,10 @@ class TripletLoss(nn.Module):
     elif self.simtype == 'max_mean':
       return M.max(0)[0].mean()
 
-  def retrieve(self, text_outputs, image_outputs, text_masks, image_masks):
+  def retrieve(self, text_outputs, image_outputs, text_masks, image_masks, k=10):
     n = len(text_outputs)
-    nF = text_masks.sum(-1)
-    nR = image_masks.sum(-1) 
+    nF = text_masks.sum(-1).to(torch.int)
+    nR = image_masks.sum(-1).to(torch.int)
 
     S = torch.zeros((n, n), dtype=torch.float, requires_grad=False)
     for s_idx in range(n):
@@ -86,7 +86,7 @@ class TripletLoss(nn.Module):
         S[s_idx, v_idx] = self.matchmap_similarity(
                             self.compute_matchmap(text_outputs[s_idx][:nF[s_idx]],
                                                   image_outputs[v_idx][:nR[v_idx]])
-                            ).to(device)
+                            )
 
     _, I2S_idxs = S.topk(k, 0)
     _, S2I_idxs = S.topk(k, 1)

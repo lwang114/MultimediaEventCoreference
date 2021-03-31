@@ -208,7 +208,7 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
                                     mention_output[idx, second_text_idx[idx]]))
       scores = torch.cat(scores).squeeze(1)
       loss = criterion(scores, pairwise_text_labels)
-      # loss = loss + multimedia_criterion(doc_embeddings, video_output, text_mask, video_mask) # XXX
+      loss = loss + multimedia_criterion(doc_embeddings, video_output, text_mask, video_mask) # XXX
       loss = loss + multimedia_criterion(text_output, video_output, text_mask, video_mask)
       
       loss.backward()
@@ -247,7 +247,7 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
           torch.save(coref_model.module.state_dict(), '{}/best_coref_model-{}.pth'.format(config['model_path'], config['random_seed']))
         print('Best text coreference F1={}'.format(best_text_f1))
       if task in ('retrieval', 'both'):
-        I2S_r10, S2I_r10 = test_retrieve(text_model, image_model, grounding_model, test_loader, args)
+        I2S_r10, S2I_r10 = test_retrieve(text_model, image_model, test_loader, args)
         if (I2S_r10 + S2I_r10) / 2 > best_retrieval_recall:
           best_retrieval_recall = (I2S_r10 + S2I_r10) / 2 
         print('Best avg. Recall@10={}'.format((I2S_r10 + S2I_r10) / 2))
@@ -376,7 +376,7 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
         return results
 
 
-def test_retrieve(text_model, image_model, grounding_model, test_loader, args):
+def test_retrieve(text_model, image_model, test_loader, args):
   config = pyhocon.ConfigFactory.parse_file(args.config)
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
   text_embeddings = []
@@ -385,12 +385,14 @@ def test_retrieve(text_model, image_model, grounding_model, test_loader, args):
   video_masks = []
   text_model.eval()
   image_model.eval()
-  criterion = TripletLoss()
+  criterion = TripletLoss(config)
   
   with torch.no_grad():
     pred_dicts = []
     for i, batch in enumerate(test_loader):
-      doc_embeddings, start_mappings, end_mappings, continuous_mappings,\
+      doc_embeddings,\
+      start_mappings, end_mappings,\
+      continuous_mappings,\
       width, videos,\
       text_labels, type_labels, img_labels,\
       text_mask, span_mask, video_mask = batch   
@@ -418,15 +420,22 @@ def test_retrieve(text_model, image_model, grounding_model, test_loader, args):
 
       text_output = text_output.cpu().detach()
       video_output = video_output.cpu().detach()
-      span_mask = span_mask.cpu().detach()
+      text_mask = text_mask.cpu().detach()
       video_mask = video_mask.cpu().detach()
 
       text_embeddings.extend(torch.split(text_output, 1))
       video_embeddings.extend(torch.split(video_output, 1))
       text_masks.extend(torch.split(text_mask, 1))
       video_masks.extend(torch.split(video_mask, 1))
-
-    I2S_idxs, S2I_idxs = criterion.retrieve(text_embeddings, video_embeddings, text_masks, video_masks, k=10)
+    text_embeddings = torch.cat(text_embeddings)
+    video_embeddings = torch.cat(video_embeddings)
+    text_masks = torch.cat(text_masks)
+    video_masks = torch.cat(video_masks)
+    
+    I2S_idxs, S2I_idxs = criterion.retrieve(text_embeddings,
+                                            video_embeddings,
+                                            text_masks, video_masks,
+                                            k=10)
     with open(os.path.join(config['model_path'], 'I2S.txt'), 'w') as f_i2s,\
          open(os.path.join(config['model_path'], 'S2I.txt'), 'w') as f_s2i:
       for idx, (i2s_idxs, s2i_idxs) in enumerate(zip(I2S_idxs.cpu().detach().numpy().tolist(), S2I_idxs.cpu().detach().numpy().tolist())):

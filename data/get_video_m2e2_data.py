@@ -5,7 +5,6 @@ import codecs
 import os
 import collections
 from copy import deepcopy
-from conll import write_output_file
 from nltk.translate import bleu_score
 from nltk.metrics.scores import precision, recall, f_measure 
 from sklearn.decomposition import PCA
@@ -205,39 +204,7 @@ def get_mention_doc(data_json, out_prefix, inclusive=False):
   json.dump(events, codecs.open(out_prefix+'_events.json', 'w', 'utf-8'), indent=4, sort_keys=True)
   json.dump(entities+events, codecs.open(out_prefix+'_mixed.json', 'w', 'utf-8'), indent=4, sort_keys=True)
 
-def save_gold_conll_files(doc_json, mention_json, dir_path):
-  documents = json.load(open(doc_json))
-  mentions = json.load(open(mention_json))
-
-  # Extract mention dicts
-  label_dict = collections.defaultdict(dict)
-  for m in mentions:
-    if len(m['tokens_ids']) == 0:
-      label_dict[m['doc_id']][(-1, -1)] = m['cluster_id']
-    else:
-      start = min(m['tokens_ids'])
-      end = max(m['tokens_ids'])
-      label_dict[m['doc_id']][(start, end)] = m['cluster_id']
-  
-  doc_ids = sorted(documents)
-  for doc_id in doc_ids:
-    document = documents[doc_id]
-    cur_label_dict = label_dict[doc_id]
-    start_ends = np.asarray([[start, end] for start, end in sorted(cur_label_dict)])
-    starts = start_ends[:, 0]
-    ends = start_ends[:, 1]
-
-    # Extract clusters
-    clusters = collections.defaultdict(list)
-    for m_idx, span in enumerate(sorted(cur_label_dict)):
-      cluster_id = cur_label_dict[span]
-      clusters[cluster_id].append(m_idx)
-    non_singletons = {}
-    non_singletons = {cluster: ms for cluster, ms in clusters.items() if len(ms) > 1}
-    doc_name = doc_id
-    write_output_file({doc_id:document}, non_singletons, [doc_id]*len(cur_label_dict), starts, ends, dir_path, doc_name)
-
-def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, annotation_file, out_prefix='mmaction_event_feats', k=5):
+def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_file, annotation_file, out_prefix='mmaction_event_feats', k=5):
   ''' Extract visual event embeddings
   :param config: str, config file for the dataset,
   :param split: str, 'train' or 'test',
@@ -272,7 +239,6 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, annotation_
   event_labels = {}
   event_frequency = {}
   for idx, doc_id in enumerate(doc_ids): # XXX
-    print(idx, doc_id)
     # Convert the .csv file to numpy array
     desc = id2desc[doc_id]
     for punct in PUNCT:
@@ -302,6 +268,7 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, annotation_
     event_label = []
     event_feat = []
 
+    dur = dur_dict[desc]['duration_second']
     for event_dict in ann_dict[desc+'.mp4']:
       event_type = event_dict['Event_Type']
       event_label.append(event_type)
@@ -313,15 +280,20 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, annotation_
       start, end = int(start_time / dur * nframes), int(end_time / dur * nframes)
       
       # Extract the top k subspace vectors
+      '''
       if end - start + 1 > k:
         event_feat.append(PCA(n_components=k).fit(frame_feats[start:end+1]).components_)
-      else:
+      elif end - start:
         feat = PCA(n_components=end-start+1).fit(frame_feats[start:end+1]).components_
         feat = np.concatenate([feat, np.zeros((k-(end-start+1), feat.shape[-1]))], axis=0)
         event_feat.append(feat)
-    
-    # event_feat = np.stack(event_feat, axis=0)
+      else:
+        event_feat.append(np.tile(frame_feats[start][np.newaxis], (k, 1)))
+      '''
+      event_feat.append(frame_feats[start:end+1])
+    event_feat = np.concatenate(event_feat, axis=0)
     feat_id = '{}_{}'.format(doc_id, idx)
+    print(feat_id, event_feat.shape)
     
     event_labels[feat_id] = np.asarray(event_label)
     event_feats[feat_id] = event_feat
@@ -447,7 +419,7 @@ if __name__ == '__main__':
   parser.add_argument('--task', type=int)
   args = parser.parse_args()
 
-  data_dir = 'video_m2e2_old/mentions/'
+  data_dir = 'video_m2e2/mentions/'
   mapping_file = 'video_m2e2/video_m2e2.json'
   test_desc_file = 'video_m2e2/unannotatedVideos_textEventCount.json'
   data_json = 'video_m2e2/grounding_video_m2e2.json'
@@ -467,6 +439,8 @@ if __name__ == '__main__':
   elif args.task == 1:
     save_gold_conll_files(out_prefix+'.json', out_prefix+'_mixed.json', os.path.join(data_dir, 'gold')) 
   elif args.task == 2:
+    data_dir = 'video_m2e2/mentions'
+    csv_dir = os.path.join(data_dir, 'mmaction_feat')
     out_prefix = '{}/{}'.format(data_dir, csv_dir.split('/')[-1])
     extract_image_embeddings(data_dir, csv_dir, mapping_file, out_prefix)
   elif args.task == 3:
@@ -482,7 +456,7 @@ if __name__ == '__main__':
     compute_bleu_similarity(doc_json, mapping_file, out_prefix)
   elif args.task == 5:
     # Random split
-    out_dir = 'video_m2e2/mentions/'
+    out_dir = 'video_m2e2_old/mentions/'
     if not os.path.exists(out_dir):
       os.makedirs(out_dir)
 
@@ -522,7 +496,15 @@ if __name__ == '__main__':
     json.dump(entity_mentions_test, open(os.path.join(out_dir, 'test_entities.json'), 'w'), indent=2)
     json.dump(event_mentions_test, open(os.path.join(out_dir, 'test_events.json'), 'w'), indent=2)
   elif args.task == 6:
-    annotation_file = os.path.join(data_dir, 'master.json')
-    duration_file = os.path.join(data_dir, 'anet_anno_train.json')
+    annotation_file = os.path.join(data_dir, '../master.json')
+    duration_file = os.path.join(data_dir, '../anet_anno.json')
+    if not os.path.exists(duration_file):
+      train_duration_file = os.path.join(data_dir, '../anet_anno_train.json')
+      test_duration_file = os.path.join(data_dir, '../anet_anno_val.json')
+      train_dur_dict = json.load(open(train_duration_file))
+      test_dur_dict = json.load(open(test_duration_file))
+      train_dur_dict.update(test_dur_dict)
+      json.dump(train_dur_dict, open(duration_file, 'w'), indent=2)
+    
     out_prefix = os.path.join(data_dir, 'train_mmaction_event_feat')
-    extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, annotation_file, out_prefix=out_prefix)
+    extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_file, annotation_file, out_prefix=out_prefix)

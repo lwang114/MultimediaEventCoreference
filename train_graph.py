@@ -174,7 +174,7 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
       event_to_roles_mappings,\
       width, videos,\
       text_labels, type_labels,\
-      img_labels,\
+      role_labels, img_labels,\
       text_mask, span_mask, video_mask = batch   
 
       B = doc_embeddings.size(0)     
@@ -190,6 +190,7 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
       videos = videos.to(device)
       text_labels = text_labels.to(device)
       type_labels = type_labels.to(device)
+      role_labels = role_labels.to(device)
       img_labels = img_labels.to(device)
       text_mask = text_mask.to(device)
       span_mask = span_mask.to(device)
@@ -200,7 +201,7 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
       entity_labels = torch.bmm(entity_mappings, text_labels.unsqueeze(-1).float()).squeeze(-1).long()
       first_event_idx, second_event_idx, pairwise_event_labels = get_pairwise_text_labels(event_labels, is_training=False, device=device)
       first_entity_idx, second_entity_idx, pairwise_entity_labels = get_pairwise_text_labels(entity_labels, is_training=False, device=device)
- 
+      
       pairwise_grounding_labels = pairwise_grounding_labels.to(torch.float)
       pairwise_event_labels = pairwise_event_labels.to(torch.float).flatten()
       pairwise_entity_labels = pairwise_entity_labels.to(torch.float).flatten()
@@ -213,50 +214,35 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
                                      start_mappings, end_mappings,
                                      continuous_mappings, width,
                                      type_labels=type_labels)
-
-      '''
-      event_scores, entity_scores = [], []
-      for idx in range(B):
-          event_scores.append(coref_model(mention_output[idx].unsqueeze(0),
-                                          event_mappings[idx].unsqueeze(0), 
-                                          event_to_roles_mappings[idx].unsqueeze(0),
-                                          first_event_idx[idx],
-                                          second_event_idx[idx]).squeeze(0))
-
-      for idx in range(B):
-          entity_scores.append(coref_model(mention_output[idx].unsqueeze(0),
-                                           entity_mappings[idx].unsqueeze(0),
-                                           entity_mappings[idx].unsqueeze(1).unsqueeze(0),
-                                           first_entity_idx[idx],
-                                           second_entity_idx[idx]).squeeze(0))
-      event_scores = torch.cat(event_scores)
-      entity_scores = torch.cat(entity_scores)
-      '''
+        
       if first_grounding_idx is None or (first_event_idx is None and first_entity_idx is None):
         continue
 
       if not first_event_idx is None:
+          # Size: (batch size, num. event pairs)
           event_scores = coref_model(mention_output,
-                                 event_mappings,
-                                 event_to_roles_mappings,
-                                 first_event_idx[0],
-                                 second_event_idx[0]).flatten()
+                                     event_mappings,
+                                     event_to_roles_mappings,
+                                     first_event_idx[0],
+                                     second_event_idx[0],
+                                     edge_labels=role_labels).flatten()
           loss_event = criterion(event_scores, pairwise_event_labels)
       else:
           loss_event = torch.zeros((mention_output.size(0),), dtype=torch.float, device=device)
           
       if not first_entity_idx is None:
+          # Size: (batch size, num. entity pairs)
           entity_scores = coref_model(mention_output,
-                                  entity_mappings,
-                                  entity_mappings.unsqueeze(-2),
-                                  first_entity_idx[0],
-                                  second_entity_idx[0]).flatten()
+                                      entity_mappings,
+                                      entity_mappings.unsqueeze(-2),
+                                      first_entity_idx[0],
+                                      second_entity_idx[0]).flatten()
           loss_entity = criterion(entity_scores, pairwise_entity_labels)
       else:
           loss_entity = torch.zeros((mention_output.size(0),), dtype=torch.float, device=device)
           
-      loss = loss_event + loss_entity +  multimedia_criterion(text_output, video_output,
-                                                              text_mask, video_mask)
+      loss = loss_event + loss_entity + multimedia_criterion(text_output, video_output,
+                                                             text_mask, video_mask)
 
       loss.backward()
       optimizer.step()
@@ -329,7 +315,7 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
           event_to_roles_mappings,\
           width, videos,\
           text_labels, type_labels,\
-          img_labels,\
+          role_labels, img_labels,\
           text_mask, span_mask, video_mask = batch
 
           token_num = text_mask.sum(-1).long()
@@ -345,6 +331,8 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
           width = width.to(device)
           videos = videos.to(device)
           text_labels = text_labels.to(device)
+          type_labels = type_labels.to(device)
+          role_labels = role_labels.to(device)
           img_labels = img_labels.to(device)
           text_mask = text_mask.to(device)
           span_mask = span_mask.to(device)
@@ -387,10 +375,13 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
                 event_start_ends = torch.mm(event_mapping[:, :mention_num].cpu(), origin_candidate_start_ends.float()).long()
                 event_to_roles_mapping = event_to_roles_mappings[idx, :event_num[idx]]
                 event_label = event_labels[idx, :event_num[idx]]
+                role_label = role_labels[idx, :mention_num]
+                
                 # Compute pairwise scores
                 event_antecedents, event_scores = coref_model.module.predict_cluster(mention_output[idx],
-                                                                                 event_mapping, event_to_roles_mapping,
-                                                                                 first_event_idx, second_event_idx)
+                                                                                     event_mapping, event_to_roles_mapping,
+                                                                                     first_event_idx, second_event_idx,
+                                                                                     edge_labels=role_label)
                 event_antecedents = torch.LongTensor(event_antecedents)
                 all_event_scores.append(event_scores)
                 all_event_labels.append(pairwise_event_labels.to(torch.int).cpu())
@@ -436,7 +427,8 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
 
             pred_clusters_str, gold_clusters_str = conll_eval.make_output_readable(pred_event_clusters+pred_entity_clusters,
                                                                                    gold_event_clusters+gold_entity_clusters,
-                                                                                   tokens)
+                                                
+                                                                                   tokens, arguments=test_loader.dataset.event_to_roles[doc_id])
             token_str = ' '.join(tokens).replace('\n', '')
             f_out.write(f"{doc_id}: {token_str}\n")
             f_out.write(f'Pred: {pred_clusters_str}\n')

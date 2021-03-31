@@ -130,7 +130,7 @@ class TextFeatureDataset(Dataset):
     bert_embed_file = '{}_bert_embeddings.npz'.format(doc_json.split('.')[0])
     self.docs_embeddings = np.load(bert_embed_file)
     self.feat_keys = sorted(self.docs_embeddings, key=lambda x:int(x.split('_')[-1]))
-    self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in documents] # XXX
+    self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in documents][:20] # XXX
     self.doc_ids = ['_'.join(k.split('_')[:-1]) for k in self.feat_keys]
     
     documents = {doc_id:documents[doc_id] for doc_id in self.doc_ids}
