@@ -43,6 +43,7 @@ def get_all_mention_mapping(origin_candidate_start_ends,
     entity_mappings = torch.zeros((max_mention_num, max_mention_num))
     event_to_roles_mappings = torch.zeros((max_event_num, max_role_num, max_mention_num))
     labels = torch.zeros(max_mention_num, dtype=torch.long)
+    role_labels = torch.zeros((max_event_num, max_role_num))
 
     span_to_idx = {tuple(origin_candidate_start_ends[i].tolist()):i for i in range(span_num)}
     for i in range(span_num):
@@ -60,10 +61,11 @@ def get_all_mention_mapping(origin_candidate_start_ends,
         span_idx = span_to_idx[span]
         event_mappings[event_idx, span_idx] = 1.
         for role_idx, span_role in enumerate(event_to_roles[span]):
-            if role_idx >= max_role_num or not span_role in span_to_idx:
+            if role_idx >= max_role_num or not span_role in span_to_idx or role_idx >= max_role_num:
                 continue
             span_idx2 = span_to_idx[span_role]
             event_to_roles_mappings[event_idx, role_idx, span_idx2] = 1.
+            role_labels[event_idx, role_idx] = span_role[2]
         
     for entity_idx, span in enumerate(sorted(entity_labels_dict)):
         if entity_idx >= max_mention_num:
@@ -73,7 +75,8 @@ def get_all_mention_mapping(origin_candidate_start_ends,
         span_idx = span_to_idx[span]
         entity_mappings[entity_idx, span_idx] = 1.
     
-    return event_mappings, entity_mappings, event_to_roles_mappings, labels
+    return event_mappings, entity_mappings,\
+        event_to_roles_mappings, labels, role_labels
 
 def fix_embedding_length(emb, L):
   size = emb.size()[1:]
@@ -144,8 +147,7 @@ class TextFeatureDataset(Dataset):
     # Extract coreference cluster labels
     self.label_dict,\
     self.event_to_roles,\
-    self.type_label_dict,\
-    self.type_to_idx = self.create_dict_labels(mentions)
+    self.type_label_dict = self.create_dict_labels(mentions)
 
     # Extract original mention spans
     self.origin_candidate_start_ends = [np.asarray(sorted(self.label_dict[doc_id]['events'])+\
@@ -216,16 +218,11 @@ class TextFeatureDataset(Dataset):
             type_label_dict[m['doc_id']] = {}
             
         if 'entity_type' in m:
-            if not m['entity_type'] in type_to_idx:
-                type_to_idx[m['entity_type']] = len(type_to_idx)
-
             if not m['m_id'] in id_to_span:
                 id_to_span[m['m_id']] = (start, end)
             type_label_dict[m['doc_id']][(start, end)] = self.type_to_idx[m['entity_type']]
             label_dict[m['doc_id']]['entities'][(start, end)] = m['cluster_id']
         else:
-            if not m['event_type'] in type_to_idx:
-                type_to_idx[m['event_type']] = len(type_to_idx)
             type_label_dict[m['doc_id']][(start, end)] = self.type_to_idx[m['event_type']]
             label_dict[m['doc_id']]['events'][(start, end)] = m['cluster_id']
             
@@ -235,7 +232,7 @@ class TextFeatureDataset(Dataset):
                 a_start, a_end = id_to_span[a['entity_id']]
                 event_to_roles[m['doc_id']][(start, end)].append((a_start, a_end))
 
-    return label_dict, event_to_roles, type_label_dict, type_to_idx
+    return label_dict, event_to_roles, type_label_dict
 
 
   def __getitem__(self, idx):
@@ -279,7 +276,9 @@ class TextFeatureDataset(Dataset):
                            self.max_token_num,
                            self.max_mention_span)
 
-    event_mappings, entity_mappings, event_to_roles_mappings, labels =\
+    event_mappings, entity_mappings,\
+    event_to_roles_mappings,\
+    labels, role_labels =\
      get_all_mention_mapping(origin_candidate_start_ends,
                              event_labels_dict,
                              entity_labels_dict,
@@ -314,6 +313,7 @@ class TextFeatureDataset(Dataset):
            entity_mappings,\
            event_to_roles_mappings,\
            width, labels,\
+           role_labels,\
            type_labels,\
            text_mask, span_mask
 

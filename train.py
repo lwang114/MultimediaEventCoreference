@@ -18,7 +18,8 @@ from image_models import VisualEncoder
 from criterion import TripletLoss
 from corpus import SupervisedGroundingFeatureDataset
 from evaluator import Evaluation, RetrievalEvaluation, CoNLLEvaluation
-from utils import make_prediction_readable
+from utils import make_prediction_readable, create_type_to_idx, create_role_to_idx
+
 
 logger = logging.getLogger(__name__)
 def fix_seed(config):
@@ -308,20 +309,15 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
           # Extract span and video embeddings
           video_output = image_model(videos)
           text_output = text_model(doc_embeddings)
-          # XXX combined_output = text_model(torch.cat([video_output, doc_embeddings], dim=1))
-          # video_output = combined_output[:, :video_output.size(1)]
-          # text_output = combined_output[:, video_output.size(1):]
           mention_output = mention_model(text_output,
                                          start_mappings, end_mappings,
                                          continuous_mappings, width,
                                          type_labels=type_labels)
           
-          # Compute score for each mention pair
           B = doc_embeddings.size(0) 
           for idx in range(B):
             global_idx = i * test_loader.batch_size + idx
 
-            # Compute pairwise labels
             first_text_idx, second_text_idx, pairwise_text_labels = get_pairwise_text_labels(text_labels[idx, :span_num[idx]].unsqueeze(0), 
                                                                                              is_training=False, device=device)
             if first_text_idx is None:
@@ -339,7 +335,6 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
                                                       predicted_antecedents,
                                                       origin_candidate_start_ends,
                                                       text_labels[idx, :span_num[idx]])
-            # Save the output clusters
             doc_id = test_loader.dataset.doc_ids[global_idx]
             tokens = [token[2] for token in test_loader.dataset.documents[doc_id]]
             pred_clusters_str, gold_clusters_str = conll_eval.make_output_readable(pred_clusters, gold_clusters, tokens)
@@ -488,9 +483,9 @@ if __name__ == '__main__':
   args = parser.parse_args()
 
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
   # Set up logger
   config = pyhocon.ConfigFactory.parse_file(args.config)
-
   print(config['model_path'])
   if not os.path.isdir(config['model_path']):
       os.makedirs(config['model_path'])
@@ -500,14 +495,20 @@ if __name__ == '__main__':
   logging.basicConfig(filename=os.path.join(config['model_path'],'log/{}.txt'.format(datetime.now().strftime("%Y_%m_%d_%H_%M_%S"))),\
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
 
+  # Initialize dataloaders
+  splits = [os.path.join(config['data_folder'], 'train_mixed.json'),\
+            os.path.join(config['data_folder'], 'test_mixed.json')]
+  type_to_idx = create_type_to_idx(splits) 
+  role_to_idx = create_role_to_idx(splits)
+ 
   train_set = SupervisedGroundingFeatureDataset(os.path.join(config['data_folder'], 'train.json'), 
                                                 os.path.join(config['data_folder'], f'train_{config.mention_type}.json'), 
                                                 os.path.join(config['data_folder'], 'train_bboxes.json'),
-                                                config, split='train')
-  test_set = SupervisedGroundingFeatureDataset(os.path.join(config['data_folder'], 'test.json'), 
+                                                config, split='train', type_to_idx=type_to_idx, role_to_idx=role_to_idx)
+  test_set = SupervisedGroundingFeatureDataset(os.path.join(config['data_folder'], 'test.json'),
                                                os.path.join(config['data_folder'], f'test_{config.mention_type}.json'), 
                                                os.path.join(config['data_folder'], 'test_bboxes.json'), 
-                                               config, split='test')
+                                               config, split='test', type_to_idx=type_to_idx, role_to_idx=role_to_idx)
 
   pairwises  = []
   mucs = []

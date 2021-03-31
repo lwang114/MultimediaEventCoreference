@@ -5,6 +5,11 @@ import codecs
 import os
 import collections
 import argparse
+from allennlp.predictors.predictor import Predictor
+import allennlp_models.structured_prediction
+import nltk
+
+dep_parser = Predictor.from_path('https://storage.googleapis.com/allennlp-public-models/biaffine-dependency-parser-ptb-2020.04.06.tar.gz')
 
 def get_mention_doc(data_json, out_prefix):
   '''
@@ -82,6 +87,12 @@ def get_mention_doc(data_json, out_prefix):
       doc_id = inst['doc_id']
       sent_id = inst['sent_id']
       tokens = inst['tokens']
+      pos_tags = [tp[1] for tp in nltk.pos_tag(sent, tagset='universal')]
+      instance = dep_parser._dataset_reader.text_to_instance(tokens, pos_tags)
+      parsed_sent = dep_parser.predict_instance(instance)
+      dep_role = parsed_sent['predicted_dependencies']
+      dep_head = [h_idx-1 for h_idx in parsed_sent['predicted_heads']]
+
       entity_mentions = inst['entity_mentions']
       event_mentions = inst['event_mentions']
 
@@ -105,6 +116,7 @@ def get_mention_doc(data_json, out_prefix):
                   'tokens': entity_mention['text'],
                   'cluster_id': cluster_id,
                   'singleton': False}
+        entity = get_entity_feature(entity, tokens, dep_head, dep_role, sen_start=sen_start) # TODO
         entity_event_mask[start:end] = 1.
         entities.append(entity)
 
@@ -125,9 +137,9 @@ def get_mention_doc(data_json, out_prefix):
                  'cluster_id': cluster_id,
                  'singleton': False}
         entity_event_mask[start:end] = 1.
-        events.append(event)
+        events.append(event)      
 
-      sent = [[sent_id, sen_start+t_idx, t, int(entity_event_mask[t_idx]) > 0] for t_idx, t in enumerate(tokens)]
+      sent = [[sent_id, sen_start+t_idx, t, int(entity_event_mask[t_idx]) > 0, dep_role[t_idx], sen_start+dep_head[t_idx]] for t_idx, t in enumerate(tokens)]
       documents[doc_id].extend(sent)
       sen_start += len(tokens)
   
@@ -241,6 +253,32 @@ def get_event_info(data_json, out_prefix):
       sen_start += len(tokens)
   json.dump(events, codecs.open(out_prefix+'_events_with_arguments.json', 'w', 'utf-8'), indent=4, sort_keys=True)
 
+def get_entity_features(entity, 
+                        tokens,
+                        dep_head, dep_role, 
+                        sen_start,
+                        feature_list=['nsubj', 'pobj', 'amod', 'root']):
+  features = {k: [] for k in feature_list}
+
+  tokens_ids = entity['tokens_ids']
+  for i, (h, r) in enumerate(zip(dep_head, dep_role)):
+    if sen_start+i in tokens_ids:
+      continue
+    
+    if r == 'nsubj' and 'nsubj' in feature_list:
+      features['nsubj'].append(tokens[i])
+
+    if r == 'pobj' and 'pobj' in feature_list:
+      features['pobj'].append(tokens[i])
+
+    if h in tokens_ids and r == 'amod' and 'amod' in feature_list:
+      features['amod'].append(tokens[i])
+    
+    if r == 'root' and 'root' in feature_list:
+      features['head'].append(tokens[i])
+
+  entity['features'] = features
+  return entity
 
 if __name__ == '__main__':
   data_dir = 'ace/'

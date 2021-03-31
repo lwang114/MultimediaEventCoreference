@@ -84,7 +84,7 @@ class SupervisedGroundingFeatureDataset(Dataset):
     self.docs_embeddings = np.load(bert_embed_file)
     
     # Extract coreference cluster labels
-    self.text_label_dict, self.image_label_dict, self.type_label_dict, self.type_to_idx = self.create_dict_labels(text_mentions, image_mentions)
+    self.text_label_dict, self.image_label_dict, self.type_label_dict = self.create_dict_labels(text_mentions, image_mentions)
 
     # Extract doc/image ids
     self.feat_keys = sorted(self.imgs_embeddings, key=lambda x:int(x.split('_')[-1])) # XXX
@@ -174,13 +174,9 @@ class SupervisedGroundingFeatureDataset(Dataset):
         text_label_dict[m['doc_id']][(start, end)] = m['cluster_id']
 
       if 'event_type' in m:
-          if not m['event_type'] in type_to_idx:
-              type_to_idx[m['event_type']] = len(type_to_idx)
-          type_label_dict[m['doc_id']][(start, end)] = type_to_idx[m['event_type']]
+          type_label_dict[m['doc_id']][(start, end)] = self.type_to_idx[m['event_type']]
       else:
-          if not m['entity_type'] in type_to_idx:
-              type_to_idx[m['entity_type']] = len(type_to_idx)
-          type_label_dict[m['doc_id']][(start, end)] = type_to_idx[m['entity_type']]
+          type_label_dict[m['doc_id']][(start, end)] = self.type_to_idx[m['entity_type']]
         
     for i, m in enumerate(image_mentions):
         if not m['doc_id'] in image_label_dict:
@@ -197,7 +193,7 @@ class SupervisedGroundingFeatureDataset(Dataset):
             image_label_dict[m['doc_id']][(bbox_id, m['cluster_id'])] = cluster_dict.get(m['cluster_id'], 0)
             image_token_dict[m['doc_id']][(bbox_id, m['cluster_id'])] = m['tokens']
 
-    return text_label_dict, image_label_dict, type_label_dict, type_to_idx
+    return text_label_dict, image_label_dict
   
   def load_text(self, idx):
     '''Load mention span embeddings for the document

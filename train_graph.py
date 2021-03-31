@@ -18,8 +18,7 @@ from image_models import VisualEncoder
 from criterion import TripletLoss
 from corpus_graph import StarFeatureDataset
 from evaluator import Evaluation, RetrievalEvaluation, CoNLLEvaluation
-from utils import make_prediction_readable
-from conll import write_output_file
+from utils import make_prediction_readable, create_type_to_idx, create_role_to_idx
 
 logger = logging.getLogger(__name__)
 def fix_seed(config):
@@ -601,14 +600,19 @@ if __name__ == '__main__':
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
 
   # Initialize dataloaders
+  splits = [os.path.join(config['data_folder'], 'train_mixed.json'),\
+            os.path.join(config['data_folder'], 'test_mixed.json')]
+  type_to_idx = create_type_to_idx(splits) 
+  role_to_idx = create_role_to_idx(splits)
+
   train_set = StarFeatureDataset(os.path.join(config['data_folder'], 'train.json'), 
                                                 os.path.join(config['data_folder'], 'train_mixed.json'), 
                                                 os.path.join(config['data_folder'], 'train_bboxes.json'),
-                                                config, split='train')
+                                                config, split='train', type_to_idx=type_to_idx, role_to_idx=role_to_idx)
   test_set = StarFeatureDataset(os.path.join(config['data_folder'], 'test.json'), 
                                                os.path.join(config['data_folder'], 'test_mixed.json'), 
                                                os.path.join(config['data_folder'], 'test_bboxes.json'), 
-                                               config, split='test')
+                                               config, split='test', type_to_idx=type_to_idx, role_to_idx=role_to_idx)
  
   train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
   test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)

@@ -91,7 +91,7 @@ def fix_embedding_length(emb, L):
   return emb  
 
 class StarFeatureDataset(Dataset):
-  def __init__(self, doc_json, text_mention_json, image_mention_json, config, split='train'):
+  def __init__(self, doc_json, text_mention_json, image_mention_json, config, split='train', type_to_idx={'###NULL###':0}, role_to_idx={'###NULL###':0}):
     '''
     :param doc_json: dict of 
         [doc_id]: list of [sent id, token id, token, is entity/event]
@@ -117,6 +117,8 @@ class StarFeatureDataset(Dataset):
     self.max_frame_num = config.get('max_frame_num', 100)
     self.max_mention_span = config.get('max_mention_span', 15)
     self.img_feat_type = config.get('img_feat_type', 'mmaction_feat')
+    self.type_to_idx = type_to_idx
+    self.role_to_idx = role_to_idx
 
     documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
     self.documents = documents
@@ -132,14 +134,12 @@ class StarFeatureDataset(Dataset):
     # Extract word embeddings
     bert_embed_file = '{}_{}.npz'.format(doc_json.split('.')[0], config['bert_model'])
     self.docs_embeddings = np.load(bert_embed_file)
-    
+
     # Extract coreference cluster labels
     self.text_label_dict,\
     self.image_label_dict,\
     self.event_to_roles,\
-    self.type_label_dict,\
-    self.type_to_idx,\
-    self.role_to_idx = self.create_dict_labels(text_mentions, image_mentions)
+    self.type_label_dict = self.create_dict_labels(text_mentions, image_mentions)
 
     # Extract doc/image ids
     self.feat_keys = sorted(self.imgs_embeddings, key=lambda x:int(x.split('_')[-1])) # XXX
@@ -213,8 +213,7 @@ class StarFeatureDataset(Dataset):
     image_token_dict = {}
     type_label_dict = {}
     event_to_roles = {}
-    type_to_idx = {}
-    role_to_idx = {NULL:0}
+
     for m in text_mentions:
         start = min(m['tokens_ids'])
         end = max(m['tokens_ids'])
@@ -224,22 +223,16 @@ class StarFeatureDataset(Dataset):
             type_label_dict[m['doc_id']] = {}
 
         if 'event_type' in m:
-            if not m['event_type'] in type_to_idx:
-                type_to_idx[m['event_type']] = len(type_to_idx)
-            type_label_dict[m['doc_id']][(start, end)] = type_to_idx[m['event_type']]
+            type_label_dict[m['doc_id']][(start, end)] = self.type_to_idx[m['event_type']]
             text_label_dict[m['doc_id']]['events'][(start, end)] = m['cluster_id'] 
             event_to_roles[m['doc_id']][(start, end)] = []
             for a in m['arguments']:
                 a_start = a['start']
                 a_end = a['end']
                 role = a['role']
-                if not role in role_to_idx:
-                    role_to_idx[role] = len(role_to_idx) 
-                event_to_roles[m['doc_id']][(start, end)].append((a_start, a_end, role_to_idx[role]))
+                event_to_roles[m['doc_id']][(start, end)].append((a_start, a_end, self.role_to_idx[role]))
         else:
-            if not m['entity_type'] in type_to_idx:
-                type_to_idx[m['entity_type']] = len(type_to_idx)
-            type_label_dict[m['doc_id']][(start, end)] = type_to_idx[m['entity_type']]
+            type_label_dict[m['doc_id']][(start, end)] = self.type_to_idx[m['entity_type']]
             text_label_dict[m['doc_id']]['entities'][(start, end)] = m['cluster_id']
 
     for i, m in enumerate(image_mentions):
@@ -257,7 +250,7 @@ class StarFeatureDataset(Dataset):
             image_label_dict[m['doc_id']][(bbox_id, m['cluster_id'])] = cluster_dict.get(m['cluster_id'], 0)
             image_token_dict[m['doc_id']][(bbox_id, m['cluster_id'])] = m['tokens']
 
-    return text_label_dict, image_label_dict, event_to_roles, type_label_dict, type_to_idx, role_to_idx
+    return text_label_dict, image_label_dict, event_to_roles, type_label_dict
   
   def load_text(self, idx):
     ''' Load mention span embeddings for the document
