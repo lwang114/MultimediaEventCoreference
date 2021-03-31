@@ -135,8 +135,10 @@ class CPCLoss(nn.Module):
                dimOutputEncoder,
                negativeSamplingExt,
                auxiliaryEmbedding=0,
-               nAuxiliary=0):
-    self.nPredicts = nPredicts 
+               nAuxiliary=0
+               startOffset=1):
+    self.nPredicts = nPredicts
+    self.startOffset = startOffset 
     if auxiliaryEmbedding > 0:
       print(
           f"Using {auxiliaryEmbedding}-dim auxiliary embeddings for {nAuxiliary} types")
@@ -154,7 +156,8 @@ class CPCLoss(nn.Module):
   def sampleClean(self, encodedData, windowSize):
     """
     :param encodedData: FloatTensor of size (batchSize, nNegativeExt, dimEncoded),
-    :param windowSize: int,
+    :param windowSize: int, length of the positive sample sequence
+    :param startOffset: int, offset of the positive samples relative to its frame
     :return outputs: list of nPredicts FloatTensors of size (batchSize, negativeSamplingExt+1, windowSize, dimEncoded), 
                      the concatenated features of both positive and negative samples
     """
@@ -194,7 +197,7 @@ class CPCLoss(nn.Module):
                             dtype=torch.long,
                             device=encodedData.device)
     
-    for k in range(1, self.nPredicts + 1):
+    for k in range(self.startOffset, self.nPredicts + self.startOffset):
         # Positive samples
         if k < self.nPredicts:
             posSeq = encodedData[:, k:-(self.nPredicts-k)]
@@ -218,11 +221,11 @@ class CPCLoss(nn.Module):
     :param mask: FloatTensor of size (batchSize, negativeSamplingExt), mask on the input encoder features
     """
     batchSize, seqSize, dimAR = cFeature.size()
-    windowSize = seqSize - self.nPredicts
+    windowSize = seqSize - self.nPredicts + (1 - self.startOffset)
 
     cFeature = cFeature[:, :windowSize]
 
-    sampledData, labelLoss = self.sampleClean
+    sampledData, labelLoss = self.sampleClean(encodedData, windowSize)
     
     if self.auxEmb is not None:
       l_ = label.view(batchSize, 1).expand(batchSize, windowSize)
