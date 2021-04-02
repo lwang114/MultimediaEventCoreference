@@ -9,6 +9,7 @@ from nltk.translate import bleu_score
 from nltk.metrics.scores import precision, recall, f_measure 
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
+import seaborn as sns
 np.random.seed(2)
 
 PUNCT = [',', '.', '\'', '\"', ':', ';', '?', '!', '<', '>', '~', '%', '$', '|', '/', '@', '#', '^', '*']
@@ -305,14 +306,34 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_fi
   np.savez('{}_labels.npz'.format(out_prefix), **event_labels_onehot)
   json.dump(event_frequency, open('{}_event_frequency.json'.format(out_prefix), 'w'), indent=4, sort_keys=True)
 
-def visualize_features(embed_file, label_file, freq_file):
+def visualize_features(embed_file, label_file, freq_file, 
+                       out_prefix='tsne', n_class=10):
+  plt.rc('xtick', labelsize=15)
+  plt.rc('ytick', labelsize=15)
+  plt.rc('axes', labelsize=20)
+  plt.rc('figure', titlesize=30)
+  plt.rc('font', size=20)
+  
   # Visualize the embeddings with TSNE
-  X = np.load(embed_file)
-  y = np.load(label_file)
+  feat_npz = np.load(embed_file)
+  feats = np.concatenate([feat_npz[k] for k in sorted(feat_npz, key=lambda x:int(x.split('_')[-1]))])
+  label_npz = np.load(label_file)
+  labels = np.concatenate([label_npz[k] for k in sorted(label_npz, key=lambda x:int(x.split('_')[-1]))])
   freq = json.load(open(freq_file))
 
-  top_types = sorted(freq, key=lambda x:freq[x], reverse=True)
-  X_new = TSNE(n_components=5).fit_transform(X) # TODO
+  top_types = sorted(freq, key=lambda x:freq[x], reverse=True)[:n_class]
+  X = TSNE(n_components=2).fit_transform(feats) # TODO
+  select_idxs = [i for i, y in enumerate(ys) if y in top_types]
+
+  X_tsne = X[select_idxs]
+  y = labels[select_idxs]
+  df = pd.DataFrame({'t-SNE dim 0': X_new[:, 0], 
+                     't-SNE dim 1': X_new[:, 1],
+                     'Event type': y})
+  df.to_csv(out_prefix+'.csv')
+  fig, ax = plt.subplots(figsize=(10, 10))
+  sns.scatterplot(data=df, x='t-SNE dim 0', y='t-SNE dim 0', 
+                  hue='Event type', style='Event type')
 
 def extract_image_embeddings(data_dir, csv_dir, mapping_file, out_prefix, image_ids=None):
   # Create a mapping from Youtube id to short description
