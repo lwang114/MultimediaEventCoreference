@@ -43,7 +43,7 @@ def get_all_mention_mapping(origin_candidate_start_ends,
     entity_mappings = torch.zeros((max_mention_num, max_mention_num))
     event_to_roles_mappings = torch.zeros((max_event_num, max_role_num, max_mention_num))
     labels = torch.zeros(max_mention_num, dtype=torch.long)
-    role_labels = torch.zeros((max_event_num, max_role_num))
+    role_labels = torch.zeros((max_event_num, max_role_num), dtype=torch.long)
 
     span_to_idx = {tuple(origin_candidate_start_ends[i].tolist()):i for i in range(span_num)}
     for i in range(span_num):
@@ -133,7 +133,7 @@ class TextFeatureDataset(Dataset):
     bert_embed_file = '{}_bert_embeddings.npz'.format(doc_json.split('.')[0])
     self.docs_embeddings = np.load(bert_embed_file)
     self.feat_keys = sorted(self.docs_embeddings, key=lambda x:int(x.split('_')[-1]))
-    self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in documents][:20] # XXX
+    self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in documents] # XXX
     self.doc_ids = ['_'.join(k.split('_')[:-1]) for k in self.feat_keys]
     
     documents = {doc_id:documents[doc_id] for doc_id in self.doc_ids}
@@ -230,7 +230,7 @@ class TextFeatureDataset(Dataset):
             event_to_roles[m['doc_id']][(start, end)] = []
             for a in m['arguments']:
                 a_start, a_end = id_to_span[a['entity_id']]
-                event_to_roles[m['doc_id']][(start, end)].append((a_start, a_end))
+                event_to_roles[m['doc_id']][(start, end)].append((a_start, a_end, a['role']))
 
     return label_dict, event_to_roles, type_label_dict
 
@@ -313,8 +313,8 @@ class TextFeatureDataset(Dataset):
            entity_mappings,\
            event_to_roles_mappings,\
            width, labels,\
-           role_labels,\
            type_labels,\
+           role_labels,\
            text_mask, span_mask
 
   def __len__(self):

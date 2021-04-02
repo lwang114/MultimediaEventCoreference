@@ -13,12 +13,13 @@ import random
 import numpy as np
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
+from text_models import SpanEmbedder, NoOp
 from image_models import VisualEncoder
-from criterion import GraphCPCLoss 
+from criterion import CPCLoss, TripletLoss
 from corpus_text import TextFeatureDataset 
 from corpus_graph import StarFeatureDataset
 from evaluator import Evaluation, RetrievalEvaluation, CoNLLEvaluation
-from utils import make_prediction_readable
+from utils import make_prediction_readable, create_type_to_idx, create_role_to_idx
 
 logger = logging.getLogger(__name__)
 def fix_seed(config):
@@ -112,13 +113,26 @@ def get_pairwise_text_labels(labels, is_training, device):
 
     return first_idxs, second_idxs, pairwise_labels_all    
 
-def train(text_model, mention_model, image_model, train_loader, test_loader, args, random_seed=None):
+def train(text_model,
+          mention_model,
+          image_model,
+          train_loader, test_loader,
+          args, random_seed=None):
   config = pyhocon.ConfigFactory.parse_file(args.config)
   if random_seed:
       config.random_seed = random_seed
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
   torch.set_grad_enabled(True)
-  
+
+  if config['training_method'] in ['pipeline', 'continue']:
+      text_model.load_state_dict(torch.load(config['text_model_path'], map_location=device))
+      for p in text_model.parameters():
+          p.requires_grad = False
+
+      mention_model.load_state_dict(torch.load(config['mention_model_path'], map_location=device))
+      for p in mention_model.parameters():
+          p.requires_grad = False
+        
   if not isinstance(text_model, torch.nn.DataParallel):
     text_model = nn.DataParallel(text_model)
 
@@ -127,7 +141,7 @@ def train(text_model, mention_model, image_model, train_loader, test_loader, arg
 
   if not isinstance(image_model, torch.nn.DataParallel):
     image_model = nn.DataParallel(image_model)
-  
+
   text_model.to(device)
   mention_model.to(device)
   image_model.to(device)
@@ -136,31 +150,53 @@ def train(text_model, mention_model, image_model, train_loader, test_loader, arg
   token_dim = config.bert_hidden_size
   mention_dim = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2
   if config.with_mention_width:
-    mention_layer += config.embedding_dimension
+    mention_dim += config.embedding_dimension
   if config.get('with_type_embedding', False):
-    mention_layer += config.type_embedding_dimension
+    mention_dim += config.type_embedding_dimension
+
   event_event_criterion = CPCLoss(nPredicts=config.num_predict_event,
                                   dimOutputAR=mention_dim,
                                   dimOutputEncoder=mention_dim,
-                                  negativeSamplingExt=config.num_negative_samples) # TODO
+                                  negativeSamplingExt=config.num_negative_samples)
+  if config['training_method'] in ['pipeline', 'continue']:
+    event_event_criterion.load_state_dict(torch.load(config['coref_model_path'], map_location=device))
+    for p in event_event_criterion.parameters():
+        p.requires_grad = False
+  event_event_criterion.to(device)
+        
   event_argument_criterion = CPCLoss(nPredicts=1,
-                                     dimOutputAR=mention_dim,
+                                     dimOutputAR=mention_dim+config.role_embedding_dimension,
                                      dimOutputEncoder=mention_dim,
                                      negativeSamplingExt=config.num_negative_samples,
-                                     auxiliaryEmbedding=config.role_embedding_dimension, # TODO
-                                     nAuxiliary=len(train_loader.dataset.role_to_idx),
-                                     startOffset=0)
-
+                                     auxiliaryEmbedding=config.role_embedding_dimension,
+                                     nAuxiliary=len(train_loader.dataset.role_to_idx))
+  event_argument_criterion.to(device)
   # entity_criterion = CPCLoss(dimOutputAR=mention_dim,
   #                            dimOutputEncoder=token_dim,
   #                            config) # TODO
   multimedia_criterion = TripletLoss(config)
 
+  n_params = 0
+  for m in [text_model, mention_model, image_model, event_event_criterion, event_argument_criterion]:
+      for p in m.parameters():
+          n_params += p.numel()
+  print('Number of parameters: {}'.format(n_params))
+  
+  
   # Set up the optimizer
   if config.multimedia:
-    optimizer = get_optimizer(config, [text_model, image_model, mention_model, coref_model])
+    optimizer = get_optimizer(config,
+                              [text_model,
+                               image_model,
+                               mention_model,
+                               event_event_criterion,
+                               event_argument_criterion])
   else:
-    optimizer = get_optimizer(config, [text_model, mention_model, coref_model])
+    optimizer = get_optimizer(config,
+                              [text_model,
+                               mention_model,
+                               event_event_criterion,
+                               event_argument_criterion])
   
   # Start training
   total_loss = 0.
@@ -170,13 +206,16 @@ def train(text_model, mention_model, image_model, train_loader, test_loader, arg
   best_retrieval_recall = 0.
   results = {}
   begin_time = time.time()
+
   if args.evaluate_only:
     config.epochs = 0
-  for epoch in range(args.start_epoch, config.epochs):
+    
+  for epoch in range(config.epochs):
     text_model.train()
     mention_model.train()
     image_model.train()
-    coref_model.train()
+    event_event_criterion.train()
+    event_argument_criterion.train()
     for i, batch in enumerate(train_loader):
       if config.multimedia:
         doc_embeddings,\
@@ -188,7 +227,7 @@ def train(text_model, mention_model, image_model, train_loader, test_loader, arg
         event_to_roles_mappings,\
         width, videos,\
         text_labels,\
-        type_labels,\ 
+        type_labels,\
         role_labels,\
         img_labels,\
         text_mask,\
@@ -217,7 +256,7 @@ def train(text_model, mention_model, image_model, train_loader, test_loader, arg
         type_labels,\
         role_labels,\
         text_mask,\
-        span_mask = batch # TODO
+        span_mask = batch # TODO Add entity attributes
 
       B = doc_embeddings.size(0)     
       doc_embeddings = doc_embeddings.to(device)
@@ -249,31 +288,44 @@ def train(text_model, mention_model, image_model, train_loader, test_loader, arg
                                      continuous_mappings, width,
                                      type_labels=type_labels)
 
-      context_event_output = torch.matmul(event_mappings, context_output).view(batch_size*max_event_num, -1)
+      batch_size, max_event_num, _ = event_mappings.size() 
+      context_event_output = torch.matmul(event_mappings, context_output)
 
       ## Event-event prediction
-      batch_size, max_event_num, _ = context_event_output.size() 
-      event_mask = torch.matmul(event_mappings, span_mask)
+      # (batch size, max num. of events)
+      event_mask = event_mappings.sum(-1)
       # (batch size, max num. of events, embed dim)
       event_output = torch.matmul(event_mappings, mention_output)
-      ee_loss, _ = event_event_criterion(context_event_output.view(batch_size*max_event_num, -1),
-                                         event_output.view(batch_size*max_event_num, -1),
-                                         event_mask.view(batch_size*max_event_num, 1))
+      ee_loss, _ = event_event_criterion(context_event_output,
+                                         event_output,
+                                         event_mask)
+      ee_loss = ee_loss.mean()
 
       ## Event-argument prediction
       max_role_num = event_to_roles_mappings.size(2)
-      role_mask = torch.matmul(event_to_roles_mappings, span_mask.unsqueeze(1))
+      # (batch size, max num. of events, max num. of roles)
+      role_mask = event_to_roles_mappings.sum(-1)
       # (batch size, max num. of events, max num. of roles, embed dim)
-      role_output = torch.matmul(event_to_role_mappings, mention_output.unsqueeze(1))
+      role_output = torch.matmul(event_to_roles_mappings, mention_output.unsqueeze(1))
+      # Padded in front of the argument mention embeddings to account for the offset in the CPC loss
+      role_output = torch.cat([torch.zeros((batch_size,
+                                            max_event_num, 1,
+                                            role_output.size(-1)),
+                                           device=device),
+                               role_output], dim=2)
       ea_loss, _ = event_argument_criterion(context_event_output.view(batch_size*max_event_num,-1).\
-      unsqueeze(1).expand(1, max_role_num, 1),
-                                            role_output.view(batch_size*max_event_num, -1),
-                                            role_mask.view(batch_size*max_event_num, -1),
-                                            role_labels)
+                                            unsqueeze(1).expand(-1, max_role_num+1, -1),
+                                            role_output.view(batch_size*max_event_num, max_role_num+1, -1),
+                                            role_mask.view(batch_size*max_event_num, max_role_num, -1),
+                                            label=role_labels.view(batch_size*max_event_num, max_role_num))
+      ea_loss = ea_loss.mean()
+      
       loss = ee_loss + ea_loss
 
-      if self.multimedia:
-        loss = loss + multimedia_criterion(doc_embeddings, video_output, text_mask, video_mask) 
+      if config.multimedia:
+        loss = loss + multimedia_criterion(doc_embeddings,
+                                           video_output,
+                                           text_mask, video_mask) 
       loss.backward()
       optimizer.step()
 
@@ -290,6 +342,8 @@ def train(text_model, mention_model, image_model, train_loader, test_loader, arg
 
     torch.save(text_model.module.state_dict(), '{}/text_model-{}.pth'.format(config['model_path'], config['random_seed']))
     torch.save(mention_model.module.state_dict(), '{}/mention_model-{}.pth'.format(config['model_path'], config['random_seed']))
+    torch.save(event_event_criterion.state_dict(), '{}/event_predictor-{}.pth'.format(config['model_path'], config['random_seed']))
+    torch.save(event_argument_criterion.state_dict(), '{}/argument_predictor-{}.pth'.format(config['model_path'], config['random_seed']))
     if config.multimedia:
       torch.save(image_model.module.state_dict(), '{}/image_model-{}.pth'.format(config['model_path'], config['random_seed']))
 
@@ -297,8 +351,8 @@ def train(text_model, mention_model, image_model, train_loader, test_loader, arg
     if epoch % 1 == 0:
       task = config.get('task', 'coreference')
       if task in ('coreference', 'both'):
-        res = test(text_model, mention_model, image_model, 
-                   event_event_criterion, event_argument_criterion,
+        res = test(text_model, mention_model,
+                   event_event_criterion,
                    test_loader, args)
         if res['pairwise'][-1] >= best_text_f1:
           best_text_f1 = res['pairwise'][-1]
@@ -309,28 +363,29 @@ def train(text_model, mention_model, image_model, train_loader, test_loader, arg
           results['avg'] = res['avg']
           torch.save(text_model.module.state_dict(), '{}/best_text_model-{}.pth'.format(config['model_path'], config['random_seed']))
           torch.save(mention_model.module.state_dict(), '{}/best_mention_model-{}.pth'.format(config['model_path'], config['random_seed']))
+          torch.save(event_event_criterion.state_dict(), '{}/best_event_predictor-{}.pth'.format(config['model_path'], config['random_seed']))
+          torch.save(event_argument_criterion.state_dict(), '{}/best_argument_predictor-{}.pth'.format(config['model_path'], config['random_seed']))
           if config.multimedia:
             torch.save(image_model.module.state_dict(), '{}/best_image_model-{}.pth'.format(config['model_path'], config['random_seed']))
-        # TODO Print the negative sample classification result
         print('Best text coreference F1={}'.format(best_text_f1))
 
   if args.evaluate_only:
-    results = test(text_model, mention_model, image_model,\
-                   event_event_criterion, event_argument_criterion,
+    results = test(text_model,
+                   mention_model,
+                   event_event_criterion,
                    test_loader, args)
   return results
       
-def test(text_model, mention_model, image_model, 
-         event_event_criterion, event_argument_criterion,
+def test(text_model,
+         mention_model, 
+         event_event_criterion,
          test_loader, args): 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     config = pyhocon.ConfigFactory.parse_file(args.config)
     documents = test_loader.dataset.documents
-    all_scores = []
-    all_labels = []
-
+    all_event_scores = []
+    all_event_labels = []
     text_model.eval()
-    image_model.eval()
 
     conll_eval_event = CoNLLEvaluation()
     f_out = open(os.path.join(config['model_path'], 'prediction.readable'), 'w')
@@ -348,7 +403,7 @@ def test(text_model, mention_model, image_model,
             event_to_roles_mappings,\
             width, videos,\
             text_labels,\
-            type_labels,\ 
+            type_labels,\
             role_labels,\
             img_labels,\
             text_mask,\
@@ -359,11 +414,6 @@ def test(text_model, mention_model, image_model,
             img_labels = img_labels.to(device)
             video_mask = video_mask.to(device)
             
-            first_grounding_idx, second_grounding_idx, pairwise_grounding_labels = get_pairwise_labels(text_labels, img_labels, is_training=False, device=device)
-            pairwise_grounding_labels = pairwise_grounding_labels.to(torch.float)
-            if first_grounding_idx is None:
-              continue
-            video_output = image_model(videos)
           else:
             doc_embeddings,\
             start_mappings,\
@@ -393,7 +443,7 @@ def test(text_model, mention_model, image_model,
           text_mask = text_mask.to(device)
           span_mask = span_mask.to(device)
 
-           # Extract span and video embeddings
+          # Extract span and video embeddings
           text_output = text_model(doc_embeddings) 
           mention_output = mention_model(doc_embeddings,
                                          start_mappings, end_mappings,
@@ -414,7 +464,7 @@ def test(text_model, mention_model, image_model,
             # Compute pairwise labels 
             first_event_idx, second_event_idx, pairwise_event_labels = get_pairwise_text_labels(event_labels[idx, :event_num[idx]].unsqueeze(0), 
                                                                                                 is_training=False, device=device)
-            if first_event_idx is None and first_entity_idx is None:
+            if first_event_idx is None:
               continue
 
             origin_candidate_start_ends = torch.LongTensor(test_loader.dataset.origin_candidate_start_ends[global_idx])
@@ -430,28 +480,29 @@ def test(text_model, mention_model, image_model,
               role_label = role_labels[idx, :mention_num]
  
               # Compute pairwise scores
-              event_antecedents, event_scores = coref_model.module.predict_cluster(context_output[idx],
-                                                                                   mention_output[idx],
-                                                                                   first_event_idx, 
-                                                                                   second_event_idx) 
+              event_antecedents, event_scores = event_event_criterion.predict_clusters(context_output[idx],
+                                                                                       mention_output[idx],
+                                                                                       first_event_idx, 
+                                                                                       second_event_idx) 
               event_antecedents = torch.LongTensor(event_antecedents)
               all_event_scores.append(event_scores)
               all_event_labels.append(pairwise_event_labels.to(torch.int).cpu())
               pred_event_clusters, gold_event_clusters = conll_eval_event(event_start_ends,
-              event_antecedents,
-              event_start_ends,
-              event_label)
+                                                                          event_antecedents,
+                                                                          event_start_ends,
+                                                                          event_label)
             else:
               pred_event_clusters, gold_event_clusters = [], []
 
-          all_event_scores = torch.cat(all_event_scores)
-          all_event_labels = torch.cat(all_event_labels)
+        all_event_scores = torch.cat(all_event_scores)
+        all_event_labels = torch.cat(all_event_labels)
 
-          strict_preds_event = (all_event_scores > 0).to(torch.int)
-          eval_event = Evaluation(strict_preds_event, all_event_labels.to(device))
-          print('Number of predictions: {}/{}'.format(strict_preds_event.sum(), len(strict_preds_event)))
-          print('Number of positive pairs: {}/{}'.format(len((all_event_labels == 1).nonzero()),
-                                                     len(all_event_labels)))
+        strict_preds_event = (all_event_scores > 0).to(torch.int)
+        eval_event = Evaluation(strict_preds_event, all_event_labels.to(device))
+        # TODO Predict discriminative training score
+        print('Number of predictions: {}/{}'.format(strict_preds_event.sum(), len(strict_preds_event)))
+        print('Number of positive pairs: {}/{}'.format(len((all_event_labels == 1).nonzero()),
+                                                       len(all_event_labels)))
         print('Pairwise - Recall: {}, Precision: {}, F1: {}'.format(eval_event.get_recall(),
                                                                 eval_event.get_precision(), eval_event.get_f1()))
         
@@ -469,3 +520,49 @@ def test(text_model, mention_model, image_model,
         return results
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--config', type=str, default='configs/config_grounded.json')
+    parser.add_argument('--evaluate_only', action='store_true')
+    args = parser.parse_args()
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    config = pyhocon.ConfigFactory.parse_file(args.config)
+    fix_seed(config)
+
+    if not os.path.isdir(config['model_path']):
+        os.makedirs(config['model_path'])
+    if not os.path.isdir(os.path.join(config['model_path'], 'log')):
+        os.makedirs(os.path.join(config['model_path'], 'log')) 
+
+    # Initialize dataloaders
+    splits = [os.path.join(config['data_folder'], 'train_mixed.json'),\
+              os.path.join(config['data_folder'], 'test_mixed.json')]
+    type_to_idx = create_type_to_idx(splits)
+    role_to_idx = create_role_to_idx(splits)
+
+    if config.multimedia:
+        train_set = StarFeatureDataset(os.path.join(config['data_folder'], 'train.json'), 
+                                       os.path.join(config['data_folder'], 'train_mixed.json'), 
+                                       os.path.join(config['data_folder'], 'train_bboxes.json'),
+                                       config, split='train', type_to_idx=type_to_idx, role_to_idx=role_to_idx)
+        test_set = StarFeatureDataset(os.path.join(config['data_folder'], 'test.json'), 
+                                      os.path.join(config['data_folder'], 'test_mixed.json'),
+                                      os.path.join(config['data_folder'], 'test_bboxes.json'), 
+                                      config, split='test', type_to_idx=type_to_idx, role_to_idx=role_to_idx)
+    else:
+        train_set = TextFeatureDataset(os.path.join(config['data_folder'], 'train.json'), splits[0],
+                                       config, split='train', type_to_idx=type_to_idx, role_to_idx=role_to_idx)
+
+        test_set = TextFeatureDataset(os.path.join(config['data_folder'], 'test.json'), splits[1],
+                                      config, split='test', type_to_idx=type_to_idx, role_to_idx=role_to_idx)
+        
+    train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
+    test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
+
+    # Initialize models
+    text_model = nn.TransformerEncoderLayer(d_model=config.hidden_layer, nhead=1)
+    image_model = NoOp()
+    mention_model = SpanEmbedder(config, device)
+
+    # Training
+    train(text_model, mention_model, image_model, train_loader, test_loader, args)

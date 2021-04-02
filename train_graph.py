@@ -569,7 +569,6 @@ def test_retrieve(text_model, image_model, grounding_model, test_loader, args):
 
 
 if __name__ == '__main__':
-  # Set up argument parser
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   parser.add_argument('--exp_dir', type=str, default='')
   parser.add_argument('--config', type=str, default='configs/config_grounded.json')

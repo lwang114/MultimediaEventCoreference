@@ -97,8 +97,7 @@ class PredictionNetwork(nn.Module):
                nPredicts,
                dimOutputAR,
                dimOutputEncoder,
-               dropout=False,
-               sizeInputSeq=116)
+               dropout=False):
     super(PredictionNetwork, self).__init__()
     self.predictors = nn.ModuleList()
     self.RESIDUAL_STD = 0.01
@@ -135,10 +134,10 @@ class CPCLoss(nn.Module):
                dimOutputEncoder,
                negativeSamplingExt,
                auxiliaryEmbedding=0,
-               nAuxiliary=0
-               startOffset=1):
-    self.nPredicts = nPredicts
-    self.startOffset = startOffset 
+               nAuxiliary=0,
+               dropout=False):
+    
+    super(CPCLoss, self).__init__()
     if auxiliaryEmbedding > 0:
       print(
           f"Using {auxiliaryEmbedding}-dim auxiliary embeddings for {nAuxiliary} types")
@@ -148,7 +147,8 @@ class CPCLoss(nn.Module):
 
     self.wPrediction = PredictionNetwork(
         nPredicts, dimOutputAR, dimOutputEncoder,
-        dropout=dropout, sizeInputSeq=sizeInputSeq - nPredicts)
+        dropout=dropout)
+
     self.nPredicts = nPredicts
     self.negativeSamplingExt = negativeSamplingExt
     self.lossCriterion = nn.CrossEntropyLoss()
@@ -157,7 +157,6 @@ class CPCLoss(nn.Module):
     """
     :param encodedData: FloatTensor of size (batchSize, nNegativeExt, dimEncoded),
     :param windowSize: int, length of the positive sample sequence
-    :param startOffset: int, offset of the positive samples relative to its frame
     :return outputs: list of nPredicts FloatTensors of size (batchSize, negativeSamplingExt+1, windowSize, dimEncoded), 
                      the concatenated features of both positive and negative samples
     """
@@ -167,10 +166,12 @@ class CPCLoss(nn.Module):
     # (batchSize * nNegativeExt, dimEncoded)
     negExt = encodedData.contiguous().view(-1, dimEncoded)
     
-    # Randomly draw (batchSize * negativeSamplingExt * windowSize) negative samples, so negativeSamplingExt negative samples per frame within the positive sample window by:
+    # Randomly draw (batchSize * negativeSamplingExt * windowSize) negative samples
     # 1) Sample the batch index of the neg samples
     batchIdx = torch.randint(low=0, high=batchSize,
-    ) 
+                             size=(self.negativeSamplingExt
+                                   * windowSize * batchSize, ),
+                             device=encodedData.device) 
      
     # 2) Sample the seq. index of the neg samples    
     seqIdx = torch.randint(low=1, high=nNegativeExt,
@@ -180,10 +181,10 @@ class CPCLoss(nn.Module):
      
     # 3) Sample the index of the positive sample that the seq. index starts from (circular shift the global seqIdx if it exceeds the negative sample window) 
     baseIdx = torch.arange(0, windowSize, device=encodedData.device)
-        baseIdx = baseIdx.view(1, 1,
-                               windowSize).expand(1,
-                                                  self.negativeSamplingExt,
-                                                  windowSize).expand(batchSize, self.negativeSamplingExt, windowSize)
+    baseIdx = baseIdx.view(1, 1,
+                           windowSize).expand(1,
+                                              self.negativeSamplingExt,
+                                              windowSize).expand(batchSize, self.negativeSamplingExt, windowSize)
 
     seqIdx += baseIdx.contiguous().view(-1)
     seqIdx = torch.remainder(seqIdx, nNegativeExt)
@@ -197,7 +198,7 @@ class CPCLoss(nn.Module):
                             dtype=torch.long,
                             device=encodedData.device)
     
-    for k in range(self.startOffset, self.nPredicts + self.startOffset):
+    for k in range(1, self.nPredicts + 1):
         # Positive samples
         if k < self.nPredicts:
             posSeq = encodedData[:, k:-(self.nPredicts-k)]
@@ -214,22 +215,20 @@ class CPCLoss(nn.Module):
 
     return "orthoLoss", self.orthoLoss * self.wPrediction.orthoCriterion()
 
-  def forward(self, cFeature, encodedData, mask, label):
+  def forward(self, cFeature, encodedData, mask, label=None):
     """
     :param cFeature: FloatTensor of size (batchSize, seqSize, dimAR), contextualized features
     :param encodedData: FloatTensor of size (batchSize, seqSize, dimEncoded), input encoder features, 
     :param mask: FloatTensor of size (batchSize, negativeSamplingExt), mask on the input encoder features
     """
     batchSize, seqSize, dimAR = cFeature.size()
-    windowSize = seqSize - self.nPredicts + (1 - self.startOffset)
-
+    windowSize = seqSize - self.nPredicts
     cFeature = cFeature[:, :windowSize]
 
     sampledData, labelLoss = self.sampleClean(encodedData, windowSize)
     
     if self.auxEmb is not None:
-      l_ = label.view(batchSize, 1).expand(batchSize, windowSize)
-      auxEmb = self.auxEmb(l_)
+      auxEmb = self.auxEmb(label)
       cFeature = torch.cat([cFeature, auxEmb], dim=2)
     
     predictions = self.wPrediction(cFeature, sampledData)
@@ -249,7 +248,7 @@ class CPCLoss(nn.Module):
     return torch.cat(outLosses, dim=1), \
         torch.cat(outAcc, dim=1) / (windowSize * batchSize)
   
-  def predict_clusters(cFeature, encodedData,
+  def predict_clusters(self, cFeature, encodedData,
                        firstIdx, secondIdx):
       '''
       :param cFeature: FloatTensor of size (num. of spans, span embed dim),
@@ -265,8 +264,9 @@ class CPCLoss(nn.Module):
       span_mask = torch.ones(len(firstIdx)).to(device)
       first_span_embeddings = cFeature[firstIdx]
       second_span_embeddings = encodedData[secondIdx]
-      scores = self.cPredictor(first_span_embeddings, [second_span_embeddings]*self.nPredicts)[0]
-
+      scores = self.wPrediction(first_span_embeddings.unsqueeze(0),
+                                [second_span_embeddings.unsqueeze(0).unsqueeze(0)]*self.nPredicts)[0]
+      scores = scores.squeeze(0).squeeze(0)
       antecedents = -1 * np.ones(span_num, dtype=np.int64)
 
       # Antecedent prediction

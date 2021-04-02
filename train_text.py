@@ -13,7 +13,7 @@ import random
 import numpy as np
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
-from text_models import NoOp, SpanEmbedder, StarSimplePairWiseClassifier
+from text_models import NoOp, SpanEmbedder, StarSimplePairWiseClassifier, SimplePairWiseClassifier, StarTransformerClassifier
 from corpus_text import TextFeatureDataset
 from evaluator import Evaluation, RetrievalEvaluation, CoNLLEvaluation
 from conll import write_output_file
@@ -88,9 +88,6 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
   torch.set_grad_enabled(True)
   
-  for p in text_model.parameters():
-    print(p.requires_grad)
-
   if not isinstance(text_model, torch.nn.DataParallel):
     text_model = nn.DataParallel(text_model)
 
@@ -143,6 +140,7 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
       event_to_roles_mappings,\
       width,\
       text_labels, type_labels,\
+      role_labels,\
       text_mask, span_mask = batch 
 
       B = doc_embeddings.size(0)
@@ -176,21 +174,35 @@ def train(text_model, mention_model, image_model, coref_model, train_loader, tes
                                      type_labels=type_labels)
           
       if not first_event_idx is None:
-          event_scores = coref_model(mention_output,
-                                 event_mappings,
-                                 event_to_roles_mappings,
-                                 first_event_idx[0],
-                                 second_event_idx[0]).flatten()
+          if config.classifier.split('_')[0] == 'graph':
+            event_scores = coref_model(mention_output,
+                                       event_mappings,
+                                       event_to_roles_mappings,
+                                       first_event_idx[0],
+                                       second_event_idx[0]).flatten()
+          else:
+            event_scores = []
+            for idx in range(B):
+              event_scores.append(coref_model(mention_output[idx, first_event_idx[idx]],
+                                              mention_output[idx, second_event_idx[idx]]))
+            event_scores = torch.cat(event_scores).squeeze(1)
           loss_event = criterion(event_scores, pairwise_event_labels)
       else:
           loss_event = torch.zeros((mention_output.size(0),), dtype=torch.float, device=device)
           
       if not first_entity_idx is None:
-          entity_scores = coref_model(mention_output,
-                                  entity_mappings,
-                                  entity_mappings.unsqueeze(-2),
-                                  first_entity_idx[0],
-                                  second_entity_idx[0]).flatten()
+          if config.classifier.split('_')[0] == 'graph':
+            entity_scores = coref_model(mention_output,
+                                        entity_mappings,
+                                        entity_mappings.unsqueeze(-2),
+                                        first_entity_idx[0],
+                                        second_entity_idx[0]).flatten()
+          else:
+            entity_scores = []
+            for idx in range(B):
+              entity_scores.append(coref_model(mention_output[idx, first_entity_idx[idx]],
+                                               mention_output[idx, second_entity_idx[idx]]))
+            entity_scores = torch.cat(entity_scores).squeeze(1)
           loss_entity = criterion(entity_scores, pairwise_entity_labels)
       else:
           loss_entity = torch.zeros((mention_output.size(0),), dtype=torch.float, device=device)
@@ -251,6 +263,7 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
         event_mappings, entity_mappings,\
         event_to_roles_mappings, width,\
         text_labels, type_labels,\
+        role_labels,\
         text_mask, span_mask = batch
         
         token_num = text_mask.sum(-1).long()
@@ -305,9 +318,15 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
                 event_to_roles_mapping = event_to_roles_mappings[idx, :event_num[idx]]
                 event_label = event_labels[idx, :event_num[idx]]
                 # Compute pairwise scores
-                event_antecedents, event_scores = coref_model.module.predict_cluster(mention_output[idx],
-                                                                                 event_mapping, event_to_roles_mapping,
-                                                                                 first_event_idx, second_event_idx)
+                if config.classifier.split('_')[0] == 'graph':
+                  event_antecedents, event_scores = coref_model.module.predict_cluster(mention_output[idx],
+                                                                                       event_mapping, event_to_roles_mapping,
+                                                                                       first_event_idx, second_event_idx)
+                else:
+                  event_output = torch.mm(event_mapping, mention_output[idx])
+                  event_antecedents, event_scores = coref_model.module.predict_cluster(event_output,
+                                                                                       first_event_idx, second_event_idx)
+
                 event_antecedents = torch.LongTensor(event_antecedents)
                 all_event_scores.append(event_scores)
                 all_event_labels.append(pairwise_event_labels.to(torch.int).cpu())
@@ -329,10 +348,16 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
                 entity_mapping = entity_mappings[idx, :entity_num[idx]]
                 entity_start_ends = torch.mm(entity_mapping[:, :mention_num].cpu(), origin_candidate_start_ends.float()).long()
                 entity_label = entity_labels[idx, :entity_num[idx]]
-                entity_antecedents, entity_scores = coref_model.module.predict_cluster(mention_output[idx],
-                                                                                   entity_mapping, entity_mapping.unsqueeze(1),
-                                                                                   first_entity_idx, second_entity_idx)
-                entity_antecedents = torch.LongTensor(entity_antecedents)
+                if config.classifier.split('_')[0] == 'graph':
+                  entity_antecedents, entity_scores = coref_model.module.predict_cluster(mention_output[idx],
+                                                                                         entity_mapping, entity_mapping.unsqueeze(1),
+                                                                                         first_entity_idx, second_entity_idx)
+                else:
+                  entity_output = torch.mm(entity_mapping, mention_output[idx])
+                  entity_antecedents, entity_scores = coref_model.module.predict_cluster(entity_output,
+                                                                                         first_entity_idx, second_entity_idx)
+
+                entity_antecedents = torch.LongTensor(entity_antecedents)  
                 all_entity_scores.append(entity_scores)
                 all_entity_labels.append(pairwise_entity_labels.to(torch.int).cpu())
 
@@ -454,10 +479,13 @@ if __name__ == '__main__':
   mention_model = SpanEmbedder(config, device).to(device)
 
   image_model = NoOp()
-  if config.get('classifier', 'graph') == 'simple':
+  classifier = config.get('classifier', 'graph')
+  if classifier == 'simple':
     coref_model = SimplePairWiseClassifier(config).to(device)
-  else:
+  elif classifier == 'graph':
     coref_model = StarSimplePairWiseClassifier(config).to(device)
+  elif classifier == 'graph_transformer':
+    coref_model = StarTransformerClassifier(config).to(device)
 
   if config['training_method'] in ('pipeline', 'continue'):
       text_model.load_state_dict(torch.load(config['text_model_path'], map_location=device))

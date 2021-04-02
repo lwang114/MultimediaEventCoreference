@@ -538,15 +538,17 @@ class StarTransformerClassifier(nn.Module):
         self.input_layer += config.embedding_dimension
     if config.get('with_type_embedding', False):
         self.input_layer += config.type_embedding_dimension
+    self.metric = config.get('metric', 'wasserstein')
  
     transformer_decoder = nn.TransformerDecoderLayer(d_model=self.input_layer,
-                                                       nheads=1)
+                                                     nhead=1)
     self.transformer = torch.nn.TransformerDecoder(transformer_decoder,
-                                                    num_decoder_layers=1)
+                                                    num_layers=1)
     self.classifier_feature_gate = nn.Linear(2*self.input_layer, 1)
     
   def forward(self, x, center_map, neighbor_map,
-              first_idxs=None, second_idxs=None):
+              first_idxs=None, second_idxs=None,
+              edge_labels=None):
     '''
     :param x: FloatTensor of size (batch size, max num. of spans, embed dim)
     :param center_map: FloatTensor of size (batch size, max num. of centers, max num. of spans)
@@ -556,40 +558,61 @@ class StarTransformerClassifier(nn.Module):
     batch_size = x.size(0)
     embs = self.transformer(x, x)
     neighbor_mask = neighbor_map.sum(-1)
-    
+   
+    # (batch size, max num. of centers, max num. of roles, embed dim)
     c = torch.matmul(center_map, x)
     neighbors = torch.matmul(neighbor_map, x.unsqueeze(1))
-    embs_c = torch.matmul(center_map, embs)
+
     # (batch size, max num. of centers, max num. of roles, embed dim)
+    embs_c = torch.matmul(center_map, embs)
     embs_neighbors = torch.matmul(neighbor_map, embs.unsqueeze(1))
-    n = embs_c.size(1)
-    n_neighbors = embs_neighbors.size(-2)
+
+    n = c.size(1)
+    n_neighbors = neighbors.size(-2)
      
     if first_idxs is None or second_idxs is None:
       first_idxs, second_idxs = zip(*list(combinations(range(n), 2)))
     first_arg_idxs, second_arg_idxs = zip(*list((i, j) for i in range(n_neighbors) for j in range(n_neighbors)))
+    n_pairs = len(first_idxs)
+    n_arg_pairs = len(first_arg_idxs)
 
+    # (batch size, max num. of pairs)
     scores_c = self.pairwise_score(c[:, first_idxs], embs_c[:, second_idxs])
     scores_neighbors = []
-    for first_idx, second_idx in zip(first_idxs, second_idxs):
-      arg_pair_mask = neighbor_mask[:, first_idx].unsqueeze(-1) * neighbor_mask[:, second_idx].unsqueeze(-2)
-      score_neighbors = self.alignment_score(
-          self.pairwise_score(neighbors[:, first_idx, first_arg_idxs],
-                              embs_neighbors[:, second_idx, second_arg_idxs]).view(batch_size, n_neighbors, n_neighbors),
-          arg_pair_mask)
-      scores_neighbors.append(score_neighbors)
+    arg_pair_masks = neighbor_mask[:, first_idxs].unsqueeze(-1) *\
+                     neighbor_mask[:, second_idxs].unsqueeze(-2)
     
-    scores_neighbors = torch.stack(scores_neighbors, dim=1)
-    
+    pairwise_scores = self.pairwise_score(neighbors[:, first_idxs][:, :, first_arg_idxs].view(batch_size*n_pairs, n_arg_pairs, -1),
+                                          embs_neighbors[:, second_idxs][:, :, second_arg_idxs].view(batch_size*n_pairs, n_arg_pairs, -1))
+
+    if edge_labels is not None:
+      first_edge_labels = edge_labels[:, first_idxs].unsqueeze(-1)
+      second_edge_labels = edge_labels[:, second_idxs].unsqueeze(-2)
+      pairwise_edge_labels = (first_edge_labels == second_edge_labels) &\
+                             (first_edge_labels != 0) &\
+                             (second_edge_labels != 0)
+      pairwise_edge_labels = pairwise_edge_labels.float()
+      scores_neighbors = self.alignment_score(
+          pairwise_scores.view(batch_size*n_pairs, n_neighbors, n_neighbors),
+          pairwise_edge_labels.view(batch_size*n_pairs, n_neighbors, n_neighbors),
+          metric="greedy")
+    else:
+      scores_neighbors = self.alignment_score(
+          pairwise_scores.view(batch_size*n_pairs, n_neighbors, n_neighbors),
+          arg_pair_masks.view(batch_size*n_pairs, n_neighbors, n_neighbors),
+          metric=self.metric)
+    scores_neighbors = scores_neighbors.view(batch_size, n_pairs)
+
     gate_probs = torch.sigmoid(self.classifier_feature_gate(
-                                torch.cat([embs_c[:, first_idxs],
+                                torch.cat([c[:, first_idxs],
                                            embs_c[:, second_idxs]], dim=-1))).squeeze(-1)
-    return gate_probs * scores_c + (1 - gate_probs) * scores_neighbors
+
+    return scores_c # XXX gate_probs * scores_c + (1 - gate_probs) * scores_neighbors
 
   def pairwise_score(self, first, second):
       return torch.sum(first * second, dim=-1)
 
-  def alignment_score(self, score_mat, mask, dim=-1, metric='wasserstein'):
+  def alignment_score(self, score_mat, mask, dim=-1, metric='greedy'):
       device = score_mat.device 
       batch_size = score_mat.size(0)
       if metric == 'greedy':
@@ -601,22 +624,31 @@ class StarTransformerClassifier(nn.Module):
       elif metric == 'wasserstein':
         score_mat_arr = torch.sigmoid(score_mat).cpu().detach().numpy()
         mask = mask.cpu().detach().numpy()
-
         score_mat_arr = score_mat_arr * mask
+        
         C = 1 - score_mat_arr
-        n = mask.sum(-1).sum(-1, keepdim=True) + 1e-12
-        a1 = mask.sum(-1) / n
-        a2 = mask.sum(-2) / n
+        n_pairs = mask.sum(-1).sum(-1)
+        n = (mask + 1e-12).sum(-1).sum(-1, keepdims=True)
+        a1 = (mask + 1e-12).sum(-1) / n
+        a2 = (mask + 1e-12).sum(-2) / n
         P = np.zeros(C.shape)
         for idx in range(batch_size):
-          P[idx], _ = ipot_WD(a1[idx], a2[idx], C[idx])
+            if n_pairs[idx] <= 1:
+                P[idx][0, 0] = 1.
+            else:
+                P[idx], _ = ipot_WD(a1[idx], a2[idx], C[idx])
         
         P = torch.FloatTensor(P).to(device)
         return (P * score_mat).sum(-1).sum(-1)
       else:
         raise ValueError(f'Invalid metric {metric}')
 
-  def predict_cluster(self, x, center_map, neighbor_map, first_idxs, second_idxs): 
+  def predict_cluster(self, x, 
+                      center_map, 
+                      neighbor_map, 
+                      first_idxs, 
+                      second_idxs,
+                      edge_labels=None): 
     span_num = center_map.size(0)
     thres = 0
     
@@ -624,7 +656,8 @@ class StarTransformerClassifier(nn.Module):
     scores = self(x.unsqueeze(0),
                   center_map.unsqueeze(0),
                   neighbor_map.unsqueeze(0),
-                  first_idxs, second_idxs).squeeze(0)
+                  first_idxs, second_idxs,
+                  edge_labels=edge_labels).squeeze(0)
     antecedents = -1 * np.ones(span_num, dtype=np.int64)
 
     # Antecedent prediction
@@ -727,9 +760,9 @@ class TransformerClassifier(nn.Module):
                                               num_decoder_layers=1)
     else:
       transformer_decoder = nn.TransformerDecoderLayer(d_model=self.input_layer,
-                                                       nheads=1)
+                                                       nhead=1)
       self.transformer = torch.nn.TransformerDecoder(transformer_decoder,
-                                                     num_decoder_layers=1)
+                                                     num_layers=1)
 
   def predict_cluster(self, span_embeddings, first_idx, second_idx):
       '''
