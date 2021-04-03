@@ -9,7 +9,11 @@ from nltk.translate import bleu_score
 from nltk.metrics.scores import precision, recall, f_measure 
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import seaborn as sns
+import pandas as pd
 np.random.seed(2)
 
 PUNCT = [',', '.', '\'', '\"', ':', ';', '?', '!', '<', '>', '~', '%', '$', '|', '/', '@', '#', '^', '*']
@@ -291,8 +295,8 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_fi
       else:
         event_feat.append(np.tile(frame_feats[start][np.newaxis], (k, 1)))
       '''
-      event_feat.append(frame_feats[start:end+1])
-    event_feat = np.concatenate(event_feat, axis=0)
+      event_feat.append(frame_feats[start:end+1].mean(axis=0))
+    event_feat = np.stack(event_feat, axis=0)
     feat_id = '{}_{}'.format(doc_id, idx)
     print(feat_id, event_feat.shape)
     
@@ -313,28 +317,36 @@ def visualize_features(embed_file, label_file, freq_file,
   plt.rc('axes', labelsize=20)
   plt.rc('figure', titlesize=30)
   plt.rc('font', size=20)
-  
-  # Visualize the embeddings with TSNE
-  feat_npz = np.load(embed_file)
-  feats = np.concatenate([feat_npz[k] for k in sorted(feat_npz, key=lambda x:int(x.split('_')[-1]))])
-  label_npz = np.load(label_file)
-  labels = np.concatenate([label_npz[k] for k in sorted(label_npz, key=lambda x:int(x.split('_')[-1]))])
-  freq = json.load(open(freq_file))
 
-  top_types = sorted(freq, key=lambda x:freq[x], reverse=True)[:n_class]
-  X = TSNE(n_components=2).fit_transform(feats) # TODO
-  select_idxs = [i for i, y in enumerate(ys) if y in top_types]
+  if not os.path.exists(f'{out_prefix}.csv'):
+    # Visualize the embeddings with TSNE
+    feat_npz = np.load(embed_file)
+    feats = np.concatenate([feat_npz[k] for k in sorted(feat_npz, key=lambda x:int(x.split('_')[-1]))]) # XXX
+    label_npz = np.load(label_file)
+    labels = np.concatenate([np.argmax(label_npz[k], axis=1) for k in sorted(label_npz, key=lambda x:int(x.split('_')[-1]))]) # XXX
+    freq = json.load(open(freq_file))
 
-  X_tsne = X[select_idxs]
-  y = labels[select_idxs]
-  df = pd.DataFrame({'t-SNE dim 0': X_new[:, 0], 
-                     't-SNE dim 1': X_new[:, 1],
-                     'Event type': y})
-  df.to_csv(out_prefix+'.csv')
+    top_types = sorted(freq, key=lambda x:freq[x], reverse=True)[:n_class]
+    print('top_types: ', top_types) # XXX
+    X = TSNE(n_components=2).fit_transform(feats)
+    select_idxs = [i for i, y in enumerate(labels) if str(y) in top_types]
+
+    X = X[select_idxs]
+    y = labels[select_idxs]
+    df = pd.DataFrame({'t-SNE dim 0': X[:, 0], 
+                       't-SNE dim 1': X[:, 1],
+                       'Event type': y})
+    df.to_csv(out_prefix+'.csv')
+  else:
+    df = pd.read_csv(f'{out_prefix}.csv')
+
   fig, ax = plt.subplots(figsize=(10, 10))
-  sns.scatterplot(data=df, x='t-SNE dim 0', y='t-SNE dim 0', 
-                  hue='Event type', style='Event type')
-
+  sns.scatterplot(data=df, x='t-SNE dim 0', y='t-SNE dim 1', 
+                  hue='Event type', style='Event type',
+                  palette=sns.color_palette('husl', 10))
+  plt.savefig(out_prefix+'.png')
+  plt.close()
+  
 def extract_image_embeddings(data_dir, csv_dir, mapping_file, out_prefix, image_ids=None):
   # Create a mapping from Youtube id to short description
   mapping_dict = json.load(open(mapping_file))
@@ -529,3 +541,9 @@ if __name__ == '__main__':
     
     out_prefix = os.path.join(data_dir, 'train_mmaction_event_feat')
     extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_file, annotation_file, out_prefix=out_prefix)
+  elif args.task == 7:
+    out_prefix = os.path.join(data_dir, 'train_mmaction_event_feat')
+    embed_file = f'{out_prefix}.npz'
+    label_file = f'{out_prefix}_labels.npz'
+    freq_file = f'{out_prefix}_event_frequency.json'
+    visualize_features(embed_file, label_file, freq_file, out_prefix=f'{out_prefix}_tsne')
