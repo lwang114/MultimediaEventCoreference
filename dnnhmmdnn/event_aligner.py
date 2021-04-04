@@ -15,7 +15,7 @@ import torch
 from scipy.special import logsumexp
 from region_vgmm import *
 from negative_square import NegativeSquare
-from ..evaluator import Evaluation, CoNLLEvaluation
+from evaluator import Evaluation, CoNLLEvaluation
 
 logger = logging.getLogger(__name__)
 EPS = 1e-15
@@ -183,10 +183,10 @@ class FullyContinuousMixtureAligner(object):
 
       V_trg = to_one_hot(trg_sent, self.Kt)
       V_src = to_one_hot(src_sent, self.Ks)
-      null_prob = V_src.mean(axis=1)
+      null_prob = V_src.mean() * np.ones((V_trg.shape[0], 1))
       P_a = V_trg @ self.P_ts @ V_src.T
 
-      P_a = np.concatenate([null_prob[:, np.newaxis], P_a], axis=1)
+      P_a = np.concatenate([null_prob, P_a], axis=1)
 
       if score_type == 'max':
         scores.append(np.prod(np.max(P_a, axis=0)))
@@ -304,8 +304,13 @@ def to_one_hot(sent, K):
 
 def to_pairwise(labels):
   n = labels.shape[0]
+  if n <= 1:
+    return None
   first, second = zip(*list(itertools.combinations(range(n), 2)))
-  pw_labels = labels[first] == labels[second] & labels[first] != 0 & labels[second] != 0
+  first = list(first)
+  second = list(second)
+  
+  pw_labels = (labels[first] == labels[second]) & (labels[first] != 0) & (labels[second] != 0)
   pw_labels = pw_labels.astype(np.int64) 
   return pw_labels
 
@@ -331,7 +336,7 @@ def load_data(config):
   event_mentions_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train_events.json'), 'r', 'utf-8'))
   doc_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train.json')))
   event_mentions_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test_events.json'), 'r', 'utf-8'))
-  doc_test = json.load(codes.open(os.path.join(config['data_folder'], 'test.json')))
+  doc_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test.json')))
 
   visual_feats = np.load(os.path.join(config['data_folder'], 'train_mmaction_event_feat.npz'))
   doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in visual_feats}
@@ -357,8 +362,7 @@ def load_data(config):
         label_dict_train[m['doc_id']] = {}
       token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
       label_dict_train[m['doc_id']][(min(m['tokens_ids']), max(m['tokens_ids']))] = {'token_id': vocab[token],
-                                                                                     'cluster_id': m['cluster_id']} 
-      
+                                                                                     'cluster_id': m['cluster_id']}       
 
   for m in event_mentions_test:
     if m['doc_id'] in doc_to_feat:
@@ -388,16 +392,16 @@ def load_data(config):
     src_feats_train.append(visual_feats[feat_id])
 
     spans = sorted(label_dict_train[doc_id])
-    spans_train.append(spans)
     trg_sent = [label_dict_train[doc_id][span]['token_id'] for span in spans]
     cluster_ids = [label_dict_train[doc_id][span]['cluster_id'] for span in spans]
 
+    spans_train.append(spans)
     trg_feats_train.append(to_one_hot(trg_sent, vocab_size))
     doc_ids_train.append(doc_id)
-    cluster_ids_train.append(cluster_ids)
+    cluster_ids_train.append(np.asarray(cluster_ids))
     tokens_train.append([t[2] for t in doc_train[doc_id]])
 
-  for feat_idx, doc_id in enumerate(sorted(label_dict_test)): 
+  for feat_idx, doc_id in enumerate(sorted(label_dict_test)): # XXX
     feat_id = doc_to_feat[doc_id]
     src_feats_test.append(visual_feats[feat_id])
 
@@ -405,12 +409,10 @@ def load_data(config):
     trg_sent = [label_dict_test[doc_id][span]['token_id'] for span in spans]
     cluster_ids = [label_dict_test[doc_id][span]['cluster_id'] for span in spans]
     
-    tokens_test.append(tokens)
     spans_test.append(spans)
     trg_feats_test.append(to_one_hot(trg_sent, vocab_size))
     doc_ids_test.append(doc_id)
-    cluster_ids_test.append(cluster_ids)
-    tokens_test.append(tokens)
+    cluster_ids_test.append(np.asarray(cluster_ids))
     tokens_test.append([t[2] for t in doc_test[doc_id]])
 
   return src_feats_train, trg_feats_train,\
@@ -445,24 +447,25 @@ if __name__ == '__main__':
   ## Test and evaluation
   conll_eval = CoNLLEvaluation()
 
-  alignments = aligner.align_sents(src_feats_test, trg_feats_test)
-  pred_labels = [torch.LongTensor(to_pairwise(a)) for a in alignments]
-  gold_labels = [torch.LongTensor(to_pairwise(c)) for c in cluster_ids_test]
-
+  alignments, _ = aligner.align_sents(src_feats_test, trg_feats_test)
+  pred_labels = [torch.LongTensor(to_pairwise(a)) for a in alignments if a.shape[0] > 1]
+  gold_labels = [torch.LongTensor(to_pairwise(c)) for c in cluster_ids_test if c.shape[0] > 1]
+  pred_labels = torch.cat(pred_labels)
+  gold_labels = torch.cat(gold_labels)
+  
   # Compute pairwise scores
   pairwise_eval = Evaluation(pred_labels, gold_labels)  
   print(f'Pairwise - Precision: {pairwise_eval.get_precision():.4f}, Recall: {pairwise_eval.get_recall():.4f}, F1: {pairwise_eval.get_f1():.4f}')
-
   logger.info(f'Pairwise precision: {pairwise_eval.get_precision()}, recall: {pairwise_eval.get_recall()}, F1: {pairwise_eval.get_f1()}')
   
   # Compute CoNLL scores and save readable predictions
-  antecedents = to_antecedents(alignments)
-
   f_out = open(os.path.join(config['model_path'], 'prediction.readable'), 'w')
-  for doc_id, token, span, alignment, cluster_id in zip(doc_ids, tokens_test, spans_test, alignments, cluster_ids_test)
-    antecedent = torch.LongTensor(to_antecedent(alignment))
-    pred_clusters, gold_clusters = conll_eval(span, antecedent,
-                                              span, torch.LongTensor(cluster_id)) 
+  for doc_id, token, span, alignment, cluster_id in zip(doc_ids_test, tokens_test, spans_test, alignments, cluster_ids_test):
+    antecedent = to_antecedents(alignment)
+    pred_clusters, gold_clusters = conll_eval(torch.LongTensor(span),
+                                              torch.LongTensor(antecedent),
+                                              torch.LongTensor(span),
+                                              torch.LongTensor(cluster_id)) 
     pred_clusters_str, gold_clusters_str = conll_eval.make_output_readable(pred_clusters, gold_clusters, token) 
     token_str = ' '.join(token)
     f_out.write(f'{doc_id}: {token_str}\n')
