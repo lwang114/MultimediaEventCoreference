@@ -302,30 +302,37 @@ def load_data(config):
   lemmatizer = WordNetLemmatizer() 
   event_mentions_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train_events.json'), 'r', 'utf-8'))
   event_mentions_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test_events.json'), 'r', 'utf-8'))
-  visual_feats_train = np.load(os.path.join(config['data_folder'], 'train_mmaction_event_feats.npz'))
-  visual_feats_test = np.load(os.path.join(config['data_folder'], 'test_mmaction_event_feats.npz'))
+  visual_feats = np.load(os.path.join(config['data_folder'], 'train_mmaction_event_feat.npz'))
+  doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in visual_feats}
 
   vocab = dict()
+  vocab_freq = {}
   label_dict_train = {}
   label_dict_test = {}
   for m in event_mentions_train + event_mentions_test:
     trigger = m['tokens']
-    trigger = lemmatizer.lemmatize(trigger.lower())
+    trigger = lemmatizer.lemmatize(trigger.lower(), pos='v')
     if not trigger in vocab:
       vocab[trigger] = len(vocab)
+      vocab_freq[trigger] = 1
+    else:
+      vocab_freq[trigger] += 1
+  json.dump(vocab_freq, open('vocab_freq.json', 'w'), indent=2)
   vocab_size = len(vocab)
 
   for m in event_mentions_train:
-    if not m['doc_id'] in label_dict_train:
-      label_dict_train[m['doc_id']] = {}
-    token = lemmatizer.lemmatize(m['token'].lower())
-    label_dict_train[m['doc_id']][(min(m['token_ids']), max(m['token_ids']))] = vocab[token] 
+    if m['doc_id'] in doc_to_feat:
+      if not m['doc_id'] in label_dict_train:
+        label_dict_train[m['doc_id']] = {}
+      token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
+      label_dict_train[m['doc_id']][(min(m['tokens_ids']), max(m['tokens_ids']))] = vocab[token] 
 
   for m in event_mentions_test:
-    if not m['doc_id'] in label_dict_test:
-      label_dict_test[m['doc_id']] = {}
-    token = lemmatizer.lemmatize(m['token'].lower())
-    label_dict_test[m['doc_id']][(min(m['token_ids']), max(m['token_ids']))] = vocab[token]
+    if m['doc_id'] in doc_to_feat:
+      if not m['doc_id'] in label_dict_test:
+        label_dict_test[m['doc_id']] = {}
+      token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
+      label_dict_test[m['doc_id']][(min(m['tokens_ids']), max(m['tokens_ids']))] = vocab[token]
   print(f'Vocab size: {vocab_size}')
   print(f'Number of training examples: {len(label_dict_train)}')
   print(f'Number of test examples: {len(label_dict_test)}')
@@ -334,22 +341,22 @@ def load_data(config):
   trg_feats_train = []
   src_feats_test = []
   trg_feats_test = []
-  for feat_idx, doc_id in enumerate(sorted(label_dict_train)):
-    feat_id = f'{doc_id}_{feat_idx}'
-    src_feats_train.append(visual_feats_train[feat_id])
+  for feat_idx, doc_id in enumerate(sorted(label_dict_train)): # XXX
+    feat_id = doc_to_feat[doc_id]
+    src_feats_train.append(visual_feats[feat_id])
     trg_sent = [label_dict_train[doc_id][span] for span in sorted(label_dict_train[doc_id])]
     trg_feats_train.append(to_one_hot(trg_sent, vocab_size))
 
-  for feat_idx, doc_id in enumerate(sorted(label_dict_test)):
-    feat_id = f'{doc_id}_{feat_idx}'
-    src_feats_test.append(visual_feats_test[feat_id])
+  for feat_idx, doc_id in enumerate(sorted(label_dict_test)): 
+    feat_id = doc_to_feat[doc_id]
+    src_feats_test.append(visual_feats[feat_id])
     trg_sent = [label_dict_test[doc_id][span] for span in sorted(label_dict_test[doc_id])]
     trg_feats_test.append(to_one_hot(trg_sent, vocab_size))
 
   return src_feats_train, trg_feats_train, src_feats_test, trg_feats_test, vocab
 
 if __name__ == '__main__':
-  config_file = '../configs/config_dnnhmmdnn_video_m2e2.json' # TODO
+  config_file = '../configs/config_dnnhmmdnn_video_m2e2.json'
   config = pyhocon.ConfigFactory.parse_file(config_file)
   Ks = 33
 
@@ -362,4 +369,4 @@ if __name__ == '__main__':
   aligner = FullyContinuousMixtureAligner(src_feats_train, trg_feats_train, configs={'n_trg_vocab':Kt, 'n_src_vocab':Ks})
   aligner.trainEM(15, os.path.join(config['model_path'], 'mixture'))
   aligner.print_alignment(os.path.join(config['model_path'], 'alignment.json'))
-  aligner.retrieve(src_feats_test, trg_feats_test, os.path.join(config['model_path'], 'retrieval')) 
+  aligner.retrieve(src_feats_test, trg_feats_test, os.path.join(config['model_path'], 'retrieval'))

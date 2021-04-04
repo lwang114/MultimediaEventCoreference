@@ -1,31 +1,39 @@
 import numpy as np
 from sklearn.cluster import KMeans
+from sklearn.mixture import BayesianGaussianMixture
 from scipy.special import logsumexp
 from copy import deepcopy
 
 class RegionVGMM(object):
   """
   A Region Visual Gaussian mixture model (VGMM)/
+
   Parameters
   ----------
   K : int
       The number of mixture components
   """
-  def __init__(self, X, K, assignments='kmeans', var=1., lr=0.1, vec_ids=None):
+  def __init__(self, X, K,
+               assignments='kmeans',
+               var=1., lr=0.1,
+               vec_ids=None,
+               pretrained_model=None):
     self.K_max = K
     self.D = X.shape[-1]
     self.means = np.zeros((K, self.D))
     self.lr = lr
     self.X = X
     self.var = var
-    self.vec_ids = vec_ids # TODO Make this nonempty by default 
-    self.setup_components()    
+    self.vec_ids = vec_ids # TODO Make this nonempty by default
+    if pretrained_model is None:
+      self.setup_components()
+    else:
+      self.means = np.load(pretrained_model)
 
   def setup_components(self, assignments='kmeans'): 
     if isinstance(assignments, str) and assignments == 'kmeans':
-      keep = [i_ex*75+i_region for i_ex in range(int(self.X.shape[0]/75)) for i_region in range(15)] # Only select a subset of examples for KMeans clustering
-      keep = np.asarray(keep)
-      self.means = KMeans(n_clusters=self.K_max).fit(self.X[keep]).cluster_centers_ 
+      # keep = list(range(self.X.shape[0])) [
+      self.means = KMeans(n_clusters=self.K_max).fit(self.X).cluster_centers_ # BayesianGaussianMixture(n_components=self.K_max, covariance_type='diag', weight_concentration_prior=1000., max_iter=1000).fit(self.X[keep]).means_ # XXX 
     else:
       raise NotImplementedError
  
