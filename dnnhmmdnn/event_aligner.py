@@ -10,8 +10,12 @@ import torch
 import nltk
 from nltk.stem import WordNetLemmatizer
 import pyhocon
+import itertools
+import torch
+from scipy.special import logsumexp
 from region_vgmm import *
 from negative_square import NegativeSquare
+from ..evaluator import Evaluation, CoNLLEvaluation
 
 logger = logging.getLogger(__name__)
 EPS = 1e-15
@@ -20,7 +24,7 @@ class FullyContinuousMixtureAligner(object):
   def __init__(self, source_features_train, target_features_train, configs):
     self.Ks = configs.get('n_src_vocab', 80)
     self.Kt = configs.get('n_trg_vocab', 2001)
-    self.use_null = configs.get('use_null', True)
+    self.use_null = configs.get('use_null', False)
     self.pretrained_vgmm_model = configs.get('pretrained_vgmm_model', None)
     self.pretrained_translateprob = configs.get('pretrained_translateprob', None)
     var = configs.get('var', 160.) # XXX
@@ -37,8 +41,8 @@ class FullyContinuousMixtureAligner(object):
     for ex, src_feat in enumerate(source_features_train):
       if self.use_null:        
         if self.trg_embedding_dim == 1:
-          target_features_train[ex] = [self.Kt-1]+target_features_train[ex]
-          # print('Warning: not supporting NULL symbol for continuous input yet')
+          target_features_train[ex] = target_features_train[ex] + [self.Kt-1]
+
       src_vec_ids = []
       for t in range(len(src_feat)):
         src_vec_ids.append(start_index+t)
@@ -174,17 +178,23 @@ class FullyContinuousMixtureAligner(object):
     scores = []
     for src_feat, trg_feat in zip(source_feats_test, target_feats_test):
       trg_sent = trg_feat
-      src_sent = [np.exp(self.src_model.log_prob_z_given_X(src_feat[i])) for i in range(len(src_feat))]
+      src_sent = [np.exp(self.src_model.log_prob_z_given_X(src_feat[i], normalize=False))\
+                   for i in range(len(src_feat))]
+
       V_trg = to_one_hot(trg_sent, self.Kt)
       V_src = to_one_hot(src_sent, self.Ks)
+      null_prob = V_src.mean(axis=1)
       P_a = V_trg @ self.P_ts @ V_src.T
+
+      P_a = np.concatenate([null_prob[:, np.newaxis], P_a], axis=1)
+
       if score_type == 'max':
         scores.append(np.prod(np.max(P_a, axis=0)))
       elif score_type == 'mean':
         scores.append(np.prod(np.mean(P_a, axis=0)))
       else:
         raise ValueError('Score type not implemented')
-      alignments.append(np.argmax(P_a, axis=0)) 
+      alignments.append(np.argmax(P_a, axis=1)) 
     return alignments, np.asarray(scores)
 
   def retrieve(self, source_features_test, target_features_test, out_file, kbest=10):
@@ -281,7 +291,8 @@ class FullyContinuousMixtureAligner(object):
                           'image_concepts': src_sent.tolist()})
     with open(out_file, 'w') as f:
       json.dump(align_dicts, f, indent=4, sort_keys=True)
-  
+
+
 def to_one_hot(sent, K):
   sent = np.asarray(sent)
   if len(sent.shape) < 2:
@@ -290,6 +301,23 @@ def to_one_hot(sent, K):
     return sent
   else:
     return sent
+
+def to_pairwise(labels):
+  n = labels.shape[0]
+  first, second = zip(*list(itertools.combinations(range(n), 2)))
+  pw_labels = labels[first] == labels[second] & labels[first] != 0 & labels[second] != 0
+  pw_labels = pw_labels.astype(np.int64) 
+  return pw_labels
+
+def to_antecedents(labels): 
+  n = labels.shape[0]
+  antecedents = -1 * np.ones(n, dtype=np.int64)
+  for idx in range(n):
+    for a_idx in range(idx):
+      if labels[idx] == labels[a_idx]:
+        antecedents[idx] = a_idx
+        break
+  return antecedents
 
 def load_data(config):
   """
@@ -301,7 +329,10 @@ def load_data(config):
   """
   lemmatizer = WordNetLemmatizer() 
   event_mentions_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train_events.json'), 'r', 'utf-8'))
+  doc_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train.json')))
   event_mentions_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test_events.json'), 'r', 'utf-8'))
+  doc_test = json.load(codes.open(os.path.join(config['data_folder'], 'test.json')))
+
   visual_feats = np.load(os.path.join(config['data_folder'], 'train_mmaction_event_feat.npz'))
   doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in visual_feats}
 
@@ -325,48 +356,130 @@ def load_data(config):
       if not m['doc_id'] in label_dict_train:
         label_dict_train[m['doc_id']] = {}
       token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
-      label_dict_train[m['doc_id']][(min(m['tokens_ids']), max(m['tokens_ids']))] = vocab[token] 
+      label_dict_train[m['doc_id']][(min(m['tokens_ids']), max(m['tokens_ids']))] = {'token_id': vocab[token],
+                                                                                     'cluster_id': m['cluster_id']} 
+      
 
   for m in event_mentions_test:
     if m['doc_id'] in doc_to_feat:
       if not m['doc_id'] in label_dict_test:
         label_dict_test[m['doc_id']] = {}
       token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
-      label_dict_test[m['doc_id']][(min(m['tokens_ids']), max(m['tokens_ids']))] = vocab[token]
+      label_dict_test[m['doc_id']][(min(m['tokens_ids']), max(m['tokens_ids']))] = {'token_id': vocab[token],
+                                                                                    'cluster_id': m['cluster_id']}
   print(f'Vocab size: {vocab_size}')
   print(f'Number of training examples: {len(label_dict_train)}')
   print(f'Number of test examples: {len(label_dict_test)}')
 
   src_feats_train = []
   trg_feats_train = []
+  doc_ids_train = []
+  spans_train = []
+  cluster_ids_train = []
+  tokens_train = [] 
   src_feats_test = []
   trg_feats_test = []
+  doc_ids_test = []
+  spans_test = []
+  cluster_ids_test = []
+  tokens_test = []
   for feat_idx, doc_id in enumerate(sorted(label_dict_train)): # XXX
     feat_id = doc_to_feat[doc_id]
     src_feats_train.append(visual_feats[feat_id])
-    trg_sent = [label_dict_train[doc_id][span] for span in sorted(label_dict_train[doc_id])]
+
+    spans = sorted(label_dict_train[doc_id])
+    spans_train.append(spans)
+    trg_sent = [label_dict_train[doc_id][span]['token_id'] for span in spans]
+    cluster_ids = [label_dict_train[doc_id][span]['cluster_id'] for span in spans]
+
     trg_feats_train.append(to_one_hot(trg_sent, vocab_size))
+    doc_ids_train.append(doc_id)
+    cluster_ids_train.append(cluster_ids)
+    tokens_train.append([t[2] for t in doc_train[doc_id]])
 
   for feat_idx, doc_id in enumerate(sorted(label_dict_test)): 
     feat_id = doc_to_feat[doc_id]
     src_feats_test.append(visual_feats[feat_id])
-    trg_sent = [label_dict_test[doc_id][span] for span in sorted(label_dict_test[doc_id])]
-    trg_feats_test.append(to_one_hot(trg_sent, vocab_size))
 
-  return src_feats_train, trg_feats_train, src_feats_test, trg_feats_test, vocab
+    spans = sorted(label_dict_test[doc_id])
+    trg_sent = [label_dict_test[doc_id][span]['token_id'] for span in spans]
+    cluster_ids = [label_dict_test[doc_id][span]['cluster_id'] for span in spans]
+    
+    tokens_test.append(tokens)
+    spans_test.append(spans)
+    trg_feats_test.append(to_one_hot(trg_sent, vocab_size))
+    doc_ids_test.append(doc_id)
+    cluster_ids_test.append(cluster_ids)
+    tokens_test.append(tokens)
+    tokens_test.append([t[2] for t in doc_test[doc_id]])
+
+  return src_feats_train, trg_feats_train,\
+         src_feats_test, trg_feats_test,\
+         doc_ids_train, doc_ids_test,\
+         spans_train, spans_test,\
+         cluster_ids_train, cluster_ids_test,\
+         tokens_train, tokens_test, vocab  
+
 
 if __name__ == '__main__':
   config_file = '../configs/config_dnnhmmdnn_video_m2e2.json'
-  config = pyhocon.ConfigFactory.parse_file(config_file)
+  config = pyhocon.ConfigFactory.parse_file(config_file) 
   Ks = 33
-
   if not os.path.isdir(config['model_path']):
     os.makedirs(config['model_path'])
   logging.basicConfig(filename=os.path.join(config['model_path'], 'train.log'))
   
-  src_feats_train, trg_feats_train, src_feats_test, trg_feats_test, vocab = load_data(config)
+  src_feats_train, trg_feats_train,\
+  src_feats_test, trg_feats_test,\
+  doc_ids_train, doc_ids_test,\
+  spans_train, spans_test,\
+  cluster_ids_train, cluster_ids_test,\
+  tokens_train, tokens_test, vocab = load_data(config)
   Kt = len(vocab)
+
+  ## Model training
   aligner = FullyContinuousMixtureAligner(src_feats_train, trg_feats_train, configs={'n_trg_vocab':Kt, 'n_src_vocab':Ks})
-  aligner.trainEM(15, os.path.join(config['model_path'], 'mixture'))
+  aligner.trainEM(15, os.path.join(config['model_path'], 'mixture'))  
   aligner.print_alignment(os.path.join(config['model_path'], 'alignment.json'))
+  
+  ## Test and evaluation
+  conll_eval = CoNLLEvaluation()
+
+  alignments = aligner.align_sents(src_feats_test, trg_feats_test)
+  pred_labels = [torch.LongTensor(to_pairwise(a)) for a in alignments]
+  gold_labels = [torch.LongTensor(to_pairwise(c)) for c in cluster_ids_test]
+
+  # Compute pairwise scores
+  pairwise_eval = Evaluation(pred_labels, gold_labels)  
+  print(f'Pairwise - Precision: {pairwise_eval.get_precision():.4f}, Recall: {pairwise_eval.get_recall():.4f}, F1: {pairwise_eval.get_f1():.4f}')
+
+  logger.info(f'Pairwise precision: {pairwise_eval.get_precision()}, recall: {pairwise_eval.get_recall()}, F1: {pairwise_eval.get_f1()}')
+  
+  # Compute CoNLL scores and save readable predictions
+  antecedents = to_antecedents(alignments)
+
+  f_out = open(os.path.join(config['model_path'], 'prediction.readable'), 'w')
+  for doc_id, token, span, alignment, cluster_id in zip(doc_ids, tokens_test, spans_test, alignments, cluster_ids_test)
+    antecedent = torch.LongTensor(to_antecedent(alignment))
+    pred_clusters, gold_clusters = conll_eval(span, antecedent,
+                                              span, torch.LongTensor(cluster_id)) 
+    pred_clusters_str, gold_clusters_str = conll_eval.make_output_readable(pred_clusters, gold_clusters, token) 
+    token_str = ' '.join(token)
+    f_out.write(f'{doc_id}: {token_str}\n')
+    f_out.write(f'Pred: {pred_clusters_str}\n')
+    f_out.write(f'Gold: {gold_clusters_str}\n\n')
+  f_out.close() 
+  
+  muc, b_cubed, ceafe, avg = conll_eval.get_metrics()
+  conll_metrics = muc+b_cubed+ceafe+avg
+  print('MUC - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
+        'Bcubed - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
+        'CEAFe - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
+        'CoNLL - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*conll_metrics)) 
+  logger.info('MUC - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
+              'Bcubed - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
+              'CEAFe - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
+              'CoNLL - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*conll_metrics))
+
   aligner.retrieve(src_feats_test, trg_feats_test, os.path.join(config['model_path'], 'retrieval'))
+

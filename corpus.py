@@ -256,7 +256,6 @@ class SupervisedGroundingFeatureDataset(Dataset):
         type_labels,\
         text_mask, span_mask
 
-
   def load_video(self, idx):
     '''Load video
     :param idx: int

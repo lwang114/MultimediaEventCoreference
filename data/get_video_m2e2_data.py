@@ -242,8 +242,11 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_fi
 
   event_feats = {}
   event_labels = {}
+  argument_feats = {}
+  argument_labels = {}
   event_frequency = {}
-  for idx, doc_id in enumerate(doc_ids): # XXX
+  entity_frequency = {}
+  for idx, doc_id in enumerate(doc_ids[:20]): # XXX
     # Convert the .csv file to numpy array
     desc = id2desc[doc_id]
     for punct in PUNCT:
@@ -272,6 +275,8 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_fi
     # Extract event features
     event_label = []
     event_feat = []
+    argument_label = []
+    argument_feat = [] 
 
     dur = dur_dict[desc]['duration_second']
     for event_dict in ann_dict[desc+'.mp4']:
@@ -284,6 +289,26 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_fi
       start_time, end_time = event_dict['Temporal_Boundary']
       start, end = int(start_time / dur * nframes), int(end_time / dur * nframes)
       
+      cur_arg_feat = []
+      cur_arg_label = []
+      for arg_dict in event_dict['Key_Frames']:
+        entity_type = event_dict['Entity_Type']
+        if entity_type in entity_frequency:
+          entity_frequency[entity_type] = 1
+        else:
+          entity_frequency[entity_type] += 1
+        timestamp = event_dict['Timestamp']
+        frame_idx = int(timestamp / dur * nframes)
+        cur_arg_feat.append(frame_feats[frame_idx])
+        cur_arg_label.append([entity_type, event_dict['Role_Type']])
+
+      cur_arg_feat = np.stack(cur_arg_feat)
+      cur_arg_label = np.asarray(cur_arg_label)
+      cur_arg_feat = to_fix_length(cur_arg_feat, L=5, pad_val=-1)
+      cur_arg_label = to_fix_length(cur_arg_label, L=5, pad_val=-1)
+      argument_feat.append(cur_arg_feat)
+      argument_label.append(cur_arg_label)
+
       # Extract the top k subspace vectors
       '''
       if end - start + 1 > k:
@@ -296,19 +321,28 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_fi
         event_feat.append(np.tile(frame_feats[start][np.newaxis], (k, 1)))
       '''
       event_feat.append(frame_feats[start:end+1].mean(axis=0))
+    
     event_feat = np.stack(event_feat, axis=0)
+    argument_feat = np.stack(argument_feat, axis=0)
+    argument_label = np.stack(argument_label, axis=0)
+
     feat_id = '{}_{}'.format(doc_id, idx)
     print(feat_id, event_feat.shape)
     
     event_labels[feat_id] = np.asarray(event_label)
+    argument_labels[feat_id] = argument_label
     event_feats[feat_id] = event_feat
-  np.savez('{}.npz'.format(out_prefix), **event_feats)
+    argument_feats[feat_id] = argument_feat
+  np.savez(f'{out_prefix}.npz', **event_feats)
+  np.savez(f'{out_prefix}_argument_feat.npz', **argument_feats)
 
   # Convert the labels to one-hot
   n_event_types = max(int(t) for t in event_frequency) + 1
   event_labels_onehot = {k:np.eye(n_event_types)[l] for k, l in event_labels.items()} 
-  np.savez('{}_labels.npz'.format(out_prefix), **event_labels_onehot)
-  json.dump(event_frequency, open('{}_event_frequency.json'.format(out_prefix), 'w'), indent=4, sort_keys=True)
+  np.savez(f'{out_prefix}_labels.npz', **event_labels_onehot)
+  np.savez(f'{out_prefix}_argument_labels.npz', **argument_labels)
+  json.dump(entity_frequency, open(f'{out_prefix}_entity_frequency.npz', 'w'), indent=4, sort_keys=True)
+  json.dump(event_frequency, open(f'{out_prefix}_event_frequency.json', 'w'), indent=4, sort_keys=True)
 
 def visualize_features(embed_file, label_file, freq_file, 
                        out_prefix='tsne', n_class=10):
@@ -327,7 +361,6 @@ def visualize_features(embed_file, label_file, freq_file,
     freq = json.load(open(freq_file))
 
     top_types = sorted(freq, key=lambda x:freq[x], reverse=True)[:n_class]
-    print('top_types: ', top_types) # XXX
     X = TSNE(n_components=2).fit_transform(feats)
     select_idxs = [i for i, y in enumerate(labels) if str(y) in top_types]
 
@@ -445,6 +478,15 @@ def compute_bleu_similarity(doc_json, mapping_file, out_prefix):
           out_f.write('{}: {}\n\n'.format(second_id, second_short_desc))
 
   np.save('{}_bleu.npy'.format(out_prefix), bleu_scores)
+
+def to_fix_length(x, L, pad_val=-1):
+  shape = x.shape[1:]
+  if x.shape[0] < L:
+    pad = [pad_val*np.ones(shape)[np.newaxis] for _ in range(L-x.shape[0])]
+    x = np.concatenate([x]+pad)
+  else:
+    x = x[:L]
+  return x
 
 if __name__ == '__main__':
   import argparse
