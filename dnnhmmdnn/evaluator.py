@@ -1,6 +1,6 @@
 import torch
 import collections
-# from allennlp_models.coref.metrics.conll_coref_scores import ConllCorefScores
+from allennlp_models.coref.metrics.conll_coref_scores import ConllCorefScores
 
 class Evaluation:
     def __init__(self, predictions, labels):
@@ -63,8 +63,7 @@ class RetrievalEvaluation:
           recall_at_k += 1
           break
     return recall_at_k / self.total  
-  
-'''       
+         
 class CoNLLEvaluation:
   def __init__(self):
     self.scorer = ConllCorefScores()
@@ -129,4 +128,3 @@ class CoNLLEvaluation:
       pred_clusters_str = [[' '.join(tokens[m[0]:m[1]+1]) for m in cluster] for cluster in pred_clusters]
       gold_clusters_str = [[' '.join(tokens[m[0]:m[1]+1]) for m in cluster] for cluster in gold_clusters]
     return pred_clusters_str, gold_clusters_str
-'''

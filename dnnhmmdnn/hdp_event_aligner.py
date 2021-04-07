@@ -13,7 +13,7 @@ import torch
 import argparse
 import nltk
 from nltk.stem import WordNetLemmatizer
-from evaluator import Evaluation# XXX, CoNLLEvaluation
+from evaluator import Evaluation, CoNLLEvaluation
 random.seed(2)
 # Part of the code modified from vpyp: https://github.com/vchahun/vpyp/blob/master/vpyp/pyp.py
 
@@ -135,6 +135,8 @@ class HDPEventAligner(object):
       table_idx = self.event_crp.name2table[c]
       p *= self.feature_crps[table_idx][0].prob(e) *\
               np.prod([self.feature_crps[table_idx][1].prob(a_i) for a_i in a])
+    else:
+      p *= self.p_init_event * (self.p_init_entity ** len(a))
     return p
   
   def log_likelihood(self):
@@ -146,7 +148,18 @@ class HDPEventAligner(object):
 
   def gibbs_sample(self, e, a):
     P = [self.prob(c, e, a) for c in self.event_crp.table_names]
-    P.append(self.event_crp.prob(-1))
+    P.append(self.prob(-1, e, a))
+    '''
+    best_table_idxs = np.argsort(-np.asarray(P))[:10]
+    print('best_tables: ')
+    for i in best_table_idxs: # XXX
+      if i >= len(self.feature_crps):
+        print('new table', P[i])
+      else:
+        print(f'table {i}', self.feature_crps[i][0].table_names, self.feature_crps[i][1].table_names, P[i])
+    print('e, a: ', e, a)
+    '''
+
     norm = sum(P)
     x = norm * random.random()
     for c, w in zip(self.event_crp.table_names+[-1], P):
@@ -286,7 +299,7 @@ def load_text_features(config, split):
           a_token = lemmatizer.lemmatize(a['tokens'].lower())
           label_dicts[m['doc_id']][span]['arguments'][(min(a['tokens_ids']), max(a['tokens_ids']))] = a_token
         
-  for feat_idx, doc_id in enumerate(sorted(label_dicts)): # XXX
+  for feat_idx, doc_id in enumerate(sorted(label_dicts)[:20]): # XXX
     label_dict = label_dicts[doc_id]
     spans = sorted(label_dict)
     a_spans = [[a_span for a_span in sorted(label_dict[span]['arguments'])] for span in spans]
@@ -415,9 +428,9 @@ if __name__ == '__main__':
   ## Model training
   aligner = HDPEventAligner(event_feats_train, 
                             entity_feats_train,
-                            alpha0=0.01,
-                            p_init_event=1./Ke,
-                            p_init_entity=1./Ka)
+                            alpha0=1.,
+                            p_init_event=1./5,
+                            p_init_entity=1./5)
   aligner.train(35, out_dir=config['model_path'])
 
   ## Test and evaluation
@@ -433,7 +446,6 @@ if __name__ == '__main__':
   logger.info(f'Pairwise precision: {pairwise_eval.get_precision()}, recall: {pairwise_eval.get_recall()}, F1: {pairwise_eval.get_f1()}')
   
   # Compute CoNLL scores and save readable predictions
-  '''
   conll_eval = CoNLLEvaluation()
   f_out = open(os.path.join(config['model_path'], 'prediction.readable'), 'w')
   for doc_id, token, span, pred_cluster_id, gold_cluster_id in zip(doc_ids_test, tokens_test, spans_test, pred_cluster_ids, cluster_ids_test):
@@ -459,4 +471,3 @@ if __name__ == '__main__':
               'Bcubed - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
               'CEAFe - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
               'CoNLL - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*conll_metrics))
-  '''
