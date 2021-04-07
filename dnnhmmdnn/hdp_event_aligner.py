@@ -10,8 +10,10 @@ import pyhocon
 import itertools
 import codecs
 import torch
+import argparse
 import nltk
 from nltk.stem import WordNetLemmatizer
+from nltk.stem.snowball import SnowballStemmer
 from evaluator import Evaluation, CoNLLEvaluation
 random.seed(2)
 # Part of the code modified from vpyp: https://github.com/vchahun/vpyp/blob/master/vpyp/pyp.py
@@ -30,13 +32,13 @@ class Restaurant:
   #   p_init: a dictionary {k: p_0(k)},
   #         where p_0(k) is the initial probability for table with name k
   #   alpha0: concentration, Dirichlet process parameter
-  def __init__(self, alpha0):
+  def __init__(self, alpha0, p_init=0.):
     self.tables = []
     self.ntables = 0
     self.ncustomers = 0
     self.name2table = {}
     self.table_names = []
-    self.p_init = {}
+    self.p_init = p_init
     self.alpha0 = alpha0
 
   def seat_to(self, k):
@@ -67,18 +69,29 @@ class Restaurant:
       self.ntables -= 1 
 
   def prob(self, k):
-    w = 0. 
+    if self.p_init == 0:
+      if k in self.name2table: 
+        w = 0.
+      else:
+        w = self.alpha0
+    else:
+      w = self.alpha0 * self.p_init 
+    
     if k in self.name2table:
       i = self.name2table[k]
-      w += self.tables[i]
-    else:
-      w = self.alpha0
-    
+      w += self.tables[i] 
     return w / (self.alpha0 + self.ncustomers) 
 
   def log_likelihood(self):
-    ll = math.lgamma(self.alpha0) - math.lgamma(self.alpha0 + self.ncustomers)
-    ll += sum(math.lgamma(self.tables[i]) for i, k in enumerate(self.table_names))
+    if self.p_init == 0:
+      ll = math.lgamma(self.alpha0) - math.lgamma(self.alpha0 + self.ncustomers)\
+              + sum(math.lgamma(self.tables[i]) for i in range(self.ntables))\
+              + self.ntables * math.log(self.alpha0)
+    else:
+      ll = math.lgamma(self.alpha0) - math.lgamma(self.alpha0 + self.ncustomers)\
+              + sum(math.lgamma(self.tables[i] + self.alpha0 * self.p_init) for i in range(self.ntables))\
+              - self.ntables * math.lgamma(self.alpha0 * self.p_init)\
+              + self.ntables * math.log(self.alpha0 * self.p_init)
     return ll
 
   def save(self, outputDir='./', returnStr=False):
@@ -97,7 +110,9 @@ class HDPEventAligner(object):
   def __init__(self,
                event_features_train,
                entity_features_train,
-               alpha0):
+               alpha0,
+               p_init_event=0.,
+               p_init_entity=0.):
     """
     Attributes:
         event_crp: a Restaurant object storing the distribution for the event clusters,
@@ -109,6 +124,8 @@ class HDPEventAligner(object):
     self.e_feats_train = event_features_train
     self.a_feats_train = entity_features_train
     self.alpha0 = alpha0
+    self.p_init_event = p_init_event
+    self.p_init_entity = p_init_entity
     self.event_crp = Restaurant(alpha0) # Keep track of counts for each event
     self.feature_crps = [] # Keep track of counts for each feature within each event
     self.cluster_ids = [[] for _ in self.e_feats_train]
@@ -117,8 +134,8 @@ class HDPEventAligner(object):
     p = self.event_crp.prob(c)
     if c in self.event_crp.name2table:
       table_idx = self.event_crp.name2table[c]
-      p *= self.feature_crps[table_idx][0].prob(e)
-      p *= np.prod([self.feature_crps[table_idx][1].prob(a_i) for a_i in a])
+      p *= self.feature_crps[table_idx][0].prob(e) *\
+              np.prod([self.feature_crps[table_idx][1].prob(a_i) for a_i in a])
     return p
   
   def log_likelihood(self):
@@ -178,8 +195,8 @@ class HDPEventAligner(object):
   def seat_to(self, c, e, a):
     if not c in self.event_crp.name2table: # Create CRPs for a new event
       self.event_crp.seat_to(c)
-      new_trigger_crp = Restaurant(self.alpha0)
-      new_argument_crp = Restaurant(self.alpha0)
+      new_trigger_crp = Restaurant(self.alpha0, p_init=self.p_init_event)
+      new_argument_crp = Restaurant(self.alpha0, p_init=self.p_init_entity)
       new_trigger_crp.seat_to(e)
       for a_i in a:
         new_argument_crp.seat_to(a_i)
@@ -266,7 +283,7 @@ def load_text_features(config, split):
         a_token = lemmatizer.lemmatize(a['text'].lower())
         label_dicts[m['doc_id']][span]['arguments'][(a['start'], a['end'])] = a_token
 
-  for feat_idx, doc_id in enumerate(sorted(label_dicts)): # XXX
+  for feat_idx, doc_id in enumerate(sorted(label_dicts)[:20]): # XXX
     label_dict = label_dicts[doc_id]
     spans = sorted(label_dict)
     a_spans = [[a_span for a_span in sorted(label_dict[span]['arguments'])] for span in spans]
@@ -361,7 +378,11 @@ def load_data(config):
          vocab_entity
  
 if __name__ == '__main__':
-  config_file = '../configs/config_hdp_video_m2e2.json'
+  parser = argparse.ArgumentParser(formatter=argparse.DefaultsHelpArgumentFormatter)
+  parser.add_argument('--config_file', '-c', default='../configs/config_hdp_video_m2e2.json')
+  args = parser.parse_args()
+
+  config_file = args.config_file
   config = pyhocon.ConfigFactory.parse_file(config_file)
   if not os.path.isdir(config['model_path']):
     os.makedirs(config['model_path'])
@@ -388,7 +409,9 @@ if __name__ == '__main__':
   ## Model training
   aligner = HDPEventAligner(event_feats_train, 
                             entity_feats_train,
-                            alpha0=1.)
+                            alpha0=1.,
+                            p_init_event=1./Ke,
+                            p_init_entity=1./Ka)
   aligner.train(35, out_dir=config['model_path'])
 
   ## Test and evaluation
