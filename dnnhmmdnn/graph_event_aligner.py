@@ -533,7 +533,7 @@ def to_antecedents(labels):
         break
   return antecedents
 
-def load_text_features(config, vocab, vocab_entity, split):
+def load_text_features(config, vocab, vocab_entity, doc_to_feat, split):
   lemmatizer = WordNetLemmatizer() 
   event_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events.json'), 'r', 'utf-8'))
   doc_train = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}.json')))
@@ -557,8 +557,8 @@ def load_text_features(config, vocab, vocab_entity, split):
       token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
       label_dicts[m['doc_id']][span] = {'token_id': vocab[token],
-                                                                                     'cluster_id': m['cluster_id'],
-                                                                                     'arguments': {}} 
+                                        'cluster_id': m['cluster_id'],
+                                        'arguments': {}} 
       
       for a in m['arguments']:
         a_token = lemmatizer.lemmatize(a['text'].lower())
@@ -591,21 +591,21 @@ def load_text_features(config, vocab, vocab_entity, split):
     spans_entity_all.append(a_spans)    
     cluster_ids_all.append(np.asarray(cluster_ids))
     tokens_all.append([t[2] for t in doc_train[doc_id]])
-  return event_feats_all, 
-         entity_feats_all,
-         ea_maps_all
-         doc_ids_all, 
-         spans_all, 
-         spans_entity_all,
-         cluster_ids_all,
-         tokens_all,
+  return event_feats_all,\
+         entity_feats_all,\
+         ea_maps_all,\
+         doc_ids_all,\
+         spans_all,\
+         spans_entity_all,\
+         cluster_ids_all,\
+         tokens_all,\
          label_dicts
 
 
 def load_visual_features(config, label_dicts, split):
   action_feats_npz = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_event_feat.npz'))
   object_feats_npz = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_event_feat_argument_feat.npz'))
-  doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in action_feats}
+  doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in action_feats_npz}
 
   action_feats = []
   object_feats = []
@@ -644,12 +644,21 @@ def load_data(config):
       src_feats_test: a list of arrays of shape (src sent length, src dimension)
       trg_feats_test: a list of arrays of shape (trg sent length, trg dimension)
   """
+  lemmatizer = WordNetLemmatizer() 
+
+  event_mentions_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train_events.json'), 'r', 'utf-8'))
+  doc_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train.json')))
   event_mentions_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test_events.json'), 'r', 'utf-8'))
   doc_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test.json')))
 
+  action_feats_train_npz = np.load(os.path.join(config['data_folder'], 'train_mmaction_event_feat.npz'))
+  action_feats_test_npz = np.load(os.path.join(config['data_folder'], 'test_mmaction_event_feat.npz'))
+  doc_to_feat_train = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in action_feats_train_npz}
+  doc_to_feat_test = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in action_feats_test_npz}
+
   vocab = dict()
   vocab_freq = dict()
-  vocab_entity = dict{}
+  vocab_entity = dict()
   vocab_entity_freq = dict()
   for m in event_mentions_train + event_mentions_test:
     trigger = m['tokens']
@@ -660,10 +669,10 @@ def load_data(config):
     else:
       vocab_freq[trigger] += 1
     
-    for a in trigger['arguments']:
+    for a in m['arguments']:
       argument = a['text']
       argument = lemmatizer.lemmatize(argument.lower())
-      if not argument in vocab:
+      if not argument in vocab_entity:
         vocab_entity[argument] = len(vocab_entity)
         vocab_entity_freq[argument] = len(vocab_entity)
       else:
@@ -672,9 +681,9 @@ def load_data(config):
   json.dump(vocab_freq, open('vocab_freq.json', 'w'), indent=2)
   json.dump(vocab_entity_freq, open('vocab_entity_freq.json', 'w'), indent=2)
 
+  vocab_size = len(vocab_freq)
+  vocab_entity_size = len(vocab_entity_freq)
   print(f'Vocab size: {vocab_size}, vocab entity size: {vocab_entity_size}')
-  print(f'Number of training examples: {len(label_dict_train)}')
-  print(f'Number of test examples: {len(label_dict_test)}')
 
   event_feats_train,\
   entity_feats_train,\
@@ -684,7 +693,8 @@ def load_data(config):
   spans_entity_train,\
   cluster_ids_train,\
   tokens_train,\
-  label_dict_train = load_text_features(config, vocab, vocab_entity, split='train')
+  label_dict_train = load_text_features(config, vocab, vocab_entity, doc_to_feat_train, split='train')
+  print(f'Number of training examples: {len(label_dict_train)}')
 
   event_feats_test,\
   entity_feats_test,\
@@ -694,7 +704,8 @@ def load_data(config):
   spans_entity_test,\
   cluster_ids_test,\
   tokens_test,\
-  label_dict_test = load_text_features(config, vocab, vocab_entity, split='test')
+  label_dict_test = load_text_features(config, vocab, vocab_entity, doc_to_feat_test, split='test')
+  print(f'Number of test examples: {len(label_dict_test)}')
 
   action_feats_train,\
   object_feats_train,\
@@ -721,7 +732,7 @@ def load_data(config):
          tokens_test,\
          action_feats_train,\
          object_feats_train,\
-         ao_maps_train,
+         ao_maps_train,\
          action_feats_test,\
          object_feats_test,\
          ao_maps_test,\
@@ -755,7 +766,7 @@ if __name__ == '__main__':
   tokens_test,\
   action_feats_train,\
   object_feats_train,\
-  ao_maps_train,
+  ao_maps_train,\
   action_feats_test,\
   object_feats_test,\
   ao_maps_test,\

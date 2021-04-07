@@ -299,7 +299,7 @@ def load_text_features(config, split):
           a_token = lemmatizer.lemmatize(a['tokens'].lower())
           label_dicts[m['doc_id']][span]['arguments'][(min(a['tokens_ids']), max(a['tokens_ids']))] = a_token
         
-  for feat_idx, doc_id in enumerate(sorted(label_dicts)[:20]): # XXX
+  for feat_idx, doc_id in enumerate(sorted(label_dicts)): # XXX
     label_dict = label_dicts[doc_id]
     spans = sorted(label_dict)
     a_spans = [[a_span for a_span in sorted(label_dict[span]['arguments'])] for span in spans]

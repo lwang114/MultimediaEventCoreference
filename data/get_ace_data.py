@@ -140,7 +140,7 @@ def get_mention_doc(data_json, out_prefix):
         events.append(event)      
 
       # sent = [[sent_id, sen_start+t_idx, t, int(entity_event_mask[t_idx]) > 0, dep_role[t_idx], sen_start+dep_head[t_idx]] for t_idx, t in enumerate(tokens)]
-      sent = [[sent_id, sen_start+t_idx, t, int(entity_event_mask[t_idx]) > 0] for t_idx, t in enumerate(tokens)]
+      sent = [[sent_id, sen_start+t_idx, t, int(entity_event_mask[t_idx]) > 0, pos_tags[t_idx]] for t_idx, t in enumerate(tokens)]
 
       documents[doc_id].extend(sent)
       sen_start += len(tokens)
@@ -206,15 +206,16 @@ def get_event_info(data_json, out_prefix):
 
       entities = {}
       for entity_mention in entity_mentions:
-        entity_id = entity_mention['id']
+        mention_id = entity_mention['id']
+        entity_id = '-'.join(mention_id.split('-')[:-1])
         if not entity_id in cluster_ids:
-          cluster_ids[entity_mention['id']] = len(cluster_ids)
+          cluster_ids[entity_id] = len(cluster_ids)
 
         cluster_id = cluster_ids[entity_id]
         start = entity_mention['start']
         end = entity_mention['end']
         entity_type = entity_mention['entity_type']
-        entities[entity_id] = {
+        entities[mention_id] = {
                   'doc_id': doc_id,
                   'sentence_id': sent_id,
                   'm_id': entity_id,
@@ -226,10 +227,11 @@ def get_event_info(data_json, out_prefix):
                   }
 
       for event_mention in event_mentions:
-        event_id = event_mention['id']
+        mention_id = event_mention['id']
+        event_id = '-'.join(mention_id.split('-')[:-1])
         if not event_id in cluster_ids:
-          cluster_ids[event_mention['id']] = len(cluster_ids) 
-        cluster_id = cluster_ids[event_mention['id']]
+          cluster_ids[event_id] = len(cluster_ids) 
+        cluster_id = cluster_ids[event_id]
         start = event_mention['trigger']['start']
         end = event_mention['trigger']['end']
         event_type = event_mention['event_type']
@@ -243,7 +245,7 @@ def get_event_info(data_json, out_prefix):
 
         event = {'doc_id': doc_id,
                  'sentence_id': sent_id,
-                 'm_id': event_id,
+                 'm_id': mention_id,
                  'tokens_ids': list(range(sen_start+start, sen_start+end)),
                  'tokens': event_mention['trigger']['text'],
                  'cluster_id': cluster_id,
