@@ -246,7 +246,7 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_fi
   argument_labels = {}
   event_frequency = {}
   entity_frequency = {}
-  for idx, doc_id in enumerate(doc_ids[:20]): # XXX
+  for idx, doc_id in enumerate(doc_ids): # XXX
     # Convert the .csv file to numpy array
     desc = id2desc[doc_id]
     for punct in PUNCT:
@@ -291,16 +291,18 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_fi
       
       cur_arg_feat = []
       cur_arg_label = []
-      for arg_dict in event_dict['Key_Frames']:
-        entity_type = event_dict['Entity_Type']
-        if entity_type in entity_frequency:
-          entity_frequency[entity_type] = 1
-        else:
-          entity_frequency[entity_type] += 1
-        timestamp = event_dict['Timestamp']
+      for frame_dict in event_dict['Key_Frames']:
+        timestamp = frame_dict['Timestamp']
         frame_idx = int(timestamp / dur * nframes)
-        cur_arg_feat.append(frame_feats[frame_idx])
-        cur_arg_label.append([entity_type, event_dict['Role_Type']])
+        for arg_dict in frame_dict['Arguments']:
+          entity_type = arg_dict.get('Entity_Type', -1)
+          if not entity_type in entity_frequency:
+            entity_frequency[entity_type] = 1
+          else:
+            entity_frequency[entity_type] += 1
+
+          cur_arg_feat.append(frame_feats[frame_idx])
+          cur_arg_label.append([entity_type, arg_dict.get('ROLE_TYPE', -1)])
 
       cur_arg_feat = np.stack(cur_arg_feat)
       cur_arg_label = np.asarray(cur_arg_label)
