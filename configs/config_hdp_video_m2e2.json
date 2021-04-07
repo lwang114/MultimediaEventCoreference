@@ -1,0 +1,4 @@
+{
+  "data_folder": "../data/video_m2e2/mentions",
+  "model_path": "models/coref_events_hdp_video_m2e2"
+}
