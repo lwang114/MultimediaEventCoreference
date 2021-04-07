@@ -13,8 +13,7 @@ import torch
 import argparse
 import nltk
 from nltk.stem import WordNetLemmatizer
-from nltk.stem.snowball import SnowballStemmer
-from evaluator import Evaluation, CoNLLEvaluation
+from evaluator import Evaluation# XXX, CoNLLEvaluation
 random.seed(2)
 # Part of the code modified from vpyp: https://github.com/vchahun/vpyp/blob/master/vpyp/pyp.py
 
@@ -230,7 +229,7 @@ class HDPEventAligner(object):
       for i in range(2):
         out_str += f'{feat_names[i]}\n'
         out_str += self.feature_crps[table_idx][i].save(returnStr=True)
-        out_str += '\n'
+      out_str += '\n'
     f_out.write(out_str)
     f_out.close()
 
@@ -257,7 +256,7 @@ def to_antecedents(labels):
   return antecedents
     
 def load_text_features(config, split):
-  lemmatizer = WordNetLemmatizer() 
+  lemmatizer = WordNetLemmatizer()
   event_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events.json'), 'r', 'utf-8'))
   doc_train = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}.json')))
 
@@ -280,10 +279,14 @@ def load_text_features(config, split):
                                         'arguments': {}} 
       
       for a in m['arguments']:
-        a_token = lemmatizer.lemmatize(a['text'].lower())
-        label_dicts[m['doc_id']][span]['arguments'][(a['start'], a['end'])] = a_token
-
-  for feat_idx, doc_id in enumerate(sorted(label_dicts)[:20]): # XXX
+        if 'text' in a:
+          a_token = lemmatizer.lemmatize(a['text'].lower())
+          label_dicts[m['doc_id']][span]['arguments'][(a['start'], a['end'])] = a_token
+        else:
+          a_token = lemmatizer.lemmatize(a['tokens'].lower())
+          label_dicts[m['doc_id']][span]['arguments'][(min(a['tokens_ids']), max(a['tokens_ids']))] = a_token
+        
+  for feat_idx, doc_id in enumerate(sorted(label_dicts)): # XXX
     label_dict = label_dicts[doc_id]
     spans = sorted(label_dict)
     a_spans = [[a_span for a_span in sorted(label_dict[span]['arguments'])] for span in spans]
@@ -327,7 +330,10 @@ def load_data(config):
       vocab_freq[trigger] += 1
     
     for a in m['arguments']:
-      argument = a['text']
+      if 'text' in a:
+        argument = a['text']
+      else:
+        argument = a['tokens']
       argument = lemmatizer.lemmatize(argument.lower())
       if not argument in vocab_entity:
         vocab_entity[argument] = len(vocab_entity)
@@ -378,11 +384,11 @@ def load_data(config):
          vocab_entity
  
 if __name__ == '__main__':
-  parser = argparse.ArgumentParser(formatter=argparse.DefaultsHelpArgumentFormatter)
-  parser.add_argument('--config_file', '-c', default='../configs/config_hdp_video_m2e2.json')
+  parser = argparse.ArgumentParser() # formatter=argparse.DefaultsHelpArgumentFormatter)
+  parser.add_argument('--config', '-c', default='../configs/config_hdp_video_m2e2.json')
   args = parser.parse_args()
 
-  config_file = args.config_file
+  config_file = args.config
   config = pyhocon.ConfigFactory.parse_file(config_file)
   if not os.path.isdir(config['model_path']):
     os.makedirs(config['model_path'])
@@ -409,13 +415,12 @@ if __name__ == '__main__':
   ## Model training
   aligner = HDPEventAligner(event_feats_train, 
                             entity_feats_train,
-                            alpha0=1.,
+                            alpha0=0.01,
                             p_init_event=1./Ke,
                             p_init_entity=1./Ka)
   aligner.train(35, out_dir=config['model_path'])
 
   ## Test and evaluation
-  conll_eval = CoNLLEvaluation()
   pred_cluster_ids = aligner.cluster(event_feats_test, entity_feats_test)
   pred_labels = [torch.LongTensor(to_pairwise(a)) for a in pred_cluster_ids if a.shape[0] > 1]
   gold_labels = [torch.LongTensor(to_pairwise(c)) for c in cluster_ids_test if c.shape[0] > 1]
@@ -424,10 +429,12 @@ if __name__ == '__main__':
 
   # Compute pairwise scores
   pairwise_eval = Evaluation(pred_labels, gold_labels)  
-  print(f'Pairwise - Precision: {pairwise_eval.get_precision():.4f}, Recall: {pairwise_eval.get_recall():.4f}, F1: {pairwise_eval.get_f1():.4f}')
+  print(f'Pairwise - Precision: {pairwise_eval.get_precision()}, Recall: {pairwise_eval.get_recall()}, F1: {pairwise_eval.get_f1()}')
   logger.info(f'Pairwise precision: {pairwise_eval.get_precision()}, recall: {pairwise_eval.get_recall()}, F1: {pairwise_eval.get_f1()}')
   
   # Compute CoNLL scores and save readable predictions
+  '''
+  conll_eval = CoNLLEvaluation()
   f_out = open(os.path.join(config['model_path'], 'prediction.readable'), 'w')
   for doc_id, token, span, pred_cluster_id, gold_cluster_id in zip(doc_ids_test, tokens_test, spans_test, pred_cluster_ids, cluster_ids_test):
     antecedent = to_antecedents(pred_cluster_id)
@@ -452,3 +459,4 @@ if __name__ == '__main__':
               'Bcubed - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
               'CEAFe - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
               'CoNLL - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*conll_metrics))
+  '''

@@ -5,11 +5,11 @@ import codecs
 import os
 import collections
 import argparse
-from allennlp.predictors.predictor import Predictor
-import allennlp_models.structured_prediction
+# from allennlp.predictors.predictor import Predictor
+# import allennlp_models.structured_prediction
 import nltk
 
-dep_parser = Predictor.from_path('https://storage.googleapis.com/allennlp-public-models/biaffine-dependency-parser-ptb-2020.04.06.tar.gz')
+# dep_parser = Predictor.from_path('https://storage.googleapis.com/allennlp-public-models/biaffine-dependency-parser-ptb-2020.04.06.tar.gz')
 
 def get_mention_doc(data_json, out_prefix):
   '''
@@ -87,11 +87,11 @@ def get_mention_doc(data_json, out_prefix):
       doc_id = inst['doc_id']
       sent_id = inst['sent_id']
       tokens = inst['tokens']
-      pos_tags = [tp[1] for tp in nltk.pos_tag(sent, tagset='universal')]
-      instance = dep_parser._dataset_reader.text_to_instance(tokens, pos_tags)
-      parsed_sent = dep_parser.predict_instance(instance)
-      dep_role = parsed_sent['predicted_dependencies']
-      dep_head = [h_idx-1 for h_idx in parsed_sent['predicted_heads']]
+      pos_tags = [tp[1] for tp in nltk.pos_tag(tokens, tagset='universal')]
+      # instance = dep_parser._dataset_reader.text_to_instance(tokens, pos_tags)
+      # parsed_sent = dep_parser.predict_instance(instance)
+      # dep_role = parsed_sent['predicted_dependencies']
+      # dep_head = [h_idx-1 for h_idx in parsed_sent['predicted_heads']]
 
       entity_mentions = inst['entity_mentions']
       event_mentions = inst['event_mentions']
@@ -116,7 +116,7 @@ def get_mention_doc(data_json, out_prefix):
                   'tokens': entity_mention['text'],
                   'cluster_id': cluster_id,
                   'singleton': False}
-        entity = get_entity_feature(entity, tokens, dep_head, dep_role, sen_start=sen_start) # TODO
+        # entity = get_entity_feature(entity, tokens, dep_head, dep_role, sen_start=sen_start) # TODO
         entity_event_mask[start:end] = 1.
         entities.append(entity)
 
@@ -139,7 +139,9 @@ def get_mention_doc(data_json, out_prefix):
         entity_event_mask[start:end] = 1.
         events.append(event)      
 
-      sent = [[sent_id, sen_start+t_idx, t, int(entity_event_mask[t_idx]) > 0, dep_role[t_idx], sen_start+dep_head[t_idx]] for t_idx, t in enumerate(tokens)]
+      # sent = [[sent_id, sen_start+t_idx, t, int(entity_event_mask[t_idx]) > 0, dep_role[t_idx], sen_start+dep_head[t_idx]] for t_idx, t in enumerate(tokens)]
+      sent = [[sent_id, sen_start+t_idx, t, int(entity_event_mask[t_idx]) > 0] for t_idx, t in enumerate(tokens)]
+
       documents[doc_id].extend(sent)
       sen_start += len(tokens)
   
@@ -188,8 +190,8 @@ def get_event_info(data_json, out_prefix):
   with open(data_json, 'r') as f:
     i = 0
     for line in f:
-      if i > 20:
-        break
+      # if i > 20:
+      #   break
       i += 1
       inst = json.loads(line)
       doc_id = inst['doc_id']
@@ -282,8 +284,10 @@ def get_entity_features(entity,
 
 if __name__ == '__main__':
   data_dir = 'ace/'
+  if not os.path.exists(os.path.join(data_dir, 'mentions')):
+    os.mkdir(os.path.join(data_dir, 'mentions'))
   for split in ['train', 'dev', 'test']:
     data_json = os.path.join(data_dir, '{}.oneie.json'.format(split))
     out_prefix = os.path.join(data_dir, 'mentions', split)
     get_mention_doc(data_json, out_prefix)
-    # get_event_info(data_json, out_prefix)
+    get_event_info(data_json, out_prefix)
