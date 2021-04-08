@@ -17,6 +17,7 @@ from scipy.special import logsumexp
 from region_vgmm import *
 from negative_square import NegativeSquare
 from evaluator import Evaluation, CoNLLEvaluation
+np.random.seed(2)
 
 logger = logging.getLogger(__name__)
 EPS = 1e-15
@@ -34,8 +35,8 @@ class GraphMixtureEventAligner(object):
                configs):
     self.Ke = configs.get('n_event_vocab', 500)
     self.Ka = configs.get('n_entity_vocab', 500)
-    self.Kv = configs.get('n_action_vocab', 33)
-    self.Ko = configs.get('n_object_vocab', 7)    
+    self.Kv = action_features_train[0].shape[-1] # configs.get('n_action_vocab', 33)
+    self.Ko = object_features_train[0].shape[-1] # configs.get('n_object_vocab', 7)    
     self.use_null = configs.get('use_null', False)
 
     self.pretrained_action_model = configs.get('pretrained_action_model', None)
@@ -59,10 +60,11 @@ class GraphMixtureEventAligner(object):
       self.entity_embedding_dim = 1
     else:
       self.entity_embedding_dim = entity_features_train[0].shape[-1] 
-    print(f'event embedding dimension={self.event_embedding_dim}'
+    print(f'event embedding dimension={self.event_embedding_dim}, '
           f'entity embedding dimension={self.entity_embedding_dim}')
 
     self.action_vec_ids_train = []
+    self.object_vec_ids_train = []
     start_index_action = 0
     start_index_object = 0
     for ex, (act_feat, obj_feat) in enumerate(zip(action_features_train, object_features_train)):
@@ -88,13 +90,13 @@ class GraphMixtureEventAligner(object):
       self.object_vec_ids_train.append(object_vec_ids)
     
     self.action_model = RegionVGMM(np.concatenate(action_features_train, axis=0),
-                                   self.Kv,
+                                   2, # self.Kv,
                                    var=var,
                                    vec_ids=self.action_vec_ids_train,
                                    pretrained_model=self.pretrained_action_model)
     
     self.object_model = RegionVGMM(np.concatenate(object_features_train, axis=0),
-                                   self.Ko,
+                                   2, # self.Ko,
                                    var=var,
                                    vec_ids=self.object_vec_ids_train,
                                    pretrained_model=self.pretrained_object_model)
@@ -139,16 +141,17 @@ class GraphMixtureEventAligner(object):
                                 )[1].prod() for i in range(Ne)] 
                                                 for t in range(Nv)]
     probs_o_t_given_a_i = np.asarray(probs_o_t_given_a_i)
+
     # (Nv, Ne, Ke)
-    probs_vo_t_given_ea_i = probs_v_t_given_e * probs_o_t_given_a_i[:, :, np.newaxis]
+    probs_vo_t_given_ea_i = probs_v_t_given_e[:, np.newaxis] * probs_o_t_given_a_i[:, :, np.newaxis]
 
     forward_probs[0] = np.tile(init[:, np.newaxis], (1, self.Ke)) *\
-                       event_probs * probs_vo_t_given_ea_i
+                       event_probs * probs_vo_t_given_ea_i[0]
     scales[0] = np.sum(forward_probs[0])
     forward_probs[0] /= np.maximum(scales[0], EPS)
     A_diag = np.diag(np.diag(A))
     A_offdiag = A - A_diag
-    for t in range(T-1):
+    for t in range(Nv-1):
       # (Ne, Ke)
       probs_vo_e_t_given_ea_i = event_probs * probs_vo_t_given_ea_i[t+1]
       forward_probs[t+1] += (A_diag @ forward_probs[t]) * probs_vo_t_given_ea_i[t+1]
@@ -183,7 +186,7 @@ class GraphMixtureEventAligner(object):
                                                 for t in range(Nv)]
     probs_o_t_given_a_i = np.asarray(probs_o_t_given_a_i)
     # (Nv, Ne, Ke)
-    probs_vo_t_given_ea_i = probs_v_t_given_e * probs_o_t_given_a_i[:, :, np.newaxis]
+    probs_vo_t_given_ea_i = probs_v_t_given_e[:, np.newaxis] * probs_o_t_given_a_i[:, :, np.newaxis]
 
     for t in range(Nv-1, 0, -1):
       # (Ne, Ke)
@@ -196,6 +199,11 @@ class GraphMixtureEventAligner(object):
   def compute_forward_probs(self, src_sent, trg_sent, P_ts, Kt):
     L = trg_sent.shape[0]
     T = src_sent.shape[0]
+    if L == 0 and T > 0:
+      return None, np.ones(T,)
+    if L == 0 or T == 0:
+      return None, np.ones(1,)
+
     A = np.ones((L, L)) / max(L, 1)
     init = np.ones(L) / max(L, 1)
     forward_probs = np.zeros((T, L, Kt))
@@ -218,6 +226,9 @@ class GraphMixtureEventAligner(object):
   def compute_backward_probs(self, src_sent, trg_sent, P_ts, Kt, scales):
     T = src_sent.shape[0]
     L = trg_sent.shape[0]
+    if L == 0 or T == 0:
+      return None
+
     A = np.ones((L, L)) / max(L, 1)
     init = np.ones(L) / max(L, 1)
     backward_probs = np.zeros((T, L, Kt))
@@ -236,8 +247,8 @@ class GraphMixtureEventAligner(object):
   def update_counts(self):
     # Update alignment counts
     log_probs = []
-    self.ev_to_act_counts[:] = 0.
-    self.arg_to_obj_counts[:] = 0.
+    self.ev_counts[:] = 0.
+    self.ao_counts[:] = 0.
     for i in range(len(self.event_feats)):
       C_ev, C_ao, log_prob_i = self.update_counts_i(i)
       self.ev_counts += C_ev
@@ -260,23 +271,34 @@ class GraphMixtureEventAligner(object):
     P_a = reshape_by_event(to_one_hot(P_a, self.Ka), self.ea_maps[i]) 
     P_o = reshape_by_event(to_one_hot(P_o, self.Ko), self.vo_maps[i])
    
+    Nv = P_v.shape[0]
+    Ne = P_e.shape[0]
+
     # Compute event-to-action counts
+    # (Nv, Ne, Ke)
     F_ev, scales_ev = self.compute_forward_event_probs(P_e, P_v, P_a, P_o)
+    # (Nv, Ne, Ke)
     B_ev = self.compute_backward_event_probs(P_e, P_v, P_a, P_o, scales_ev)
 
     norm_factor = np.sum(F_ev * B_ev, axis=(1, 2), keepdims=True) 
+    # (Nv, Ne, Ke)
     new_ev_counts = F_ev * B_ev / np.maximum(norm_factor, EPS) 
+    # (Ke, Kv)
     C_ev = np.sum(new_ev_counts, axis=1).T @ (P_v / np.maximum(np.sum(P_v, axis=1, keepdims=True), EPS))
 
     # Compute argument-to-object counts 
     C_ao = np.zeros((self.Ka, self.Ko))    
     for i_v in range(Nv):
       for i_e in range(Ne):
+        if P_o[i_v].shape[0] == 0 or P_a[i_e].shape[0] == 0:
+          continue
         F_ao, scales_ao = self.compute_forward_probs(P_o[i_v], P_a[i_e], self.P_ao, self.Ka)
-        B_ao = self.compute_backward_probs(P_o[i_v], P_a[i_e], self.P_ao, self.Ka)
+        B_ao = self.compute_backward_probs(P_o[i_v], P_a[i_e], self.P_ao, self.Ka, scales_ao)
         norm_factor = np.sum(F_ao * B_ao, axis=(1, 2), keepdims=True)
-        new_ao_counts = new_ev_counts[i_v, i_e] * F_ao * B_ao / np.maximum(norm_factor, EPS)
-        C_ao += np.sum(new_ao_counts, axis=1).T @ (P_o / np.maximum(np.sum(P_o, axis=1, keepdims=True), EPS))
+        # (No, Na, Ka)
+        new_ao_counts = new_ev_counts[i_v, i_e].sum() * F_ao * B_ao / np.maximum(norm_factor, EPS)
+        # (Ka, Ko)
+        C_ao += np.sum(new_ao_counts, axis=1).T @ (P_o[i_v] / np.maximum(np.sum(P_o[i_v], axis=1, keepdims=True), EPS))
     
     log_prob = np.log(np.maximum(scales_ev, EPS)).sum()
     return C_ev, C_ao, log_prob
@@ -329,20 +351,21 @@ class GraphMixtureEventAligner(object):
       print('Iteration {}, log likelihood={}'.format(i_iter, log_prob))
       logger.info('Iteration {}, log likelihood={}'.format(i_iter, log_prob))
       if (i_iter + 1) % 5 == 0:
-        with open('{}_{}_means.json'.format(out_file, i_iter), 'w') as fm,\
-             open('{}_{}_transprob.json'.format(out_file, i_iter), 'w') as ft:
-          json.dump(self.src_model.means.tolist(), fm, indent=4, sort_keys=True)
-          json.dump(self.P_ts.tolist(), ft, indent=4, sort_keys=True)
-          
-        np.save('{}_{}_means.npy'.format(out_file, i_iter), self.src_model.means)
-        np.save('{}_{}_transprob.npy'.format(out_file, i_iter), self.P_ts)
+        with open('{}_action_means.json'.format(out_file), 'w') as fv,\
+             open('{}_object_means.json'.format(out_file), 'w') as fo,\
+             open('{}_ev_transprob.json'.format(out_file), 'w') as fe,\
+             open('{}_ao_transprob.json'.format(out_file), 'w') as fa:
+          json.dump(self.action_model.means.tolist(), fv, indent=4, sort_keys=True)
+          json.dump(self.object_model.means.tolist(), fo, indent=4, sort_keys=True)
+          json.dump(self.P_ev.tolist(), fe, indent=4, sort_keys=True)
+          json.dump(self.P_ao.tolist(), fa, indent=4, sort_keys=True)         
 
-  def translate_prob(self):
+  def translate_probs(self):
     P_ev = (self.alpha / self.Kv + self.ev_counts) /\
             np.maximum(self.alpha + np.sum(self.ev_counts, axis=-1, keepdims=True), EPS)
     P_ao = (self.alpha / self.Ko + self.ao_counts) /\
-            np.maximum(self.alpha + np.sum(self.ao_counts, axis=-1, keeepdims=True), EPS)
-    return P_ea, P_ao 
+            np.maximum(self.alpha + np.sum(self.ao_counts, axis=-1, keepdims=True), EPS)
+    return P_ev, P_ao 
   
   def prob_v_given_e_all(self, P_e):
     P_e = to_one_hot(P_e, self.Ke)
@@ -357,30 +380,37 @@ class GraphMixtureEventAligner(object):
                   object_feats_test,
                   event_feats_test, 
                   entity_feats_test,
+                  vo_maps_test,
+                  ea_maps_test,
                   score_type='max'): 
     alignments = []
     scores = []
-    for v_feat, o_feat, P_e, P_a in zip(action_feats_test, object_feats_test,
-                                        event_feats_test, entity_feats_test):
+    for v_feat, o_feat, P_e, P_a, vo_map, ea_map in zip(action_feats_test, object_feats_test,
+                                                        event_feats_test, entity_feats_test,
+                                                        vo_maps_test, ea_maps_test):
       P_v = v_feat 
       # [np.exp(self.action_model.log_prob_z_given_X(v_feat[i], normalize=False))\
       #     for i in range(len(v_feat))]
       P_o = o_feat 
       # np.exp(self.object_model.log_prob_z_given_X(o_feat[i], normalize=False))\
       #   for i in range(len(o_feat))]
-
       P_e = to_one_hot(P_e, self.Ke)
-      P_a = reshape_by_event(to_one_hot(P_a, self.Ka), self.ea_maps[i])
+      P_a = reshape_by_event(to_one_hot(P_a, self.Ka), ea_map)
       P_v = to_one_hot(P_v, self.Kv)
-      P_o = reshape_by_event(to_one_hot(P_o, self.Ko), self.vo_maps[i])
+      P_o = reshape_by_event(to_one_hot(P_o, self.Ko), vo_map)
       P_v_null = P_v.mean() * np.ones((P_e.shape[0], 1))
-      P_o_null = P_o.mean() * np.ones((P_e.shape[0], 1))
+      P_o_null = np.prod([P_o_i.mean() for P_o_i in P_o]) * np.ones((P_e.shape[0], 1))
+      
+      Nv = P_v.shape[0]
+      Ne = P_e.shape[0]
 
+      # (Ne, Nv)
       P_align_ev = P_e @ self.P_ev @ P_v.T
-      P_align_ao = [[self.compute_forward_probs(P_o[t], P_a[i], 
+      # (Ne, Nv)
+      P_align_ao = np.asarray([[self.compute_forward_probs(P_o[t], P_a[i], 
                                                 self.P_ao, self.Ka)[1].prod()\
                                                 for t in range(Nv)] 
-                                                    for i in range(Ne)] 
+                                                    for i in range(Ne)]) 
       P_align_ao = np.asarray(P_align_ao)
       P_align = np.concatenate([P_v_null * P_o_null, P_align_ev * P_align_ao], axis=1)
 
@@ -398,6 +428,8 @@ class GraphMixtureEventAligner(object):
                object_features_test,
                event_features_test, 
                entity_features_test,
+               vo_maps_test,
+               ea_maps_test,
                out_file, kbest=10):
     n = len(action_features_test)
     print(n)
@@ -408,16 +440,22 @@ class GraphMixtureEventAligner(object):
         object_feats = [object_features_test[i_utt] for _ in range(n)]
         event_feats = [[self.Ke - 1] + event_features_test[j_utt] for j_utt in range(n)]
         entity_feats = [[self.Ka - 1] + entity_features_test[j_utt] for j_utt in range(n)]
+        # TODO
+        raise NotImplementedError
       else:
         action_feats = [action_features_test[i_utt] for _ in range(n)]
         object_feats = [object_features_test[i_utt] for _ in range(n)]
         event_feats = [event_features_test[j_utt] for j_utt in range(n)] 
         entity_feats = [entity_features_test[j_utt] for j_utt in range(n)]
+        vo_map = [vo_maps_test[i_utt] for _ in range(n)]
+        ea_map = [ea_maps_test[j_utt] for j_utt in range(n)]
        
       _, scores[i_utt] = self.align_sents(action_feats,
                                           object_feats,
                                           event_feats, 
                                           entity_feats, 
+                                          vo_map,
+                                          ea_map,
                                           score_type='max') 
 
     I_kbest = np.argsort(-scores, axis=1)[:, :kbest]
@@ -486,11 +524,8 @@ class GraphMixtureEventAligner(object):
     fp1.close()
     fp2.close()  
 
-  def move_counts(self, k1, k2):
-    self.trg2src_counts[:, k2] = self.trg2src_counts[:, k1]
-    self.trg2src_counts[:, k1] = 0.
-
-  def print_alignment(self, out_file):
+  '''
+  def print_alignment(self, out_file): # TODO
     align_dicts = []
     for i, (src_vec_ids, trg_feat) in enumerate(zip(self.src_vec_ids_train, self.trg_feats)):
       src_feat = self.src_feats[src_vec_ids]
@@ -500,6 +535,7 @@ class GraphMixtureEventAligner(object):
                           'image_concepts': src_sent.tolist()})
     with open(out_file, 'w') as f:
       json.dump(align_dicts, f, indent=4, sort_keys=True)
+  '''
 
 def reshape_by_event(x, mappings):
   return [m @ x for m in mappings] 
@@ -572,7 +608,7 @@ def load_text_features(config, vocab, vocab_entity, doc_to_feat, split):
         a_token = lemmatizer.lemmatize(a_token.lower())
         label_dicts[m['doc_id']][span]['arguments'][a_span] = vocab_entity[a_token]
 
-  for feat_idx, doc_id in enumerate(sorted(label_dicts)[:20]): # XXX
+  for feat_idx, doc_id in enumerate(sorted(label_dicts)): # XXX
     feat_id = doc_to_feat[doc_id]
     label_dict = label_dicts[doc_id]
     spans = sorted(label_dict)
@@ -591,18 +627,18 @@ def load_text_features(config, vocab, vocab_entity, doc_to_feat, split):
         entity_idx += 1
       ea_maps.append(ea_map)
 
-    event_feats_all.append(to_one_hot(events, vocab_size))
-    entity_feats_all.append(to_one_hot(entities, vocab_entity_size))
+    event_feats.append(to_one_hot(events, vocab_size))
+    entity_feats.append(to_one_hot(entities, vocab_entity_size))
     ea_maps_all.append(ea_maps)
     doc_ids.append(doc_id)
     spans_all.append(spans)
     spans_entity_all.append(a_spans)    
     cluster_ids_all.append(np.asarray(cluster_ids))
     tokens_all.append([t[2] for t in doc_train[doc_id]])
-  return event_feats_all,\
-         entity_feats_all,\
+  return event_feats,\
+         entity_feats,\
          ea_maps_all,\
-         doc_ids_all,\
+         doc_ids,\
          spans_all,\
          spans_entity_all,\
          cluster_ids_all,\
@@ -617,31 +653,30 @@ def load_visual_features(config, label_dicts, split):
 
   action_feats = []
   object_feats = []
-  ao_maps = []
+  vo_maps = []
   for feat_idx, doc_id in enumerate(sorted(label_dicts)): # XXX
     feat_id = doc_to_feat[doc_id]
     label_dict = label_dicts[doc_id]
     action_feats.append(action_feats_npz[feat_id])
     
     o_feats = []
-    cur_ao_maps = []
+    cur_vo_maps = []
     for o_feat in object_feats_npz[feat_id]:
       n_roles = (o_feat.mean(-1) != -1).sum()
-      print('o_feat.shape, n_roles: ', o_feat.shape, n_roles) # XXX
       o_feats.append(o_feat[:n_roles])
     o_feats = np.concatenate(o_feats, axis=0)
 
     o_idx = 0
     for o_feat in object_feats_npz[feat_id]:
       n_roles = (o_feat.mean(-1) != -1).sum()
-      ao_map = np.zeros((n_roles, o_feats.shape[0]))
+      vo_map = np.zeros((n_roles, o_feats.shape[0]))
       for r_idx in range(n_roles):
-        ao_map[r_idx, o_idx] = 1.
+        vo_map[r_idx, o_idx] = 1.
         o_idx += 1
-      cur_ao_maps.append(ao_map)
+      cur_vo_maps.append(vo_map)
     object_feats.append(o_feats)
-    ao_maps.append(cur_ao_maps)
-  return action_feats, object_feats, ao_maps
+    vo_maps.append(cur_vo_maps)
+  return action_feats, object_feats, vo_maps
 
 
 def load_data(config):
@@ -720,10 +755,10 @@ def load_data(config):
 
   action_feats_train,\
   object_feats_train,\
-  ao_maps_train = load_visual_features(config, label_dict_train, split='train')
+  vo_maps_train = load_visual_features(config, label_dict_train, split='train')
   action_feats_test,\
   object_feats_test,\
-  ao_maps_test = load_visual_features(config, label_dict_test, split='test')
+  vo_maps_test = load_visual_features(config, label_dict_test, split='test')
 
   return event_feats_train,\
          entity_feats_train,\
@@ -743,22 +778,20 @@ def load_data(config):
          tokens_test,\
          action_feats_train,\
          object_feats_train,\
-         ao_maps_train,\
+         vo_maps_train,\
          action_feats_test,\
          object_feats_test,\
-         ao_maps_test,\
+         vo_maps_test,\
          vocab, vocab_entity
 
 
 if __name__ == '__main__':
-  parser = argparse.ArgumentParser() # formatter=argparse.DefaultsHelpArgumentFormatter)
+  parser = argparse.ArgumentParser() # formatter=argparse.ArgumentDefaultsHelpFormatter)
   parser.add_argument('--config', '-c', default='../configs/config_graph_dnnhmmdnn_video_m2e2.json')
   args = parser.parse_args()
 
   config_file = args.config
   config = pyhocon.ConfigFactory.parse_file(config_file)
-  Kv = 33
-  Ko = 7
   if not os.path.isdir(config['model_path']):
     os.makedirs(config['model_path'])
   logging.basicConfig(filename=os.path.join(config['model_path'], 'train.log'))
@@ -781,22 +814,29 @@ if __name__ == '__main__':
   tokens_test,\
   action_feats_train,\
   object_feats_train,\
-  ao_maps_train,\
+  vo_maps_train,\
   action_feats_test,\
   object_feats_test,\
-  ao_maps_test,\
+  vo_maps_test,\
   vocab, vocab_entity = load_data(config)
   Ke = len(vocab)
   Ka = len(vocab_entity)
+  Kv = 33
+  Ko = 7
 
   ## Model training
-  aligner = GraphMixtureEventAligner(src_feats_train, trg_feats_train, 
+  aligner = GraphMixtureEventAligner(action_feats_train+action_feats_test,
+                                     object_feats_train+object_feats_test,
+                                     event_feats_train+event_feats_test,
+                                     entity_feats_train+entity_feats_test,  
+                                     vo_maps_train+vo_maps_test,
+                                     ea_maps_train+ea_maps_test,
                                      configs={'n_action_vocab':Kv, 
                                               'n_object_vocab':Ko,
                                               'n_event_vocab':Ke,
                                               'n_entity_vocab':Ka})
-  aligner.trainEM(15, os.path.join(config['model_path'], 'mixture'))  
-  aligner.print_alignment(os.path.join(config['model_path'], 'alignment.json'))
+  aligner.trainEM(15, os.path.join(config['model_path'], 'mixture')) 
+  # aligner.print_alignment(os.path.join(config['model_path'], 'alignment.json'))
   
   ## Test and evaluation
   conll_eval = CoNLLEvaluation()
@@ -804,7 +844,9 @@ if __name__ == '__main__':
   alignments, _ = aligner.align_sents(action_feats_test,
                                       object_feats_test,
                                       event_feats_test,
-                                      entity_feats_test)
+                                      entity_feats_test,
+                                      vo_maps_test,
+                                      ea_maps_test)
   pred_labels = [torch.LongTensor(to_pairwise(a)) for a in alignments if a.shape[0] > 1]
   gold_labels = [torch.LongTensor(to_pairwise(c)) for c in cluster_ids_test if c.shape[0] > 1]
   pred_labels = torch.cat(pred_labels)
@@ -812,7 +854,7 @@ if __name__ == '__main__':
   
   # Compute pairwise scores
   pairwise_eval = Evaluation(pred_labels, gold_labels)  
-  print(f'Pairwise - Precision: {pairwise_eval.get_precision():.4f}, Recall: {pairwise_eval.get_recall():.4f}, F1: {pairwise_eval.get_f1():.4f}')
+  print(f'Pairwise - Precision: {pairwise_eval.get_precision()}, Recall: {pairwise_eval.get_recall()}, F1: {pairwise_eval.get_f1()}')
   logger.info(f'Pairwise precision: {pairwise_eval.get_precision()}, recall: {pairwise_eval.get_recall()}, F1: {pairwise_eval.get_f1()}')
   
   # Compute CoNLL scores and save readable predictions
@@ -845,4 +887,6 @@ if __name__ == '__main__':
                    object_feats_test, 
                    event_feats_test,
                    entity_feats_test,
+                   vo_maps_test,
+                   ea_maps_test,
                    os.path.join(config['model_path'], 'retrieval'))
