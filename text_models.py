@@ -5,6 +5,7 @@ import numpy as np
 import json
 import time
 import allennlp.nn.util as util 
+from itertools import combinations
 from IPOT.ipot import ipot_WD  
 
 def init_weights(m):
@@ -389,8 +390,11 @@ class StarSimplePairWiseClassifier(nn.Module):
     self.pairwise_mlp.apply(init_weights)
     self.classifier_feature_gate = nn.Linear(2*self.input_layer, 1)
     
-  def forward(self, x, center_map, neighbor_map,
-              first_idxs=None, second_idxs=None,
+  def forward(self, x,
+              center_map,
+              neighbor_map,
+              first_idxs,
+              second_idxs,
               edge_labels=None):
     '''
     :param x: FloatTensor of size (batch size, max num. of spans, embed dim)
@@ -399,52 +403,39 @@ class StarSimplePairWiseClassifier(nn.Module):
     :return scores: FloatTensor of size (num. pairs,) 
     '''
     batch_size = x.size(0)
-    neighbor_mask = neighbor_map.sum(-1)
-    
+        
     # (batch size, max num. of centers, embed dim)
     c = torch.matmul(center_map, x) 
-    
-    # (batch size, max num. of centers, max num. of roles, embed dim)
-    neighbors = torch.matmul(neighbor_map, x.unsqueeze(1))
-
     n = c.size(1)
-    n_neighbors = neighbors.size(-2)
-
-    if first_idxs is None or second_idxs is None:
-      first_idxs, second_idxs = zip(*list(combinations(range(n), 2)))
-    first_arg_idxs, second_arg_idxs = zip(*list((i, j) for i in range(n_neighbors) for j in range(n_neighbors)))
     n_pairs = len(first_idxs)
-    n_arg_pairs = len(first_arg_idxs)
+    n_neighbors = neighbor_map.size(-2)
     
     # (batch size, max num. of pairs)
     scores_c = self.pairwise_score(c[:, first_idxs], c[:, second_idxs])
     scores_neighbors = []
 
-    arg_pair_masks = neighbor_mask[:, first_idxs].unsqueeze(-1) *\
-                     neighbor_mask[:, second_idxs].unsqueeze(-2)
-
-    pairwise_scores = self.pairwise_score(neighbors[:, first_idxs][:, :, first_arg_idxs].view(batch_size*n_pairs, n_arg_pairs, -1),
-                                          neighbors[:, second_idxs][:, :, second_arg_idxs].view(batch_size*n_pairs, n_arg_pairs, -1))
-
+    pairwise_neighbor_scores,\
+    arg_pair_masks = self.pairwise_neighbor_score(x,
+                                                  neighbor_map,
+                                                  first_idxs,
+                                                  second_idxs)
+    pairwise_neighbor_scores = pairwise_neighbor_scores.view(batch_size*n_pairs, n_neighbors, n_neighbors)
+  
     if edge_labels is not None:
         first_edge_labels = edge_labels[:, first_idxs].unsqueeze(-1)
         second_edge_labels = edge_labels[:, second_idxs].unsqueeze(-2)
         pairwise_edge_labels = (first_edge_labels == second_edge_labels) &\
                                (first_edge_labels != 0) &\
-                               (second_edge_labels != 0)
-        # json.dump(first_edge_labels.cpu().detach().numpy().tolist(), open('first_edge_labels_{}.json'.format(time.strftime('%H_%M_%S'.format(time.localtime()))), 'w'), indent=2)
-        # json.dump(second_edge_labels.cpu().detach().numpy().tolist(), open('second_edge_labels_{}.json'.format(time.strftime('%H_%M_%S'.format(time.localtime()))), 'w'), indent=2)
-        # json.dump(pairwise_edge_labels.cpu().detach().numpy().tolist(), open('pairwise_edge_labels_{}.json'.format(time.strftime('%H_%M_%S'.format(time.localtime()))), 'w'), indent=2) # XXX
-        
+                               (second_edge_labels != 0)       
         pairwise_edge_labels = pairwise_edge_labels.float()
         scores_neighbors = self.alignment_score(
-            pairwise_scores.view(batch_size*n_pairs, n_neighbors, n_neighbors),
+            pairwise_neighbor_scores,
             pairwise_edge_labels.view(batch_size*n_pairs, n_neighbors, n_neighbors),
             metric="greedy")
     else:
         scores_neighbors = self.alignment_score(
-            pairwise_scores.view(batch_size*n_pairs, n_neighbors, n_neighbors),
-            arg_pair_masks.view(batch_size*n_pairs, n_neighbors, n_neighbors),
+            pairwise_neighbor_scores,
+            arg_pair_masks,
             metric=self.metric)
     scores_neighbors = scores_neighbors.view(batch_size, n_pairs)
     
@@ -460,7 +451,31 @@ class StarSimplePairWiseClassifier(nn.Module):
       second = second.view(-1, self.input_layer)
       scores = self.pairwise_mlp(torch.cat((first, second, first * second), dim=1)).view(batch_size, num_pairs)
       return scores
-      
+  
+  def pairwise_neighbor_score(self, x,
+                              neighbor_map, 
+                              first_idxs,
+                              second_idxs):
+      batch_size = x.size(0)
+      n_pairs = len(first_idxs)
+      n_neighbors = neighbor_map.size(-2)
+      neighbor_mask = neighbor_map.sum(-1)
+      arg_pair_masks = neighbor_mask[:, first_idxs].unsqueeze(-1) *\
+                       neighbor_mask[:, second_idxs].unsqueeze(-2)
+      first_arg_idxs, second_arg_idxs = zip(*list((i, j) for i in range(n_neighbors) for j in range(n_neighbors)))
+      n_arg_pairs = len(first_arg_idxs)
+
+      # (batch size, max num. of centers, max num. of roles, embed dim)
+      neighbors = torch.matmul(neighbor_map, x.unsqueeze(1))
+
+      # (batch size, max num. of center pairs, max num. of roles, embed dim)
+      first_neighbors = neighbors[:, first_idxs]
+      second_neighbors = neighbors[:, second_idxs]
+      scores = self.pairwise_score(first_neighbors[:, :, first_arg_idxs].view(batch_size*n_pairs, n_arg_pairs, -1),
+                                   second_neighbors[:, :, second_arg_idxs].view(batch_size*n_pairs, n_arg_pairs, -1))
+      scores = scores.view(batch_size, n_pairs, n_neighbors, n_neighbors)
+      return scores, arg_pair_masks
+
   def alignment_score(self, score_mat, mask, dim=-1, metric='greedy'):
       device = score_mat.device 
       batch_size = score_mat.size(0)

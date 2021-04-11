@@ -424,11 +424,11 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
     logger.info('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
                                                                       eval.get_precision(), eval.get_f1()))
 
-    if config.classifier.split('_')[0] == 'graph': # TODO
+    if config.classifier.split('_')[0] == 'graph':
       align(text_model, mention_model, image_model, coref_model, test_loader, args) 
     return eval_event.get_f1()
 
-  def align(text_model, mention_model, image_model, coref_model, test_loader, args): # TODO
+def align(text_model, mention_model, image_model, coref_model, test_loader, args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     config = pyhocon.ConfigFactory.parse_file(args.config)
     documents = test_loader.dataset.documents
@@ -468,18 +468,22 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
         event_num = event_mappings.sum(-1).sum(-1).long()
         
         text_output = text_model(doc_embeddings)
+
         mention_output = mention_model(text_output,
                                        start_mappings, end_mappings,
                                        continuous_mappings, width,
                                        type_labels)
-        _, score_mats = coref_model(mention_output,
-                                    event_mappings,
+
+        max_event_num = test_loader.dataset.max_event_num
+        
+        B = doc_embeddings.size(0)
+        first, second = zip(*list(combinations(range(max_event_num), 2)))
+        score_mats, _ = coref_model.module.pairwise_neighbor_score(
+                                    mention_output,
                                     event_to_roles_mappings,
-                                    first_event_idx[0],
-                                    second_event_idx[0],
-                                    return_score_matrix=True)
-            
-        B = doc_embeddings.size(0)  
+                                    first,
+                                    second)
+
         for idx in range(B):
             global_idx = i * test_loader.batch_size + idx
             doc_id = test_loader.dataset.doc_ids[global_idx]
@@ -502,15 +506,13 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
               
               # Compute alignment scores
               for pair_idx, (idx1, idx2, y) in enumerate(zip(first_event_idx, second_event_idx, pairwise_event_labels)):
-                if y > 0:
-                  n_args_first = event_to_roles_mapping[idx1].sum().long()
-                  n_args_second = event_to_roles_mapping[idx2].sum().long()                 
-                  if n_args_first <= 0 or n_args_second <= 0:
-                    continue
+                n_args_first = event_to_roles_mapping[idx1].sum().long()
+                n_args_second = event_to_roles_mapping[idx2].sum().long()                 
+
+                if y > 0 and n_args_first > 0 or n_args_second > 0:
                   first_arg_idxs = torch.max(event_to_roles_mapping[idx1], dim=-1)[1][:n_args_first]
                   first_arg_spans = [origin_candidate_start_ends[i] for i in first_arg_idxs]
                   first_arguments = [' '.join(tokens[s[0]:s[1]+1]) for s in first_arg_spans]
-
 
                   second_arg_idxs = torch.max(event_to_roles_mapping[idx2], dim=-1)[1][:n_args_second]
                   second_arg_spans = [origin_candidate_start_ends[i] for i in second_arg_idxs]
@@ -571,8 +573,8 @@ if __name__ == '__main__':
   test_set = TextFeatureDataset(os.path.join(config['data_folder'], 'test.json'), splits[1],
                                 config_test, split='test', type_to_idx=type_to_idx, role_to_idx=role_to_idx)
 
-  train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=False)
-  test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=False)
+  train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=2, pin_memory=False)
+  test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=2, pin_memory=False)
 
   # Initialize models
   embedding_dim = config.hidden_layer
