@@ -4,5 +4,5 @@
   "object_feature_train": "train_mmaction_event_feat_argument_feat.npz", 
   "action_feature_test": "test_mmaction_event_feat.npz",
   "object_feature_test": "test_mmaction_event_feat_argument_feat.npz",
- "model_path": "models/coref_events_S2I_video_m2e2"
+  "model_path": "models/coref_events_graph_dnnhmmdnn_video_m2e2"
 }

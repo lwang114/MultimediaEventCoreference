@@ -255,7 +255,6 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_fi
     if not os.path.exists(csv_file) or not desc+'.mp4' in ann_dict:
       print('Skip description id: {}'.format(desc))
       continue
-    print(desc)
     is_csv_used[desc+'.csv'] = 1
     
     # Extract frame-level features
@@ -292,16 +291,16 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_fi
       
       cur_arg_feat = []
       cur_arg_label = []
-      for arg_dicts in event_dict['Key_Frames']:
-        timestamp = arg_dicts['Timestamp']
-        for arg_dict in arg_dicts['Arguments']:
+      for frame_dict in event_dict['Key_Frames']:
+        timestamp = frame_dict['Timestamp']
+        frame_idx = int(timestamp / dur * nframes)
+        for arg_dict in frame_dict['Arguments']:
           entity_type = arg_dict.get('Entity_Type', -1)
           if not entity_type in entity_frequency:
             entity_frequency[entity_type] = 1
           else:
             entity_frequency[entity_type] += 1
 
-          frame_idx = int(timestamp / dur * nframes)
           cur_arg_feat.append(frame_feats[frame_idx])
           cur_arg_label.append([entity_type, arg_dict.get('ROLE_TYPE', -1)])
 
@@ -344,7 +343,7 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_fi
   event_labels_onehot = {k:np.eye(n_event_types)[l] for k, l in event_labels.items()} 
   np.savez(f'{out_prefix}_labels.npz', **event_labels_onehot)
   np.savez(f'{out_prefix}_argument_labels.npz', **argument_labels)
-  json.dump(entity_frequency, open(f'{out_prefix}_entity_frequency.json', 'w'), indent=4, sort_keys=True)
+  json.dump(entity_frequency, open(f'{out_prefix}_entity_frequency.npz', 'w'), indent=4, sort_keys=True)
   json.dump(event_frequency, open(f'{out_prefix}_event_frequency.json', 'w'), indent=4, sort_keys=True)
 
 def visualize_features(embed_file, label_file, freq_file, 

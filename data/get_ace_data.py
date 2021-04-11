@@ -5,11 +5,11 @@ import codecs
 import os
 import collections
 import argparse
-from allennlp.predictors.predictor import Predictor
-import allennlp_models.structured_prediction
+# from allennlp.predictors.predictor import Predictor
+# import allennlp_models.structured_prediction
 import nltk
 
-dep_parser = Predictor.from_path('https://storage.googleapis.com/allennlp-public-models/biaffine-dependency-parser-ptb-2020.04.06.tar.gz')
+# dep_parser = Predictor.from_path('https://storage.googleapis.com/allennlp-public-models/biaffine-dependency-parser-ptb-2020.04.06.tar.gz')
 
 def get_mention_doc(data_json, out_prefix):
   '''
@@ -87,11 +87,11 @@ def get_mention_doc(data_json, out_prefix):
       doc_id = inst['doc_id']
       sent_id = inst['sent_id']
       tokens = inst['tokens']
-      pos_tags = [tp[1] for tp in nltk.pos_tag(sent, tagset='universal')]
-      instance = dep_parser._dataset_reader.text_to_instance(tokens, pos_tags)
-      parsed_sent = dep_parser.predict_instance(instance)
-      dep_role = parsed_sent['predicted_dependencies']
-      dep_head = [h_idx-1 for h_idx in parsed_sent['predicted_heads']]
+      pos_tags = [tp[1] for tp in nltk.pos_tag(tokens, tagset='universal')]
+      # instance = dep_parser._dataset_reader.text_to_instance(tokens, pos_tags)
+      # parsed_sent = dep_parser.predict_instance(instance)
+      # dep_role = parsed_sent['predicted_dependencies']
+      # dep_head = [h_idx-1 for h_idx in parsed_sent['predicted_heads']]
 
       entity_mentions = inst['entity_mentions']
       event_mentions = inst['event_mentions']
@@ -116,7 +116,7 @@ def get_mention_doc(data_json, out_prefix):
                   'tokens': entity_mention['text'],
                   'cluster_id': cluster_id,
                   'singleton': False}
-        entity = get_entity_feature(entity, tokens, dep_head, dep_role, sen_start=sen_start) # TODO
+        # entity = get_entity_feature(entity, tokens, dep_head, dep_role, sen_start=sen_start) # TODO
         entity_event_mask[start:end] = 1.
         entities.append(entity)
 
@@ -139,7 +139,9 @@ def get_mention_doc(data_json, out_prefix):
         entity_event_mask[start:end] = 1.
         events.append(event)      
 
-      sent = [[sent_id, sen_start+t_idx, t, int(entity_event_mask[t_idx]) > 0, dep_role[t_idx], sen_start+dep_head[t_idx]] for t_idx, t in enumerate(tokens)]
+      # sent = [[sent_id, sen_start+t_idx, t, int(entity_event_mask[t_idx]) > 0, dep_role[t_idx], sen_start+dep_head[t_idx]] for t_idx, t in enumerate(tokens)]
+      sent = [[sent_id, sen_start+t_idx, t, int(entity_event_mask[t_idx]) > 0, pos_tags[t_idx]] for t_idx, t in enumerate(tokens)]
+
       documents[doc_id].extend(sent)
       sen_start += len(tokens)
   
@@ -188,8 +190,8 @@ def get_event_info(data_json, out_prefix):
   with open(data_json, 'r') as f:
     i = 0
     for line in f:
-      if i > 20:
-        break
+      # if i > 20:
+      #   break
       i += 1
       inst = json.loads(line)
       doc_id = inst['doc_id']
@@ -204,15 +206,16 @@ def get_event_info(data_json, out_prefix):
 
       entities = {}
       for entity_mention in entity_mentions:
-        entity_id = entity_mention['id']
+        mention_id = entity_mention['id']
+        entity_id = '-'.join(mention_id.split('-')[:-1])
         if not entity_id in cluster_ids:
-          cluster_ids[entity_mention['id']] = len(cluster_ids)
+          cluster_ids[entity_id] = len(cluster_ids)
 
         cluster_id = cluster_ids[entity_id]
         start = entity_mention['start']
         end = entity_mention['end']
         entity_type = entity_mention['entity_type']
-        entities[entity_id] = {
+        entities[mention_id] = {
                   'doc_id': doc_id,
                   'sentence_id': sent_id,
                   'm_id': entity_id,
@@ -224,10 +227,11 @@ def get_event_info(data_json, out_prefix):
                   }
 
       for event_mention in event_mentions:
-        event_id = event_mention['id']
+        mention_id = event_mention['id']
+        event_id = '-'.join(mention_id.split('-')[:-1])
         if not event_id in cluster_ids:
-          cluster_ids[event_mention['id']] = len(cluster_ids) 
-        cluster_id = cluster_ids[event_mention['id']]
+          cluster_ids[event_id] = len(cluster_ids) 
+        cluster_id = cluster_ids[event_id]
         start = event_mention['trigger']['start']
         end = event_mention['trigger']['end']
         event_type = event_mention['event_type']
@@ -280,10 +284,139 @@ def get_entity_features(entity,
   entity['features'] = features
   return entity
 
+def extract_synthetic_visual_event_embeddings(data_dir, out_prefix):
+  '''
+  :returns event_feats: an Npz object of arrays of shape (num. of events, image embed dim.)
+  :returns argument_feats: an Npz object of arrays of shape (num. of events, max. num. of roles per event, image embed dim.)
+  :returns visual_event_mentions: a list of dicts of format
+      {'doc_id': str,
+       'm_id': str,
+       'sent_id': str,
+       'tokens': str, assumed to be event type 
+       'event_type': str,
+       'cluster_id': int,
+       'arguments': list of dicts of format
+                    {'doc_id': str,
+                     'm_id': str,
+                     'tokens': int, assumed to be cluster id
+                     'entity_type': str,
+                     'role': str,
+                     'cluster_id': int 
+                     }
+       'singleton': false}
+  '''
+  event_mentions_train = json.load(codecs.open(os.path.join(data_dir, f'mentions/train_events.json'))) # XXX
+  event_mentions_test = json.load(codecs.open(os.path.join(data_dir, f'mentions/test_events.json'))) 
+
+  label_dict = {}
+  event_stoi = {}
+  entity_stoi = {} 
+  for m in event_mentions_train + event_mentions_test:
+    # Create a visual mention dict for the current document
+    if not m['event_type'] in event_stoi:
+      event_stoi[m['event_type']] = len(event_stoi)
+
+    if not m['doc_id'] in label_dict:
+      label_dict[m['doc_id']] = {}
+
+    m_id = m['m_id']
+    if not m_id in label_dict[m['doc_id']]:
+      label_dict[m['doc_id']][m_id] = {'tokens': m['event_type'],
+                                       'event_type': m['event_type'],
+                                       'cluster_id': m['cluster_id'],
+                                       'arguments': {}}
+
+    # Check if the current cluster id is new, and if so, create a new dict within the current event dict; copy the information of the current event to the dict
+    for a in m['arguments']:
+      a_id = a['m_id']
+      if not a_id in entity_stoi:
+        entity_stoi[a_id] = len(entity_stoi)
+
+      if not a_id in label_dict[m['doc_id']][m_id]['arguments']:
+        label_dict[m['doc_id']][m_id]['arguments'][a_id] = {'tokens': a['cluster_id'],
+                                                            'entity_type': a['entity_type'],
+                                                            'role': a['role'],
+                                                            'cluster_id': a['cluster_id']}
+  
+  n_event_clusters = len(event_stoi)
+  n_entity_clusters = len(entity_stoi)
+  print(f'Number of event clusters {n_event_clusters}')
+  print(f'Number of entity clusters {n_entity_clusters}')
+
+  visual_mentions = []
+  event_feats = {}
+  argument_feats = {}
+  for doc_idx, doc_id in enumerate(sorted(label_dict)):
+    feat_id = f'{doc_id}_{doc_idx}'
+    event_feat = []
+    argument_feat = []
+    for m_id in sorted(label_dict[doc_id]):
+      cur_mention = {'doc_id': doc_id,
+                     'm_id': m_id,
+                     'tokens': label_dict[doc_id][m_id]['tokens'],
+                     'event_type': label_dict[doc_id][m_id]['event_type'],
+                     'cluster_id': label_dict[doc_id][m_id]['cluster_id'],
+                     'arguments': []}
+      event_feat.append(event_stoi[cur_mention['tokens']])
+      argument_feat.append([])
+      for a_id in sorted(label_dict[doc_id][m_id]['arguments']):
+        a = label_dict[doc_id][m_id]['arguments'][a_id]
+        cur_mention['arguments'].append({'m_id': a_id,
+                                         'tokens': a['tokens'],
+                                         'entity_type': a['entity_type'],
+                                         'role': a['role'],
+                                         'cluster_id': a['cluster_id']})
+        argument_feat[-1].append(a['tokens'])     
+     
+      if len(argument_feat[-1]) == 0:
+        argument_feat[-1].append(-1) 
+      cur_arg_feat = to_fixed_length(to_one_hot(argument_feat[-1], n_entity_clusters), 5, pad_val=-1)
+      # print(cur_arg_feat.shape) # XXX
+      argument_feat[-1] = cur_arg_feat
+      visual_mentions.append(cur_mention) 
+      
+    # Extract one-hot vectors
+    event_feats[feat_id] = to_one_hot(event_feat, n_event_clusters) 
+    argument_feats[feat_id] = np.asarray(argument_feat) 
+
+  json.dump(visual_mentions, open(out_prefix+'_visual.json', 'w'), indent=2)
+  np.savez(out_prefix+'_event_features.npz', **event_feats)
+  np.savez(out_prefix+'_entity_features.npz', **argument_feats)  
+
+def to_one_hot(sent, K):
+  sent = np.asarray(sent)
+  if len(sent.shape) < 2:
+    es = np.eye(K)
+    sent = np.asarray([es[int(w)] if w < K else 1./K*np.ones(K) for w in sent])
+    return sent
+  else:
+    return sent
+
+def to_fixed_length(x, L, pad_val=-1):
+  shape = x.shape[1:]
+  if x.shape[0] < L:
+    pad = [pad_val*np.ones(shape)[np.newaxis] for _ in range(L-x.shape[0])]
+    x = np.concatenate([x]+pad)
+  else:
+    x = x[:L]
+  return x
+
+
 if __name__ == '__main__':
+  import argparse
+  parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+  parser.add_argument('--task', type=int)
+  args = parser.parse_args()
+
   data_dir = 'ace/'
-  for split in ['train', 'dev', 'test']:
-    data_json = os.path.join(data_dir, '{}.oneie.json'.format(split))
-    out_prefix = os.path.join(data_dir, 'mentions', split)
-    get_mention_doc(data_json, out_prefix)
-    # get_event_info(data_json, out_prefix)
+  if args.task == 0:
+    if not os.path.exists(os.path.join(data_dir, 'mentions')):
+      os.mkdir(os.path.join(data_dir, 'mentions'))
+    for split in ['train', 'dev', 'test']:
+      data_json = os.path.join(data_dir, '{}.oneie.json'.format(split))
+      out_prefix = os.path.join(data_dir, 'mentions', split)
+      get_mention_doc(data_json, out_prefix)
+      get_event_info(data_json, out_prefix)
+  elif args.task == 1:
+    out_prefix = os.path.join(data_dir, 'mentions', 'traintest')
+    extract_synthetic_visual_event_embeddings(data_dir, out_prefix)
