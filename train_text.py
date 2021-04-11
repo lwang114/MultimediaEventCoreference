@@ -423,8 +423,109 @@ def test(text_model, mention_model, image_model, coref_model, test_loader, args)
                                                            len(all_labels)))
     logger.info('Strict - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
                                                                       eval.get_precision(), eval.get_f1()))
+
+    if config.classifier.split('_')[0] == 'graph': # TODO
+      align(text_model, mention_model, image_model, coref_model, test_loader, args) 
     return eval_event.get_f1()
 
+  def align(text_model, mention_model, image_model, coref_model, test_loader, args): # TODO
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    config = pyhocon.ConfigFactory.parse_file(args.config)
+    documents = test_loader.dataset.documents
+    pred_dicts = []
+    text_model.eval()
+    image_model.eval()
+    coref_model.eval()
+
+    with torch.no_grad():
+      for i, batch in enumerate(test_loader):
+        doc_embeddings,\
+        start_mappings, end_mappings,\
+        continuous_mappings,\
+        event_mappings, entity_mappings,\
+        event_to_roles_mappings, width,\
+        text_labels, type_labels,\
+        role_labels,\
+        text_mask, span_mask = batch
+        
+        token_num = text_mask.sum(-1).long()
+        span_num = span_mask.sum(-1).long()
+        doc_embeddings = doc_embeddings.to(device)
+        start_mappings = start_mappings.to(device)
+        end_mappings = end_mappings.to(device)
+        continuous_mappings = continuous_mappings.to(device)
+        event_mappings = event_mappings.to(device)
+        entity_mappings = entity_mappings.to(device)
+        event_to_roles_mappings = event_to_roles_mappings.to(device)
+        width = width.to(device)
+
+        text_labels = text_labels.to(device)
+        type_labels = type_labels.to(device)
+        span_mask = span_mask.to(device)
+        span_num = span_mask.sum(-1).long()
+
+        event_labels = torch.bmm(event_mappings, text_labels.unsqueeze(-1).float()).squeeze(-1).long()
+        event_num = event_mappings.sum(-1).sum(-1).long()
+        
+        text_output = text_model(doc_embeddings)
+        mention_output = mention_model(text_output,
+                                       start_mappings, end_mappings,
+                                       continuous_mappings, width,
+                                       type_labels)
+        _, score_mats = coref_model(mention_output,
+                                    event_mappings,
+                                    event_to_roles_mappings,
+                                    first_event_idx[0],
+                                    second_event_idx[0],
+                                    return_score_matrix=True)
+            
+        B = doc_embeddings.size(0)  
+        for idx in range(B):
+            global_idx = i * test_loader.batch_size + idx
+            doc_id = test_loader.dataset.doc_ids[global_idx]
+            tokens = [token[2] for token in test_loader.dataset.documents[doc_id]]
+            
+            first_event_idx, second_event_idx, pairwise_event_labels = get_pairwise_labels(event_labels[idx, :event_num[idx]].unsqueeze(0), 
+                                                                                           is_training=False, device=device)
+            if first_event_idx is None:
+              continue
+
+            origin_candidate_start_ends = torch.LongTensor(test_loader.dataset.origin_candidate_start_ends[global_idx])
+            mention_num = origin_candidate_start_ends.shape[0]
+            if not first_event_idx is None:
+              first_event_idx = first_event_idx[0]
+              second_event_idx = second_event_idx[0]
+              pairwise_event_labels = pairwise_event_labels.squeeze(0)
+              event_mapping = event_mappings[idx, :event_num[idx]]
+              event_start_ends = torch.mm(event_mapping[:, :mention_num].cpu(), origin_candidate_start_ends.float()).long()
+              event_to_roles_mapping = event_to_roles_mappings[idx, :event_num[idx]]
+              
+              # Compute alignment scores
+              for pair_idx, (idx1, idx2, y) in enumerate(zip(first_event_idx, second_event_idx, pairwise_event_labels)):
+                if y > 0:
+                  n_args_first = event_to_roles_mapping[idx1].sum().long()
+                  n_args_second = event_to_roles_mapping[idx2].sum().long()                 
+                  if n_args_first <= 0 or n_args_second <= 0:
+                    continue
+                  first_arg_idxs = torch.max(event_to_roles_mapping[idx1], dim=-1)[1][:n_args_first]
+                  first_arg_spans = [origin_candidate_start_ends[i] for i in first_arg_idxs]
+                  first_arguments = [' '.join(tokens[s[0]:s[1]+1]) for s in first_arg_spans]
+
+
+                  second_arg_idxs = torch.max(event_to_roles_mapping[idx2], dim=-1)[1][:n_args_second]
+                  second_arg_spans = [origin_candidate_start_ends[i] for i in second_arg_idxs]
+                  second_arguments = [' '.join(tokens[s[0]:s[1]+1]) for s in second_arg_spans]
+
+                  first_trigger = ' '.join(tokens[origin_candidate_start_ends[idx1, 0]:origin_candidate_start_ends[idx1, 1]+1])
+                  second_trigger = ' '.join(tokens[origin_candidate_start_ends[idx2, 0]:origin_candidate_start_ends[idx2, 1]+1])
+                  score_mat = score_mats[idx, pair_idx, :n_args_first, :n_args_second].cpu().detach().numpy()
+                  pred_dicts.append({'doc_id': doc_id,
+                                     'score_mat': score_mat.tolist(),
+                                     'first_trigger': first_trigger,
+                                     'second_trigger': second_trigger,
+                                     'first_arguments': first_arguments,
+                                     'second_arguments': second_arguments})
+    json.dump(pred_dicts, open(os.path.join(config['model_path'], 'graph_alignment_scores.json'), 'w'), indent=2)
       
 if __name__ == '__main__':
   # Set up argument parser
