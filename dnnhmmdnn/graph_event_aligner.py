@@ -533,7 +533,7 @@ def to_antecedents(labels):
         break
   return antecedents
 
-def load_text_features(config, vocab, vocab_entity, split):
+def load_text_features(config, vocab, vocab_entity, doc_set, split):
   lemmatizer = WordNetLemmatizer() 
   event_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events.json'), 'r', 'utf-8'))
   doc_train = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}.json')))
@@ -551,21 +551,20 @@ def load_text_features(config, vocab, vocab_entity, split):
   tokens_all = [] 
 
   for m in event_mentions:
-    if m['doc_id'] in doc_to_feat:
-      if not m['doc_id'] in label_dict:
+    if m['doc_id'] in doc_set:
+      if not m['doc_id'] in label_dicts:
         label_dicts[m['doc_id']] = {}
       token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
       label_dicts[m['doc_id']][span] = {'token_id': vocab[token],
-                                                                                     'cluster_id': m['cluster_id'],
-                                                                                     'arguments': {}} 
+                                        'cluster_id': m['cluster_id'],
+                                        'arguments': {}} 
       
       for a in m['arguments']:
         a_token = lemmatizer.lemmatize(a['text'].lower())
         label_dicts[m['doc_id']][span]['arguments'][(a['start'], a['end'])] = vocab_entity[a_token]
 
   for feat_idx, doc_id in enumerate(sorted(label_dicts)): # XXX
-    feat_id = doc_to_feat[doc_id]
     label_dict = label_dicts[doc_id]
     spans = sorted(label_dict)
     a_spans = [a_span for span in spans for a_span in sorted(label_dict[span]['arguments'])]
@@ -605,7 +604,7 @@ def load_text_features(config, vocab, vocab_entity, split):
 def load_visual_features(config, label_dicts, split):
   action_feats_npz = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_event_feat.npz'))
   object_feats_npz = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_event_feat_argument_feat.npz'))
-  doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in action_feats}
+  doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in action_feats_npz}
 
   action_feats = []
   object_feats = []
@@ -660,10 +659,10 @@ def load_data(config):
     else:
       vocab_freq[trigger] += 1
     
-    for a in trigger['arguments']:
+    for a in m['arguments']:
       argument = a['text']
       argument = lemmatizer.lemmatize(argument.lower())
-      if not argument in vocab:
+      if not argument in vocab_entity:
         vocab_entity[argument] = len(vocab_entity)
         vocab_entity_freq[argument] = len(vocab_entity)
       else:
@@ -671,11 +670,13 @@ def load_data(config):
 
   json.dump(vocab_freq, open('vocab_freq.json', 'w'), indent=2)
   json.dump(vocab_entity_freq, open('vocab_entity_freq.json', 'w'), indent=2)
-
   print(f'Vocab size: {vocab_size}, vocab entity size: {vocab_entity_size}')
-  print(f'Number of training examples: {len(label_dict_train)}')
-  print(f'Number of test examples: {len(label_dict_test)}')
 
+  action_feats_train_npz = np.load(os.path.join(config['data_folder'], 'train_mmaction_event_feat.npz'))
+  doc_set_train = set(['_'.join(feat_id.split('_')[:-1]) for feat_id in action_feats_train_npz])
+  action_feats_test_npz = np.load(os.path.join(config['data_folder'], 'test_mmaction_event_feat.npz'))
+  doc_set_test = set(['_'.join(feat_id.split('_')[:-1]) for feat_id in action_feats_test_npz])
+  
   event_feats_train,\
   entity_feats_train,\
   ea_maps_train,\
@@ -684,8 +685,12 @@ def load_data(config):
   spans_entity_train,\
   cluster_ids_train,\
   tokens_train,\
-  label_dict_train = load_text_features(config, vocab, vocab_entity, split='train')
-
+  label_dict_train = load_text_features(config, vocab,
+                                        vocab_entity,
+                                        doc_set_train,
+                                        split='train')
+  print(f'Number of training examples: {len(label_dict_train)}')
+  
   event_feats_test,\
   entity_feats_test,\
   ea_maps_test,\
@@ -694,8 +699,12 @@ def load_data(config):
   spans_entity_test,\
   cluster_ids_test,\
   tokens_test,\
-  label_dict_test = load_text_features(config, vocab, vocab_entity, split='test')
-
+  label_dict_test = load_text_features(config, vocab,
+                                       vocab_entity,
+                                       doc_set_test,
+                                       split='test')
+  print(f'Number of test examples: {len(label_dict_test)}')
+  
   action_feats_train,\
   object_feats_train,\
   ao_maps_train = load_visual_features(config, label_dict_train, split='train')

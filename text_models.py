@@ -607,7 +607,7 @@ class StarTransformerClassifier(nn.Module):
                                 torch.cat([c[:, first_idxs],
                                            embs_c[:, second_idxs]], dim=-1))).squeeze(-1)
 
-    return scores_c # XXX gate_probs * scores_c + (1 - gate_probs) * scores_neighbors
+    return gate_probs * scores_c + (1 - gate_probs) * scores_neighbors
 
   def pairwise_score(self, first, second):
       return torch.sum(first * second, dim=-1)
