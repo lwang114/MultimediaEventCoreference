@@ -346,8 +346,14 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_fi
   json.dump(entity_frequency, open(f'{out_prefix}_entity_frequency.npz', 'w'), indent=4, sort_keys=True)
   json.dump(event_frequency, open(f'{out_prefix}_event_frequency.json', 'w'), indent=4, sort_keys=True)
 
-def visualize_features(embed_file, label_file, freq_file, 
-                       out_prefix='tsne', n_class=10):
+def visualize_features(embed_file,
+                       label_file,
+                       ontology_file,
+                       freq_file,
+                       label_type='event',
+                       out_prefix='tsne',
+                       n_class=10):
+  """ Visualize the embeddings with TSNE """
   plt.rc('xtick', labelsize=15)
   plt.rc('ytick', labelsize=15)
   plt.rc('axes', labelsize=20)
@@ -355,19 +361,22 @@ def visualize_features(embed_file, label_file, freq_file,
   plt.rc('font', size=20)
 
   if not os.path.exists(f'{out_prefix}.csv'):
-    # Visualize the embeddings with TSNE
+    ontology = json.load(open(ontology_file))
+    label_types = ontology[label_type]
+      
     feat_npz = np.load(embed_file)
     feats = np.concatenate([feat_npz[k] for k in sorted(feat_npz, key=lambda x:int(x.split('_')[-1]))]) # XXX
     label_npz = np.load(label_file)
-    labels = np.concatenate([np.argmax(label_npz[k], axis=1) for k in sorted(label_npz, key=lambda x:int(x.split('_')[-1]))]) # XXX
+    labels = [label_types[y] for k in sorted(label_npz, key=lambda x:int(x.split('_')[-1]))
+              for y in np.argmax(label_npz[k], axis=1)]
     freq = json.load(open(freq_file))
 
-    top_types = sorted(freq, key=lambda x:freq[x], reverse=True)[:n_class]
+    top_types = [label_types[int(k)] for k in sorted(freq, key=lambda x:freq[x], reverse=True)[:n_class]]
     X = TSNE(n_components=2).fit_transform(feats)
     select_idxs = [i for i, y in enumerate(labels) if str(y) in top_types]
 
     X = X[select_idxs]
-    y = labels[select_idxs]
+    y = [labels[i] for i in select_idxs]
     df = pd.DataFrame({'t-SNE dim 0': X[:, 0], 
                        't-SNE dim 1': X[:, 1],
                        'Event type': y})
@@ -415,7 +424,6 @@ def extract_image_embeddings(data_dir, csv_dir, mapping_file, out_prefix, image_
       img_feat.append([float(x) for x in segments[-400:]])
     img_feat = np.asarray(img_feat)
     img_feats['{}_{}'.format(doc_id, idx)] = img_feat
-
   np.savez(out_prefix, **img_feats)
 
 def train_test_split(feat_file, test_id_file, mapping_file, out_prefix): # TODO random split
@@ -532,7 +540,7 @@ if __name__ == '__main__':
     out_prefix = '{}/test'.format(data_dir)
     compute_bleu_similarity(doc_json, mapping_file, out_prefix)
   elif args.task == 5:
-    # Random split
+    # Xudong's split
     out_dir = 'video_m2e2_old/mentions/'
     if not os.path.exists(out_dir):
       os.makedirs(out_dir)
@@ -541,12 +549,20 @@ if __name__ == '__main__':
     entity_mentions = json.load(open(os.path.join(data_dir, 'train_entities.json')))
     event_mentions = json.load(open(os.path.join(data_dir, 'train_events.json')))
     mixed_mentions = json.load(open(os.path.join(data_dir, 'train_mixed.json')))
+    anno_train = json.load(open(os.path.join(data_dir, '../anet_anno_train.json')))
+    mapping_dict = json.load(open(os.path.join(data_dir, '../video_m2e2.json')))
+    id2desc = dict()
+    for k, v in mapping_dict.items():
+      for punct in PUNCT:
+        k = k.replace(punct, '')
+      id2desc[v['id'].split('v=')[-1]] = k
     
     n_docs = len(documents)
     doc_ids = sorted(documents)
-    n_train = int(0.75 * n_docs)
-    train_idxs = np.random.permutation(n_docs)[:n_train]
-    train_ids = [doc_ids[i] for i in train_idxs] 
+    train_ids = [doc_id for doc_id in doc_ids if id2desc[doc_id] in anno_train]
+    # n_train = int(0.75 * n_docs)
+    # train_idxs = np.random.permutation(n_docs)[:n_train]
+    # train_ids = [doc_ids[i] for i in train_idxs] 
     test_ids = [doc_id for doc_id in doc_ids if not doc_id in train_ids]
     
     documents_train = {}
@@ -590,4 +606,6 @@ if __name__ == '__main__':
     embed_file = f'{out_prefix}.npz'
     label_file = f'{out_prefix}_labels.npz'
     freq_file = f'{out_prefix}_event_frequency.json'
-    visualize_features(embed_file, label_file, freq_file, out_prefix=f'{out_prefix}_tsne')
+    ontology_file = os.path.join(data_dir, '../ontology.json')
+    visualize_features(embed_file, label_file, ontology_file, freq_file, out_prefix=f'{out_prefix}_tsne')
+  
