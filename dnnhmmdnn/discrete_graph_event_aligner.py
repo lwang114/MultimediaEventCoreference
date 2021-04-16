@@ -12,6 +12,8 @@ from nltk.stem import WordNetLemmatizer
 import pyhocon
 import itertools
 import torch
+import matplotlib
+matplotlib.use('Agg')
 import argparse
 from scipy.special import logsumexp
 from region_vgmm import *
@@ -423,6 +425,25 @@ class GraphMixtureEventAligner(object):
       alignments.append(np.argmax(P_align, axis=1)) 
     return alignments, np.asarray(scores)
 
+  def align(self,
+            source_feats,
+            target_feats,
+            source_labels,
+            target_labels,
+            alignment_type='image',
+            out_prefix='align'):
+    src_vocab = dict()
+    trg_vocab = dict()
+    for src_label in source_labels:
+      for y in src_label: # TODO
+        if not y in src_vocab:
+          src_vocab[y] = len(src_vocab)
+
+    for trg_label in target_labels:
+      for y in trg_label:
+        if not y in trg_vocab:
+          trg_vocab[y] = len(trg_vocab)
+  
   def retrieve(self, 
                action_features_test, 
                object_features_test,
