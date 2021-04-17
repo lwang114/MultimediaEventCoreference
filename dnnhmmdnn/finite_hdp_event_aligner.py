@@ -37,7 +37,6 @@ class Restaurant:
     self.ncustomers = 0
     self.name2table = {}
     self.table_names = []
-    self.p_init = p_init
     self.alpha0 = alpha0
     self.K_max = K
 
@@ -78,9 +77,9 @@ class Restaurant:
 
   def log_likelihood(self):
     ll = math.lgamma(self.alpha0)\
-         - self.ntables * math.lgamma(self.alpha0 / self.K_max) 
+         - self.ntables * math.lgamma(self.alpha0 / self.K_max)\
          + sum(math.lgamma(self.tables[i] + self.alpha0 / self.K_max) for i in range(self.ntables))\
-         - math.lgamma(self.ntables + self.alpha0)         
+         - math.lgamma(self.ncustomers + self.alpha0)         
     return ll
 
   def save(self, outputDir='./', returnStr=False):
@@ -123,11 +122,13 @@ class HDPEventAligner(object):
     p = self.event_crp.prob(c)
     if c in self.event_crp.name2table:
       table_idx = self.event_crp.name2table[c]
-      p *= self.feature_crps[table_idx][0].prob(e) *\
-              np.prod([self.feature_crps[table_idx][1].prob(a_i) for a_i in a])
+      p *= self.feature_crps[table_idx][0].prob(e)
+      if len(a) > 0:
+        p *= np.prod([self.feature_crps[table_idx][1].prob(a_i) for a_i in a])
     else: 
-      p *= Restaurant(self.alpha0, self.Ke) *\
-           Restaurant(self.alpha0, self.Ka).prob(c) ** len(a)
+      p *= Restaurant(self.alpha0, self.Ke).prob(e)
+      if len(a) > 0:
+        p *= np.prod([Restaurant(self.alpha0, self.Ka).prob(a_i) for a_i in a])
     return p
   
   def log_likelihood(self):
@@ -138,11 +139,14 @@ class HDPEventAligner(object):
     return ll
 
   def gibbs_sample(self, e, a):
-    P = [self.prob(c, e, a) for c in self.event_crp.table_names]
-    P.append(self.prob(-1, e, a))
+    P = [self.prob(-1, e, a)]*self.K
+    for c_idx, c in enumerate(self.event_crp.table_names):
+      P[c_idx] = self.prob(c, e, a)
+      
+    
+    # best_table_idxs = np.argsort(-np.asarray(P))[:10]
+    print('best_tables:', P[:100])
     '''
-    best_table_idxs = np.argsort(-np.asarray(P))[:10]
-    print('best_tables: ')
     for i in best_table_idxs: # XXX
       if i >= len(self.feature_crps):
         print('new table', P[i])
@@ -152,7 +156,7 @@ class HDPEventAligner(object):
     '''
     norm = sum(P)
     x = norm * random.random()
-    for c, w in zip(self.event_crp.table_names+[-1], P):
+    for c, w in zip(self.event_crp.table_names, P):
       if x < w: return c
       x -= w
     return -1
@@ -160,12 +164,12 @@ class HDPEventAligner(object):
   def train(self, n_iter=35, out_dir='./'):
     order = list(range(len(self.e_feats_train)))
     for i_iter in range(n_iter):
-      random.shuffle(order)
+      # random.shuffle(order)
       for i in order:
         e_feat = self.e_feats_train[i]
         a_feat = self.a_feats_train[i]
         mention_order = list(range(len(e_feat)))
-        random.shuffle(mention_order) 
+        # random.shuffle(mention_order) 
         if i_iter > 0:
           for i_m in mention_order:
             c = self.cluster_ids[i][i_m]
@@ -356,7 +360,6 @@ def load_data(config):
 
   vocab_size = len(vocab)
   vocab_entity_size = len(vocab_entity)
-  print(f'Vocab size: {vocab_size}, vocab entity size: {vocab_entity_size}')
 
   event_feats_train,\
   entity_feats_train,\
@@ -405,10 +408,16 @@ if __name__ == '__main__':
   logging.basicConfig(filename=os.path.join(config['model_path'], 'train.log'), level=logging.DEBUG)
 
   ## Test cases for HDP
-  aligner = HDPEventAligner([[1, 2, 3], [1, 2, 3], [1, 2, 3]],
-                            [[1, 2, 3], [1, 2, 3], [1, 2, 3]],
-                            K=3, Ke=3, Ka=3)
-  aligner.train(30, out_dir='test')
+  run_test = False
+  if run_test:
+    efeats = [[1, 2, 3] for _ in range(10)]
+    afeats = [[[1], [2], [3]] for _ in range(10)]
+    aligner = HDPEventAligner(efeats, afeats,
+                              alpha0=1.,
+                              K=3, Ke=3, Ka=3)
+    if not os.path.exists('models/test'):
+      os.makedirs('models/test')
+    aligner.train(30, out_dir='models/test')
 
   event_feats_train,\
   entity_feats_train,\
@@ -425,9 +434,10 @@ if __name__ == '__main__':
   cluster_ids_test,\
   tokens_test,\
   vocab, vocab_entity = load_data(config)
-  K = max(max(cluster_ids) for cluster_ids in cluster_ids_train+cluster_ids_test)
+  K = 1000 # max(max(cluster_ids) for cluster_ids in cluster_ids_train+cluster_ids_test)
   Ke = len(vocab)
   Ka = len(vocab_entity)
+  print(f'Max num of events: {K}, vocab event size: {Ke}, vocab entity size: {Ka}')
 
   ## Model training
   aligner = HDPEventAligner(event_feats_train+event_feats_test, 
@@ -436,7 +446,7 @@ if __name__ == '__main__':
                             K=K,
                             Ke=Ke,
                             Ka=Ka)
-  aligner.train(35, out_dir=config['model_path'])
+  aligner.train(10, out_dir=config['model_path'])
 
   ## Test and evaluation
   pred_cluster_ids = aligner.cluster(event_feats_test, entity_feats_test)
