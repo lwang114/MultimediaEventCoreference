@@ -12,6 +12,8 @@ from nltk.stem import WordNetLemmatizer
 import pyhocon
 import itertools
 import torch
+import matplotlib
+matplotlib.use('Agg')
 import argparse
 from scipy.special import logsumexp
 from region_vgmm import *
@@ -382,7 +384,7 @@ class GraphMixtureEventAligner(object):
                   entity_feats_test,
                   vo_maps_test,
                   ea_maps_test,
-                  score_type='max'): 
+                  alignment_type='text'): 
     alignments = []
     scores = []
     for v_feat, o_feat, P_e, P_a, vo_map, ea_map in zip(action_feats_test, object_feats_test,
@@ -414,14 +416,93 @@ class GraphMixtureEventAligner(object):
       P_align_ao = np.asarray(P_align_ao)
       P_align = np.concatenate([P_v_null * P_o_null, P_align_ev * P_align_ao], axis=1)
 
-      if score_type == 'max':
-        scores.append(np.prod(np.max(P_align, axis=0)))
-      elif score_type == 'mean':
-        scores.append(np.prod(np.mean(P_align, axis=0)))
+
+      scores.append(np.prod(np.max(P_align, axis=0)))
+      if alignment_type == 'text':
+        alignments.append(np.argmax(P_align, axis=1))       
+      elif alignment_type == 'image':
+        alignments.append(np.argmax(P_align, axis=0)) 
       else:
-        raise ValueError('Score type not implemented')
-      alignments.append(np.argmax(P_align, axis=1)) 
+        raise ValueError('Alignment type not implemented')
+
     return alignments, np.asarray(scores)
+
+  def align(self,
+            action_feats,
+            object_feats,
+            event_feats,
+            entity_feats,
+            action_labels,
+            object_labels,
+            event_labels,
+            entity_labels,
+            vo_maps,
+            ea_maps,
+            alignment_type='image',
+            out_prefix='align'):
+    action_vocab = dict()
+    object_vocab = dict()
+    event_vocab = dict()
+    entity_vocab = dict()
+    for action_label in action_labels:
+      for y in action_label:
+        if not y in action_vocab:
+          action_vocab[y] = len(action_vocab)
+
+    for object_label in object_labels:
+      for y in object_label:
+        if not y in object_vocab:
+          object_vocab[y] = len(object_vocab)
+
+    for event_label in event_labels:
+      for y in event_label:
+        if not y in event_vocab:
+          event_vocab[y] = len(event_vocab)
+  
+    for entity_label in entity_labels:
+      for y in entity_label:
+        if not y in entity_vocab:
+          entity_vocab[y] = len(entity_vocab)
+
+    n_action_vocab = len(action_vocab)
+    n_event_vocab = len(event_vocab)
+    alignments, _ = self.align_sents(action_feats,
+                                     object_feats,
+                                     event_feats,
+                                     entity_feats,
+                                     vo_maps,
+                                     ea_maps,
+                                     alignment_type=alignment_type)
+    confusion = np.zeros((n_action_vocab, n_event_vocab))
+    for action_label, event_label, alignment in zip(action_labels,
+                                                    event_labels,
+                                                    alignments):
+      if alignment_type == 'image':
+        for action_idx, y in enumerate(action_label):
+          y_pred = event_label[alignment[action_idx]]
+          confusion[action_vocab[y], event_vocab[y_pred]] += 1
+
+    fig, ax = plt.subplots(figsize=(30, 10))
+    si = np.arange(n_action_vocab+1)
+    ti = np.arange(n_event_vocab+1)
+    T, S = np.meshgrid(ti, si)
+    plt.pcolormesh(T, S, confusion)
+    for i in range(n_src_vocab):
+      for j in range(n_trg_vocab):
+        plt.text(j, i, confusion[i, j], color='orange')
+    ax.set_xticks(ti[1:]-0.5)
+    ax.set_yticks(si[1:]-0.5)
+    ax.set_xticklabels(sorted(event_vocab, key=lambda x:event_vocab[x]))
+    ax.set_yticklabels(sorted(action_vocab, key=lambda x:action_vocab[x]))
+    plt.xticks(rotation=45)
+    plt.colorbar()
+    plt.savefig(out_prefix+'_confusion.png')
+    plt.close()
+    json.dump({'confusion': confusion.tolist(),
+               'action_vocab': sorted(action_vocab, key=lambda x:src_vocab[x]),
+               'event_vocab': sorted(event_vocab, key=lambda x:trg_vocab[x])}, 
+              open(out_prefix+'_confusion.json', 'w'), indent=2)
+
 
   def retrieve(self, 
                action_features_test, 
@@ -456,7 +537,7 @@ class GraphMixtureEventAligner(object):
                                           entity_feats, 
                                           vo_map,
                                           ea_map,
-                                          score_type='max') 
+                                          alignment_type='image') 
 
     I_kbest = np.argsort(-scores, axis=1)[:, :kbest]
     P_kbest = np.argsort(-scores, axis=0)[:kbest]
@@ -524,18 +605,6 @@ class GraphMixtureEventAligner(object):
     fp1.close()
     fp2.close()  
 
-  '''
-  def print_alignment(self, out_file): # TODO
-    align_dicts = []
-    for i, (src_vec_ids, trg_feat) in enumerate(zip(self.src_vec_ids_train, self.trg_feats)):
-      src_feat = self.src_feats[src_vec_ids]
-      alignment = self.align_sents([src_feat], [trg_feat])[0][0]
-      src_sent = np.argmax(self.src_model.log_prob_z(i), axis=1)
-      align_dicts.append({'alignment': alignment.tolist(),
-                          'image_concepts': src_sent.tolist()})
-    with open(out_file, 'w') as f:
-      json.dump(align_dicts, f, indent=4, sort_keys=True)
-  '''
 
 def reshape_by_event(x, mappings):
   return [m @ x for m in mappings] 
@@ -581,6 +650,8 @@ def load_text_features(config, vocab, vocab_entity, doc_to_feat, split):
   label_dicts = {}
   event_feats = []
   entity_feats = []
+  event_types = []
+  entity_types = []
   ea_maps_all = []
   doc_ids = []
   spans_all = []
@@ -596,6 +667,7 @@ def load_text_features(config, vocab, vocab_entity, doc_to_feat, split):
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
       label_dicts[m['doc_id']][span] = {'token_id': vocab[token],
                                         'cluster_id': m['cluster_id'],
+                                        'type': m['event_type'],
                                         'arguments': {}} 
       
       for a in m['arguments']:
@@ -606,7 +678,8 @@ def load_text_features(config, vocab, vocab_entity, doc_to_feat, split):
           a_token = a['tokens']
           a_span = (min(a['tokens_ids']), max(a['tokens_ids']))
         a_token = lemmatizer.lemmatize(a_token.lower())
-        label_dicts[m['doc_id']][span]['arguments'][a_span] = vocab_entity[a_token]
+        label_dicts[m['doc_id']][span]['arguments'][a_span] = {'token_id': vocab_entity[a_token],
+                                                               'type': a['entity_type']} 
 
   for feat_idx, doc_id in enumerate(sorted(label_dicts)): # XXX
     feat_id = doc_to_feat[doc_id]
@@ -614,7 +687,10 @@ def load_text_features(config, vocab, vocab_entity, doc_to_feat, split):
     spans = sorted(label_dict)
     a_spans = [a_span for span in spans for a_span in sorted(label_dict[span]['arguments'])]
     events = [label_dict[span]['token_id'] for span in spans]
-    entities = [label_dict[span]['arguments'][a_span] for span in spans for a_span in sorted(label_dict[span]['arguments'])]
+    entities = [label_dict[span]['arguments'][a_span]['token_id'] for span in spans for a_span in sorted(label_dict[span]['arguments'])]
+    event_types.append([label_dict[span]['type'] for span in spans])
+    entity_types.append([label_dict[span]['arguments'][a_span]['type'] for span in spans for a_span in sorted(label_dict[span]['arguments'])])
+
     cluster_ids = [label_dict[span]['cluster_id'] for span in spans]
     
     ea_maps = []
@@ -637,6 +713,8 @@ def load_text_features(config, vocab, vocab_entity, doc_to_feat, split):
     tokens_all.append([t[2] for t in doc_train[doc_id]])
   return event_feats,\
          entity_feats,\
+         event_types,\
+         entity_types,\
          ea_maps_all,\
          doc_ids,\
          spans_all,\
@@ -646,19 +724,26 @@ def load_text_features(config, vocab, vocab_entity, doc_to_feat, split):
          label_dicts
 
 
-def load_visual_features(config, label_dicts, split):
+def load_visual_features(config, label_dicts, action_classes, object_classes, split):
   action_feats_npz = np.load(os.path.join(config['data_folder'], config[f'action_feature_{split}']))
   object_feats_npz = np.load(os.path.join(config['data_folder'], config[f'object_feature_{split}']))
+  action_labels_npz = np.load(os.path.join(config['data_folder'], config[f'action_label_{split}']))
+  object_labels_npz = np.load(os.path.join(config['data_folder'], config[f'object_label_{split}']))
+
   doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in action_feats_npz}
 
   action_feats = []
   object_feats = []
+  action_types = []
+  object_types = []
   vo_maps = []
   for feat_idx, doc_id in enumerate(sorted(label_dicts)): # XXX
     feat_id = doc_to_feat[doc_id]
     label_dict = label_dicts[doc_id]
     action_feats.append(action_feats_npz[feat_id])
-    
+    action_type_int = np.argmax(action_labels_npz[feat_id], axis=-1)
+    action_types.append([action_classes[k] for k in action_type_int])
+
     o_feats = []
     cur_vo_maps = []
     for o_feat in object_feats_npz[feat_id]:
@@ -675,8 +760,11 @@ def load_visual_features(config, label_dicts, split):
         o_idx += 1
       cur_vo_maps.append(vo_map)
     object_feats.append(o_feats)
+    object_type_int = np.argmax(object_labels_npz[feat_id], axis=-1)
+    object_types.append([object_classes[k] for k in object_type_int])
     vo_maps.append(cur_vo_maps)
-  return action_feats, object_feats, vo_maps
+  return action_feats, object_feats, 
+         action_types, object_types, vo_maps
 
 
 def load_data(config):
@@ -696,6 +784,10 @@ def load_data(config):
 
   action_feats_train_npz = np.load(os.path.join(config['data_folder'], config['action_feature_train']))
   action_feats_test_npz = np.load(os.path.join(config['data_folder'], config['action_feature_test']))
+  visual_class_dict = json.load(open(os.path.join(config['data_folder'], '../ontology.json')))
+  action_classes = visual_class_dict['event']
+  object_classes = visual_class_dict['entities']
+
   doc_to_feat_train = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in action_feats_train_npz}
   doc_to_feat_test = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in action_feats_test_npz}
 
@@ -733,6 +825,7 @@ def load_data(config):
 
   event_feats_train,\
   entity_feats_train,\
+  _, _,\
   ea_maps_train,\
   doc_ids_train,\
   spans_train,\
@@ -744,6 +837,8 @@ def load_data(config):
 
   event_feats_test,\
   entity_feats_test,\
+  event_types_test,\
+  entity_types_test,\
   ea_maps_test,\
   doc_ids_test,\
   spans_test,\
@@ -755,10 +850,13 @@ def load_data(config):
 
   action_feats_train,\
   object_feats_train,\
-  vo_maps_train = load_visual_features(config, label_dict_train, split='train')
+  _, _,\
+  vo_maps_train = load_visual_features(config, label_dict_train, action_classes, object_classes, split='train')
   action_feats_test,\
   object_feats_test,\
-  vo_maps_test = load_visual_features(config, label_dict_test, split='test')
+  action_types_test,\
+  object_feats_test,\
+  vo_maps_test = load_visual_features(config, label_dict_test, action_classes, object_classes, split='test')
 
   return event_feats_train,\
          entity_feats_train,\
@@ -770,6 +868,8 @@ def load_data(config):
          tokens_train,\
          event_feats_test,\
          entity_feats_test,\
+         event_types_test,\
+         entity_types_test,\
          ea_maps_test,\
          doc_ids_test,\
          spans_test,\
@@ -781,8 +881,11 @@ def load_data(config):
          vo_maps_train,\
          action_feats_test,\
          object_feats_test,\
+         action_types_test,\
+         object_types_test,\
          vo_maps_test,\
-         vocab, vocab_entity
+         vocab, vocab_entity,\
+         action_classes, entity_classes
 
 
 if __name__ == '__main__':
@@ -806,6 +909,8 @@ if __name__ == '__main__':
   tokens_train,\
   event_feats_test,\
   entity_feats_test,\
+  event_types_test,\
+  entity_types_test,\
   ea_maps_test,\
   doc_ids_test,\
   spans_test,\
@@ -817,26 +922,41 @@ if __name__ == '__main__':
   vo_maps_train,\
   action_feats_test,\
   object_feats_test,\
+  action_types_test,\
+  object_types_test,\
   vo_maps_test,\
-  vocab, vocab_entity = load_data(config)
+  vocab, vocab_entity,\
+  action_classes, object_classes = load_data(config)
   Ke = len(vocab)
   Ka = len(vocab_entity)
-  Kv = 33
-  Ko = 7
+  Kv = len(action_classes)
+  Ko = len(object_classes)
 
   ## Model training
-  aligner = GraphMixtureEventAligner(action_feats_train+action_feats_test,
-                                     object_feats_train+object_feats_test,
-                                     event_feats_train+event_feats_test,
-                                     entity_feats_train+entity_feats_test,  
-                                     vo_maps_train+vo_maps_test,
-                                     ea_maps_train+ea_maps_test,
+  aligner = GraphMixtureEventAligner(action_feats_train, #+action_feats_test,
+                                     object_feats_train, #+object_feats_test,
+                                     event_feats_train, #+event_feats_test,
+                                     entity_feats_train, #+entity_feats_test,  
+                                     action_types_test,\
+                                     object_types_test,\
+                                     event_types_test,\
+                                     entity_types_test,\
+                                     vo_maps_train, #+vo_maps_test,
+                                     ea_maps_train, #+ea_maps_test,
                                      configs={'n_action_vocab':Kv, 
                                               'n_object_vocab':Ko,
                                               'n_event_vocab':Ke,
                                               'n_entity_vocab':Ka})
   aligner.trainEM(15, os.path.join(config['model_path'], 'mixture')) 
-  # aligner.print_alignment(os.path.join(config['model_path'], 'alignment.json'))
+  aligner.align(action_feats_test,
+                object_feats_test,
+                event_feats_test,
+                entity_feats_test,
+                action_labels_test,
+                vo_maps_test,
+                ea_maps_test,
+                out_prefix=os.path.join(config['model_path'],
+                                        'alignment'))
   
   ## Test and evaluation
   conll_eval = CoNLLEvaluation()
