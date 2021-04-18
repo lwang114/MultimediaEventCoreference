@@ -19,18 +19,18 @@ random.seed(2)
 
 # logger = logging.getLogger(__name__)
 class Restaurant:
-  # Attributes:
-  # ----------
-  #   tables: a list [count_1, ..., count_T], 
-  #           where count_t is the number of customers with at table t;
-  #   name2table: a dictionary {k:t}, mapping name k to table t
-  #   ncustomers: sum(tables),
-  #               storing the total number of customers with each dish; 
-  #   ntables: len(tables),
-  #            total number of tables;
-  #   p_init: a dictionary {k: p_0(k)},
-  #         where p_0(k) is the initial probability for table with name k
-  #   alpha0: concentration, Dirichlet process parameter
+  """
+  Attributes:
+     tables: a list [count_1, ..., count_T], 
+             where count_t is the number of customers with at table t;
+     name2table: a dictionary {k:t}, mapping name k to table t
+     ncustomers: sum(tables),
+                 storing the total number of customers with each dish; 
+     ntables: len(tables),
+              total number of tables;
+     alpha0: concentration, Dirichlet process parameter
+     K_max: maximum number of tables 
+  """
   def __init__(self, alpha0, K):
     self.tables = []
     self.ntables = 0
@@ -51,6 +51,8 @@ class Restaurant:
     else:
       i = self.name2table[k]
       tables[i] += 1
+    if self.ntables >= self.K_max:
+      print('Warning: number of table exceeds max limit') 
 
   def unseat_from(self, k):
     self.ncustomers -= 1
@@ -94,12 +96,91 @@ class Restaurant:
       with open(outputDir + 'tables.txt', 'w') as f:
         f.write(outStr)
 
+class LocalRestaurant:
+  """
+    tables: a list [count_1, ..., count_T], 
+            where count_t is the number of customers with at table t;
+    name2table: a dictionary {x:t}, mapping name x to table t
+    table2menu: a dictionary {t:k}, mapping from table t to menu (dish) k
+    ncustomers: sum(tables),
+                storing the total number of customers with each dish; 
+    ntables: len(tables),
+             total number of tables;
+    alpha0: concentration, Dirichlet process parameter
+    K_max: maximum number of tables
+  """
+  def __init__(self, alpha0, K):
+    self.tables = []
+    self.ntables = 0
+    self.ncustomers = 0
+    self.name2table = {}
+    self.table2menu = {}
+    self.table_names = []
+    self.alpha0 = alpha0
+    self.K_max = K
+  
+  def seat_to(self, k, c):
+    self.ncustomers += 1
+    tables = self.tables # shallow copy the tables to a local variable
+    if not k in self.name2table:
+      tables.append(1)
+      self.name2table[k] = self.ntables
+      self.table2menu[k] = c 
+      self.ntables += 1
+    else:
+      i = self.name2table[k]
+      tables[i] += 1
+    if self.ntables >= self.K_max:
+      print('Warning: number of table exceeds max limit') 
+
+  def unseat_from(self, k):
+    self.ncustomers -= 1
+    i = self.name2table[k]
+    tables = self.tables
+    tables[i] -= 1
+    if tables[i] == 0: # cleanup empty table
+      k_new = self.table_names[-1]
+      self.table_names[i] = k_new # replace the empty table with the last table
+      self.name2table[k_new] = i
+      self.tables[i] = self.tables[-1]
+      del self.name2table[k] 
+      del self.table_names[-1]
+      del self.tables[-1]
+      self.ntables -= 1 
+
+  def prob(self, k):
+    w = self.alpha0 / self.K_max
+
+    if k in self.name2table:
+      i = self.name2table[k]
+      w += self.tables[i]
+    return w / (self.alpha0 + self.ncustomers)
+    
+  def log_likelihood(self):
+    ll = math.lgamma(self.alpha0)\
+         - self.ntables * math.lgamma(self.alpha0 / self.K_max)\
+         + sum(math.lgamma(self.tables[i] + self.alpha0 / self.K_max) for i in range(self.ntables))\
+         - math.lgamma(self.ncustomers + self.alpha0)         
+    return ll
+
+  def save(self, outputDir='./', returnStr=False):
+    sorted_indices = sorted(list(range(self.ntables)), key=lambda x:self.tables[x], reverse=True)
+    outStr = ''
+    for i in sorted_indices[:10]:
+      outStr += 'Table %d: %s %d\n' % (i, self.table_names[i], self.tables[i])
+
+    if returnStr:
+      return outStr
+    else:
+      with open(outputDir + 'tables.txt', 'w') as f:
+        f.write(outStr)
+
 class HDPEventAligner(object):
   def __init__(self,
                event_features_train,
                entity_features_train,
                alpha0,
-               K, Ke, Ka):
+               Kc, Ke, Ka):
     """
     Attributes:
         event_crp: a Restaurant object storing the distribution for the event clusters,
@@ -111,15 +192,16 @@ class HDPEventAligner(object):
     self.e_feats_train = event_features_train
     self.a_feats_train = entity_features_train
     self.alpha0 = alpha0
-    self.K = K # Max number of event clusters
+    self.Kc = Kc # Max number of event clusters 
     self.Ke = Ke # Size of event vocab
     self.Ka = Ka # Size of argument vocab
-    self.event_crp = Restaurant(alpha0, K) # Keep track of counts for each event
+    self.event_crp = Restaurant(alpha0, Kc) # Keep track of counts for each event
     self.feature_crps = [] # Keep track of counts for each feature within each event
+    self.local_crps = [LocalRestaurant(alpha0, len(e_feat)) for e_feat in self.e_feats_train] # Keep track of local counts for each event
     self.cluster_ids = [[] for _ in self.e_feats_train]
+    self.table_ids = [[] for _ in self.e_feats_train]
 
   def prob(self, c, e, a):
-    p = self.event_crp.prob(c)
     if c in self.event_crp.name2table:
       table_idx = self.event_crp.name2table[c]
       p *= self.feature_crps[table_idx][0].prob(e)
@@ -138,28 +220,24 @@ class HDPEventAligner(object):
         ll += self.feature_crps[table_idx][i].log_likelihood()
     return ll
 
-  def gibbs_sample(self, e, a):
-    P = [self.prob(-1, e, a)]*self.K
-    for c_idx, c in enumerate(self.event_crp.table_names):
-      P[c_idx] = self.prob(c, e, a)
-      
+  def gibbs_sample(self, e, a, crp): 
+    """ Sample from P(z_ji|z^-ji, e_ji=e, a_ji=a, e^-ji, a^-ji) """
+    # First, sample from P(t_ji|t_j^-ji, z^-ji, e_ji=e, a_ji=a, e_j^-ji, a_j^-ji)
+    P = [self.event_crp.prob(-1) * self.prob(-1, e, a)]*self.Kc
     
-    # best_table_idxs = np.argsort(-np.asarray(P))[:10]
-    print('best_tables:', P[:100])
-    '''
-    for i in best_table_idxs: # XXX
-      if i >= len(self.feature_crps):
-        print('new table', P[i])
-      else:
-        print(f'table {i}', self.feature_crps[i][0].table_names, self.feature_crps[i][1].table_names, P[i])
-    print('e, a: ', e, a)
-    '''
+    table_names = [-1]*self.Kc
+    for t_idx, t in enumerate(crp.table_names):
+      c = crp.table2menu[t]
+      c_idx = self.event_crp.name2table[c]
+      P[c_idx] = crp.prob(t) * self.prob(c, e, a)
+      table_names[c_idx] = t
+
     norm = sum(P)
     x = norm * random.random()
-    for c, w in zip(self.event_crp.table_names, P):
-      if x < w: return c
-      x -= w
-    return -1
+    for c, t, w in enumerate(zip(self.event_crp.table_names, table_names, P)):
+      if x < w: return c, t
+      x -= w      
+    return -1, -1
 
   def train(self, n_iter=35, out_dir='./'):
     order = list(range(len(self.e_feats_train)))
@@ -168,27 +246,40 @@ class HDPEventAligner(object):
       for i in order:
         e_feat = self.e_feats_train[i]
         a_feat = self.a_feats_train[i]
+        new_cluster_ids = [-1]*len(e_feat)
+        new_table_ids = [-1]*len(e_feat)
+
         mention_order = list(range(len(e_feat)))
         # random.shuffle(mention_order) 
-        if i_iter > 0:
-          for i_m in mention_order:
-            c = self.cluster_ids[i][i_m]
-            e = e_feat[i_m] 
-            a = a_feat[i_m]
-            self.unseat_from(c, e, a)
-        assert len(self.feature_crps) == self.event_crp.ntables 
-
-        new_cluster_ids = [-1]*len(e_feat)
         for i_m in mention_order:
-          e, a = e_feat[i_m], a_feat[i_m]
-          c = self.gibbs_sample(e, a)
+          if i_iter > 0: 
+            c = self.cluster_ids[i][i_m]
+            t = self.table_ids[i][i_m]
+            e = e_feat[i_m]
+            a = a_feat[i_m]
+            self.local_crps[i].unseat_from(t)
+            self.unseat_from(c, e, a)
+          assert len(self.feature_crps) == self.event_crp.ntables 
+        
+          e, a = e_feat[i_m], a_feat[i_m] 
+          c, t = self.gibbs_sample(e, a, self.local_crps[i])
           if c == -1:
             new_c = 0
             while new_c in self.event_crp.name2table: # Create a new key for the new event
               new_c += 1
             c = new_c
+          if t == -1:
+            new_t = 0
+            while new_t in self.local_crps[i]:
+              new_t += 1
+            t = new_t
+
+          self.local_crps[i].seat_to(t, c)
           self.seat_to(c, e, a)
+          
           new_cluster_ids[i_m] = c
+          new_table_ids[i_m] = t
+        self.table_ids[i] = deepcopy(new_table_ids)
         self.cluster_ids[i] = deepcopy(new_cluster_ids)
           
       if i_iter % 10 == 0:
@@ -199,10 +290,9 @@ class HDPEventAligner(object):
               event_features_test,
               entity_features_test):
     cluster_ids = []
-    for e_feat, a_feat in zip(event_features_test, entity_features_test):
-      table_idxs = [np.argmax([self.prob(c, e, a) for c in self.event_crp.table_names])\
-                                                            for e, a in zip(e_feat, a_feat)]
-      cluster_ids.append(np.asarray([self.event_crp.table_names[table_idx] for table_idx in table_idxs]))
+    crp = LocalRestaurant(self.alpha0, self.Kd)
+    for e_sent, a_sent in zip(event_features_test, entity_features_test): 
+      cluster_ids.append([self.gibbs_sample(e, a, crp)[0] for e, a in zip(e_sent, a_sent)])
     return cluster_ids
 
   def seat_to(self, c, e, a):
@@ -243,6 +333,15 @@ class HDPEventAligner(object):
       for i in range(2):
         out_str += f'{feat_names[i]}\n'
         out_str += self.feature_crps[table_idx][i].save(returnStr=True)
+      out_str += '\n'
+    f_out.write(out_str)
+    f_out.close()
+
+    f_out = open(os.path.join(out_dir, 'local_crps_tables.txt'), 'w')
+    out_str = ''
+    for doc_idx, crp in enumerate(self.local_crps):
+      out_str += f'{doc_idx}\n'
+      out_str += crp.save(returnStr=True)
       out_str += '\n'
     f_out.write(out_str)
     f_out.close()
@@ -434,7 +533,7 @@ if __name__ == '__main__':
   cluster_ids_test,\
   tokens_test,\
   vocab, vocab_entity = load_data(config)
-  K = 1000 # max(max(cluster_ids) for cluster_ids in cluster_ids_train+cluster_ids_test)
+  Kc = 1000 # max(max(cluster_ids) for cluster_ids in cluster_ids_train+cluster_ids_test)
   Ke = len(vocab)
   Ka = len(vocab_entity)
   print(f'Max num of events: {K}, vocab event size: {Ke}, vocab entity size: {Ka}')
@@ -443,13 +542,13 @@ if __name__ == '__main__':
   aligner = HDPEventAligner(event_feats_train+event_feats_test, 
                             entity_feats_train+entity_feats_test,
                             alpha0=config['alpha0'],
-                            K=K,
+                            Kc=Kc,
                             Ke=Ke,
                             Ka=Ka)
   aligner.train(10, out_dir=config['model_path'])
 
   ## Test and evaluation
-  pred_cluster_ids = aligner.cluster(event_feats_test, entity_feats_test)
+  pred_cluster_ids = aligner.cluster_ids[len(event_feats_train):]
   pred_labels = [torch.LongTensor(to_pairwise(a)) for a in pred_cluster_ids if a.shape[0] > 1]
   gold_labels = [torch.LongTensor(to_pairwise(c)) for c in cluster_ids_test if c.shape[0] > 1]
   pred_labels = torch.cat(pred_labels)
