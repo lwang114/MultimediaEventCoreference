@@ -15,6 +15,7 @@ import nltk
 from nltk.stem import WordNetLemmatizer
 from evaluator import Evaluation, CoNLLEvaluation
 random.seed(2)
+EPS = 1e-100
 # Part of the code modified from vpyp: https://github.com/vchahun/vpyp/blob/master/vpyp/pyp.py
 
 # logger = logging.getLogger(__name__)
@@ -227,17 +228,20 @@ class HDPEventAligner(object):
         ll += self.feature_crps[table_idx][i].log_likelihood()
     return ll
 
-  def gibbs_sample(self, e, a, crp): 
+  def gibbs_sample(self, e, a, crp, temp=-1): 
     """ Sample from P(z_ji|z^-ji, e_ji=e, a_ji=a, e^-ji, a^-ji) """
     # First, sample from P(t_ji|t_j^-ji, z^-ji, e_ji=e, a_ji=a, e_j^-ji, a_j^-ji)
     P = [self.event_crp.prob(-1) * self.prob(-1, e, a)]*self.Kc
-    
     table_names = [-1]*self.Kc
     for t_idx, t in enumerate(crp.table_names):
       c = crp.table2menu[t]
       c_idx = self.event_crp.name2table[c]
       P[c_idx] = crp.prob(t) * self.prob(c, e, a)
       table_names[c_idx] = t
+
+    if temp > 0:
+      P = np.log(np.asarray(P)+EPS) / temp
+      P = np.exp(P).tolist()
 
     norm = sum(P)
     x = norm * random.random()
@@ -246,7 +250,11 @@ class HDPEventAligner(object):
       x -= w      
     return -1, -1
 
-  def train(self, n_iter=35, out_dir='./'):
+  def train(self, n_iter=35, 
+            out_dir='./'):
+    0.1, 1. = inv_temp_start, inv_temp_end
+    anneal_temps = 1. / np.linspace(0.1, 1, n_iter)
+
     order = list(range(len(self.e_feats_train)))
     for i_iter in range(n_iter):
       random.shuffle(order)
@@ -269,7 +277,9 @@ class HDPEventAligner(object):
           assert len(self.feature_crps) == self.event_crp.ntables 
         
           e, a = e_feat[i_m], a_feat[i_m] 
-          c, t = self.gibbs_sample(e, a, self.local_crps[i])
+          c, t = self.gibbs_sample(e, a, 
+                                   self.local_crps[i],
+                                   temp=anneal_temps[i_iter])
           if c == -1:
             new_c = 0
             while new_c in self.event_crp.name2table: # Create a new key for the new event
