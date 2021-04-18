@@ -252,8 +252,8 @@ class HDPEventAligner(object):
 
   def train(self, n_iter=35, 
             out_dir='./'):
-    0.1, 1. = inv_temp_start, inv_temp_end
-    anneal_temps = 1. / np.linspace(0.1, 1, n_iter)
+    inv_temp_start, inv_temp_end = 0.1, 1
+    anneal_temps = 1. / np.linspace(inv_temp_start, inv_temp_end, n_iter)
 
     order = list(range(len(self.e_feats_train)))
     for i_iter in range(n_iter):
