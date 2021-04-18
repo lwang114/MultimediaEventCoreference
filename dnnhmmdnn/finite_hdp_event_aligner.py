@@ -51,7 +51,7 @@ class Restaurant:
     else:
       i = self.name2table[k]
       tables[i] += 1
-    if self.ntables >= self.K_max:
+    if self.ntables > self.K_max:
       print('Warning: number of table exceeds max limit') 
 
   def unseat_from(self, k):
@@ -125,13 +125,14 @@ class LocalRestaurant:
     if not k in self.name2table:
       tables.append(1)
       self.name2table[k] = self.ntables
+      self.table_names.append(k)
       self.table2menu[k] = c 
       self.ntables += 1
     else:
       i = self.name2table[k]
       tables[i] += 1
-    if self.ntables >= self.K_max:
-      print('Warning: number of table exceeds max limit') 
+    if self.ntables > self.K_max:
+      print(f'Warning in LocalRestaurant: number of table exceeds max limit, {self.ntables} > {self.K_max}') 
 
   def unseat_from(self, k):
     self.ncustomers -= 1
@@ -144,6 +145,7 @@ class LocalRestaurant:
       self.name2table[k_new] = i
       self.tables[i] = self.tables[-1]
       del self.name2table[k] 
+      del self.table2menu[k]
       del self.table_names[-1]
       del self.tables[-1]
       self.ntables -= 1 
@@ -179,7 +181,7 @@ class HDPEventAligner(object):
   def __init__(self,
                event_features_train,
                entity_features_train,
-               alpha0,
+               alpha0, beta0,
                Kc, Ke, Ka):
     """
     Attributes:
@@ -192,16 +194,18 @@ class HDPEventAligner(object):
     self.e_feats_train = event_features_train
     self.a_feats_train = entity_features_train
     self.alpha0 = alpha0
+    self.beta0 = beta0
     self.Kc = Kc # Max number of event clusters 
     self.Ke = Ke # Size of event vocab
     self.Ka = Ka # Size of argument vocab
     self.event_crp = Restaurant(alpha0, Kc) # Keep track of counts for each event
     self.feature_crps = [] # Keep track of counts for each feature within each event
-    self.local_crps = [LocalRestaurant(alpha0, len(e_feat)) for e_feat in self.e_feats_train] # Keep track of local counts for each event
+    self.local_crps = [LocalRestaurant(beta0, len(e_feat)) for e_feat in self.e_feats_train] # Keep track of local counts for each event
     self.cluster_ids = [[] for _ in self.e_feats_train]
     self.table_ids = [[] for _ in self.e_feats_train]
 
   def prob(self, c, e, a):
+    p = 1.
     if c in self.event_crp.name2table:
       table_idx = self.event_crp.name2table[c]
       p *= self.feature_crps[table_idx][0].prob(e)
@@ -215,6 +219,9 @@ class HDPEventAligner(object):
   
   def log_likelihood(self):
     ll = self.event_crp.log_likelihood()
+    for crp in self.local_crps:
+      ll += crp.log_likelihood()
+
     for table_idx in range(self.event_crp.ntables):
       for i in range(2):
         ll += self.feature_crps[table_idx][i].log_likelihood()
@@ -234,7 +241,7 @@ class HDPEventAligner(object):
 
     norm = sum(P)
     x = norm * random.random()
-    for c, t, w in enumerate(zip(self.event_crp.table_names, table_names, P)):
+    for c, t, w in zip(self.event_crp.table_names, table_names, P):
       if x < w: return c, t
       x -= w      
     return -1, -1
@@ -242,7 +249,7 @@ class HDPEventAligner(object):
   def train(self, n_iter=35, out_dir='./'):
     order = list(range(len(self.e_feats_train)))
     for i_iter in range(n_iter):
-      # random.shuffle(order)
+      random.shuffle(order)
       for i in order:
         e_feat = self.e_feats_train[i]
         a_feat = self.a_feats_train[i]
@@ -250,7 +257,7 @@ class HDPEventAligner(object):
         new_table_ids = [-1]*len(e_feat)
 
         mention_order = list(range(len(e_feat)))
-        # random.shuffle(mention_order) 
+        random.shuffle(mention_order) 
         for i_m in mention_order:
           if i_iter > 0: 
             c = self.cluster_ids[i][i_m]
@@ -270,7 +277,7 @@ class HDPEventAligner(object):
             c = new_c
           if t == -1:
             new_t = 0
-            while new_t in self.local_crps[i]:
+            while new_t in self.local_crps[i].name2table:
               new_t += 1
             t = new_t
 
@@ -399,7 +406,7 @@ def load_text_features(config, split):
           a_token = lemmatizer.lemmatize(a['tokens'].lower())
           label_dicts[m['doc_id']][span]['arguments'][(min(a['tokens_ids']), max(a['tokens_ids']))] = a_token
         
-  for feat_idx, doc_id in enumerate(sorted(label_dicts)[:20]): # XXX
+  for feat_idx, doc_id in enumerate(sorted(label_dicts)): # XXX
     label_dict = label_dicts[doc_id]
     spans = sorted(label_dict)
     a_spans = [[a_span for a_span in sorted(label_dict[span]['arguments'])] for span in spans]
@@ -512,11 +519,11 @@ if __name__ == '__main__':
     efeats = [[1, 2, 3] for _ in range(10)]
     afeats = [[[1], [2], [3]] for _ in range(10)]
     aligner = HDPEventAligner(efeats, afeats,
-                              alpha0=1.,
+                              alpha0=1., beta0=10.,
                               K=3, Ke=3, Ka=3)
     if not os.path.exists('models/test'):
       os.makedirs('models/test')
-    aligner.train(30, out_dir='models/test')
+    aligner.train(10, out_dir='models/test')
 
   event_feats_train,\
   entity_feats_train,\
@@ -533,22 +540,23 @@ if __name__ == '__main__':
   cluster_ids_test,\
   tokens_test,\
   vocab, vocab_entity = load_data(config)
-  Kc = 1000 # max(max(cluster_ids) for cluster_ids in cluster_ids_train+cluster_ids_test)
+  Kc = 2000 # max(max(cluster_ids) for cluster_ids in cluster_ids_train+cluster_ids_test)
   Ke = len(vocab)
   Ka = len(vocab_entity)
-  print(f'Max num of events: {K}, vocab event size: {Ke}, vocab entity size: {Ka}')
+  print(f'Max num of events: {Kc}, vocab event size: {Ke}, vocab entity size: {Ka}')
 
   ## Model training
   aligner = HDPEventAligner(event_feats_train+event_feats_test, 
                             entity_feats_train+entity_feats_test,
                             alpha0=config['alpha0'],
+                            beta0=config['beta0'],
                             Kc=Kc,
                             Ke=Ke,
                             Ka=Ka)
-  aligner.train(10, out_dir=config['model_path'])
+  aligner.train(350, out_dir=config['model_path'])
 
   ## Test and evaluation
-  pred_cluster_ids = aligner.cluster_ids[len(event_feats_train):]
+  pred_cluster_ids = [np.asarray(cluster_ids) for cluster_ids in aligner.cluster_ids[len(event_feats_train):]]
   pred_labels = [torch.LongTensor(to_pairwise(a)) for a in pred_cluster_ids if a.shape[0] > 1]
   gold_labels = [torch.LongTensor(to_pairwise(c)) for c in cluster_ids_test if c.shape[0] > 1]
   pred_labels = torch.cat(pred_labels)
