@@ -120,7 +120,8 @@ class FullyContinuousMixtureAligner(object):
     return np.mean(log_probs)
 
   def update_counts_i(self, i, src_feat, trg_feat):
-    src_sent = np.exp(self.src_model.log_prob_z(i, normalize=False)) # self.src_feats[self.src_vec_ids_train[i]]
+    src_sent = self.src_feats[self.src_vec_ids_train[i]]
+    # XXX np.exp(self.src_model.log_prob_z(i, normalize=False))
     trg_sent = trg_feat
 
     V_src = to_one_hot(src_sent, self.Ks)
@@ -157,7 +158,7 @@ class FullyContinuousMixtureAligner(object):
   def trainEM(self, n_iter, out_file):
     for i_iter in range(n_iter):
       log_prob = self.update_counts()
-      self.update_components() # XXX
+      # self.update_components() # XXX
       print('Iteration {}, log likelihood={}'.format(i_iter, log_prob))
       logger.info('Iteration {}, log likelihood={}'.format(i_iter, log_prob))
       if (i_iter + 1) % 5 == 0:
@@ -183,9 +184,9 @@ class FullyContinuousMixtureAligner(object):
     scores = []
     for src_feat, trg_feat in zip(source_feats_test, target_feats_test):
       trg_sent = trg_feat
-      # XXX src_sent = src_feat
-      src_sent = [np.exp(self.src_model.log_prob_z_given_X(src_feat[i], normalize=False))\
-                  for i in range(len(src_feat))]
+      src_sent = src_feat
+      # XXX src_sent = [np.exp(self.src_model.log_prob_z_given_X(src_feat[i], normalize=False))\
+      #            for i in range(len(src_feat))]
 
       V_trg = to_one_hot(trg_sent, self.Kt)
       V_src = to_one_hot(src_sent, self.Ks)
@@ -229,7 +230,13 @@ class FullyContinuousMixtureAligner(object):
     alignments, _ = self.align_sents(source_feats,
                                      target_feats,
                                      alignment_type=alignment_type) 
-    confusion = np.zeros((n_src_vocab, n_trg_vocab))
+    if alignment_type == 'image':
+      confusion = np.zeros((n_src_vocab, n_trg_vocab))
+    elif alignment_type == 'text':
+      src_vocab['###NULL###'] = len(src_vocab)
+      n_src_vocab += 1
+      confusion = np.zeros((n_src_vocab, n_trg_vocab))
+
     for src_label, trg_label, alignment in zip(source_labels,
                                                target_labels,
                                                alignments):
@@ -237,7 +244,13 @@ class FullyContinuousMixtureAligner(object):
         for src_idx, y in enumerate(src_label):
           y_pred = trg_label[alignment[src_idx]]
           confusion[src_vocab[y], trg_vocab[y_pred]] += 1
-    
+      elif alignment_type == 'text':
+        for trg_idx, y in enumerate(trg_label):
+          if trg_idx == 0:
+            y_pred = '###NULL###'
+          y_pred = src_label[alignment[trg_idx]-1]
+          confusion[src_vocab[y_pred], trg_vocab[y]] += 1
+
     fig, ax = plt.subplots(figsize=(30, 10))
     si = np.arange(n_src_vocab+1)
     ti = np.arange(n_trg_vocab+1)
@@ -403,7 +416,7 @@ def load_data(config):
   event_mentions_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test_events.json'), 'r', 'utf-8'))
   doc_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test.json')))
 
-  visual_feats = np.load(os.path.join(config['data_folder'], 'train_mmaction_event_feat.npz')) # XXX
+  visual_feats = np.load(os.path.join(config['data_folder'], 'train_mmaction_event_feat_labels.npz')) # XXX
   visual_labels = np.load(os.path.join(config['data_folder'], 'train_mmaction_event_feat_labels.npz'))
   visual_class_dict = json.load(open(os.path.join(config['data_folder'], '../ontology.json')))
   visual_classes = visual_class_dict['event']
@@ -519,8 +532,8 @@ if __name__ == '__main__':
   Kt = len(trg_vocab)
     
   ## Model training
-  aligner = FullyContinuousMixtureAligner(src_feats_train, 
-                                          trg_feats_train, 
+  aligner = FullyContinuousMixtureAligner(src_feats_train+src_feats_test, 
+                                          trg_feats_train+trg_feats_test, 
                                           configs={'n_trg_vocab':Kt, 
                                                    'n_src_vocab':Ks})
   aligner.trainEM(15, os.path.join(config['model_path'], 'mixture'))  
@@ -529,7 +542,8 @@ if __name__ == '__main__':
                 src_labels_test,
                 trg_labels_test,
                 out_prefix=os.path.join(config['model_path'], 
-                                        'alignment'))  
+                                        'alignment'),
+                alignment_type='text')  
 
   ## Test and evaluation
   conll_eval = CoNLLEvaluation()
