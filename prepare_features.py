@@ -8,77 +8,22 @@ import cv2
 import codecs
 import json
 import math
+from copy import deepcopy
+import nltk
+from nltk.stem import WordNetLemmatizer
+from allennlp.predictors.predictor import Predictor
+import allennlp_models.structured_prediction
 # XXX
 # import torchvision.transforms as transforms
 import PIL.Image as Image
 from tqdm import tqdm
 from datetime import datetime
 from transformers import AutoTokenizer, AutoModel
-# from image_models import ResNet101
 from coref.model_utils import pad_and_read_bert
 from coref.utils import create_corpus
 
 logger = logging.getLogger(__name__)
-def load_video(filename, config, transform=None, image_prefix=None):
-    '''Load video
-    :param filename: str, video filename
-    :return video_frames: FloatTensor of size (batch size, max num. of frames, width, height, n_channel)
-    :return mask: LongTensor of size (batch size, max num. of frames)
-    '''    
-    max_frame_num = config.max_frame_num
-    # Create mask
-    mask = torch.ones((max_frame_num,))
-
-    # Load video
-    try:
-      cap = cv2.VideoCapture(filename)
-      frame_rate = cap.get(5) 
-      video = [] 
-      while True:
-        frame_id = cap.get(1)
-        ret, img = cap.read()
-        if not ret:
-          print('{}, frame_rate, number of video frames: {}, {}'.format(filename, frame_rate, len(video)))
-          break
-        if (frame_id % math.floor(frame_rate) == 0):
-          video.append(img)    
-
-      # Subsample the video frames
-      step = len(video) // max_frame_num
-      indices = list(range(0, step*max_frame_num, step))
-    except:
-      print('Corrupted video file: {}'.format(filename))
-      logging.info('Corrupted video file: {}'.format(filename))
-      video = [torch.zeros((1, 3, 224, 224)) for _ in range(max_frame_num)]
-      return torch.cat(video, dim=0), mask
-
-    if not image_prefix is None:
-      for idx, img in enumerate(video):
-          img = Image.fromarray(img)
-          img.save('{}_{:03d}.jpg'.format(image_prefix, idx))
-
-    video = [Image.fromarray(video[idx]) for idx in indices]
-    # Apply transform to each frame
-    if transform is not None:
-      video = [transform(img).unsqueeze(0) for img in video]
-    
-    return torch.cat(video, dim=0), mask
-
-def save_frame_rate(config, split='train'):
-  doc_json = os.path.join(config['data_folder'], split+'.json')
-  documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
-  doc_ids = sorted(documents)
-  out_fn = os.path.join(config['data_folder'], '{}_framerates.txt'.format(split))
-  out_f = open(out_fn, 'w') 
-
-  for idx, doc_id in enumerate(doc_ids):
-    video_file = os.path.join(config['image_dir'], doc_id+'.mp4')
-    cap = cv2.VideoCapture(video_file)
-    frame_rate = cap.get(5) 
-    print(doc_id, frame_rate) # XXX
-    out_f.write('{} {}\n'.format(doc_id, frame_rate))
-  out_f.close()
-
+NULL = '###NULL###'
 def extract_glove_embeddings(config, split, glove_file, dimension=300, out_prefix='glove_embedding'):
     ''' Extract glove embeddings for a sentence
     :param doc_json: json metainfo file in m2e2 format
@@ -210,6 +155,88 @@ def extract_type_embeddings(type_to_idx, glove_file):
                 embed_matrix.append(embed)
                 vocab_emb[word] = len(vocab_emb)
     print('Vocabulary size with embeddings: {}'.format(len(vocab_emb)))
+
+def extract_event_linguistic_features(config, split, out_prefix): # TODO  
+  def _head_word(phrase):
+    postags = [t[1] for t in nltk.pos_tag(phrase, tagset='universal')]
+    instance = dep_parser._dataset_reader.text_to_instance(phrase, postags)
+    parsed_text = dep_parser.predict_batch_instance([instance])[0] 
+    head_idx = np.where(np.asarray(parsed_text['predicted_heads']) <= 0)[0][0]
+    return phrase[head_idx], head_idx
+
+  dep_parser = Predictor.from_path("https://storage.googleapis.com/allennlp-public-models/biaffine-dependency-parser-ptb-2020.04.06.tar.gz")
+  dep_parser._model = dep_parser._model.cuda()
+  lemmatizer = WordNetLemmatizer() 
+
+  doc_json = os.path.join(config['data_folder'], split+'.json')
+  documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
+  event_mentions = json.load(codecs.open(os.path.join(config['data_folder'], split+'_events.json'), 'r', 'utf-8'))
+  new_event_mentions = []
+
+  label_dict = dict()
+  for m in event_mentions:
+    span = (min(m['tokens_ids']), max(m['tokens_ids']))
+    if not m['doc_id'] in label_dict:
+      label_dict[m['doc_id']] = {}
+    label_dict[m['doc_id']][span] = deepcopy(m) 
+
+  for doc_id in sorted(documents)[:20]: # XXX
+    tokens = [t[2] for t in documents[doc_id]]
+    # Extract POS tags and word class
+    wordclasses = [t[1] for t in nltk.pos_tag(tokens, tagset='universal')]
+    postags = [t[1] for t in nltk.pos_tag(tokens)]
+
+    for span_idx, span in enumerate(sorted(label_dict[doc_id])):
+      new_mention = deepcopy(label_dict[doc_id][span])
+      span_tokens = label_dict[doc_id][span]['tokens'].split()
+      span_tags = postags[span[0]:span[1]+1] 
+    
+      # Extract lemmatized head (HL)
+      head, head_idx = _head_word(span_tokens) 
+      head_class = wordclasses[span[0]:span[1]+1][head_idx]
+      pos_abbrev = head_class[0].lower() if head_class in ['NOUN', 'VERB', 'ADJ'] else 'n'
+      new_mention['head_lemma'] = lemmatizer.lemmatize(head, pos=pos_abbrev)
+      new_mention['pos_tag'] = postags[head_idx]
+      new_mention['word_class'] = head_class if head_class in ['NOUN', 'VERB', 'ADJ'] else 'OTHER' 
+
+      # Extract the left and right lemmatized words of the head (LHL, RHL)
+      if span[0] > 0:
+        left_class = wordclasses[span[0]-1]
+        pos_abbrev = left_class[0].lower() if left_class in ['NOUN', 'VERB', 'ADJ'] else 'n'
+        left_word = lemmatizer.lemmatize(tokens[span[0]-1], pos=pos_abbrev)
+      else:
+        left_word = NULL
+      
+      if span[1] < len(tokens)-1:
+        right_class = wordclasses[span[1]+1]
+        pos_abbrev = right_class[0].lower() if right_class in ['NOUN', 'VERB', 'ADJ'] else 'n'
+        right_word = lemmatizer.lemmatize(tokens[span[1]+1], pos=pos_abbrev)
+      else:
+        right_word = NULL
+
+      new_mention['left_lemma'] = left_word
+      new_mention['right_lemma'] = right_word
+
+      # Extract the left and right lemmatized event mentions (LHE, RHE)
+      if span_idx > 0:
+        left_span = sorted(label_dict[doc_id])[span_idx-1] 
+        left_event, left_head_idx = _head_word(label_dict[doc_id][left_span])
+        left_ev_class = wordclasses[left_span[0]+left_head_idx]
+        pos_abbrev = left_ev_class[0].lower() if left_ev_class in ['NOUN', 'VERB', 'ADJ'] else 'n'
+        new_mention['left_event_lemma'] = lemmatizer.lemmatize(left_event, pos=pos_abbrev)
+      else:
+        new_mention['left_event_lemma'] = NULL
+
+      if span_idx < len(label_dict[doc_id]) - 1:
+        right_span = sorted(label_dict[doc_id])[span_idx+1]
+        right_event, right_head_idx = _head_word(label_dict[doc_id][right_span])
+        right_ev_class = wordclasses[right_span[0]+right_head_idx]
+        pos_abbrev = right_ev_class[0].lower() if right_ev_class in ['NOUN', 'VERB', 'ADJ'] else 'n'
+        new_mention['right_event_lemma'] = lemmatizer.lemmatize(right_event, pos=pos_abbrev)
+      else:
+        new_mention['right_event_lemma'] = NULL
+    new_event_mentions.append(new_mention)
+    json.dump(new_event_mentions, open(out_prefix+'_events_with_linguistic_features.json', 'w'), indent=2)
     
 def cleanup(documents, config):
     filtered_documents = {}
@@ -244,48 +271,12 @@ def main():
   tasks = [args.task]
 
   if 0 in tasks:
-    if not os.path.isdir(os.path.join(config['data_folder'], args.split+'_resnet101/')):
-      os.mkdir(os.path.join(config['data_folder'], args.split+'_resnet101/'))
-    if not os.path.isdir(os.path.join(config['data_folder'], args.split+'_video_1fps/')):
-      os.mkdir(os.path.join(config['data_folder'], args.split+'_video_1fps/'))
-    logging.basicConfig(filename=os.path.join(config['log_path'],'prep_feat_{}.txt'.format(datetime.now().strftime("%Y_%m_%d_%H_%M_%S"))),\
-                        format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO)   
-    
-    # Extract doc ids
-    doc_json = os.path.join(config['data_folder'], args.split+'.json')
-    documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))   
-    documents = cleanup(documents, config)
-    doc_ids = sorted(documents) # XXX
-
-    # Initialize image model
-    transform = transforms.Compose([
-              transforms.Resize(256),
-              transforms.RandomHorizontalFlip(),
-              transforms.RandomCrop(224),
-              transforms.ToTensor(),
-              transforms.Normalize((0.485, 0.456, 0.406),
-                                   (0.229, 0.224, 0.225))])
-    image_model = ResNet101(device=torch.device('cuda')) 
-
-    for idx, doc_id in enumerate(doc_ids):
-      embed_file = os.path.join(config['data_folder'], '{}_resnet101/{}_{}.npy'.format(args.split, doc_id, idx))
-      video_file = os.path.join(config['image_dir'], doc_id+'.mp4')
-      image_prefix = os.path.join(config['data_folder'], '{}_video_1fps/{}'.format(args.split, doc_id))
-      # if os.path.exists(embed_file) and os.path.exists(image_prefix+'_0.png'): # XXX
-      if os.path.exists(embed_file):
-        print('Skip {}_{}'.format(doc_id, idx))
-        continue
-      videos, video_mask = load_video(video_file, config, transform, image_prefix)
-      video_output, video_feat, video_mask = image_model(videos.unsqueeze(0), video_mask.unsqueeze(0), return_feat=True)
-      print('{}_{}'.format(doc_id, idx))
-      np.save(embed_file, video_feat.squeeze(0).cpu().detach().numpy())
-  if 1 in tasks:
     glove_file = 'm2e2/data/glove/glove.840B.300d.txt'
     extract_glove_embeddings(config, args.split, glove_file, out_prefix='{}_glove_embeddings'.format(args.split))
-  if 2 in tasks:
+  if 1 in tasks:
     extract_bert_embeddings(config, args.split, out_prefix=args.split)
-  if 3 in tasks:
-    save_frame_rate(config)
+  if 2 in tasks:
+    extract_event_linguistic_features(config, args.split, out_prefix=args.split)
 
 if __name__ == '__main__':
   main()
