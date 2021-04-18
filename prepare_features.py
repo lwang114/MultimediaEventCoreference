@@ -24,6 +24,7 @@ from coref.utils import create_corpus
 
 logger = logging.getLogger(__name__)
 NULL = '###NULL###'
+
 def extract_glove_embeddings(config, split, glove_file, dimension=300, out_prefix='glove_embedding'):
     ''' Extract glove embeddings for a sentence
     :param doc_json: json metainfo file in m2e2 format
@@ -156,16 +157,18 @@ def extract_type_embeddings(type_to_idx, glove_file):
                 vocab_emb[word] = len(vocab_emb)
     print('Vocabulary size with embeddings: {}'.format(len(vocab_emb)))
 
-def extract_event_linguistic_features(config, split, out_prefix): # TODO  
+
+
+def extract_event_linguistic_features(config, split, out_prefix):
   def _head_word(phrase):
     postags = [t[1] for t in nltk.pos_tag(phrase, tagset='universal')]
     instance = dep_parser._dataset_reader.text_to_instance(phrase, postags)
-    parsed_text = dep_parser.predict_batch_instance([instance])[0] 
+    parsed_text = dep_parser.predict_batch_instance([instance])[0]
     head_idx = np.where(np.asarray(parsed_text['predicted_heads']) <= 0)[0][0]
     return phrase[head_idx], head_idx
 
   dep_parser = Predictor.from_path("https://storage.googleapis.com/allennlp-public-models/biaffine-dependency-parser-ptb-2020.04.06.tar.gz")
-  dep_parser._model = dep_parser._model.cuda()
+  # dep_parser._model = dep_parser._model.cuda()
   lemmatizer = WordNetLemmatizer() 
 
   doc_json = os.path.join(config['data_folder'], split+'.json')
@@ -180,7 +183,10 @@ def extract_event_linguistic_features(config, split, out_prefix): # TODO
       label_dict[m['doc_id']] = {}
     label_dict[m['doc_id']][span] = deepcopy(m) 
 
-  for doc_id in sorted(documents)[:20]: # XXX
+  for doc_id in sorted(documents): # XXX
+    if not doc_id in label_dict:
+      continue
+    print(doc_id)
     tokens = [t[2] for t in documents[doc_id]]
     # Extract POS tags and word class
     wordclasses = [t[1] for t in nltk.pos_tag(tokens, tagset='universal')]
@@ -189,21 +195,22 @@ def extract_event_linguistic_features(config, split, out_prefix): # TODO
     for span_idx, span in enumerate(sorted(label_dict[doc_id])):
       new_mention = deepcopy(label_dict[doc_id][span])
       span_tokens = label_dict[doc_id][span]['tokens'].split()
-      span_tags = postags[span[0]:span[1]+1] 
+      span_tags = postags[span[0]:span[1]+1]
     
       # Extract lemmatized head (HL)
       head, head_idx = _head_word(span_tokens) 
-      head_class = wordclasses[span[0]:span[1]+1][head_idx]
+      head_class = wordclasses[span[0]+head_idx]
       pos_abbrev = head_class[0].lower() if head_class in ['NOUN', 'VERB', 'ADJ'] else 'n'
       new_mention['head_lemma'] = lemmatizer.lemmatize(head, pos=pos_abbrev)
-      new_mention['pos_tag'] = postags[head_idx]
+      new_mention['pos_tag'] = postags[span[0]+head_idx]
       new_mention['word_class'] = head_class if head_class in ['NOUN', 'VERB', 'ADJ'] else 'OTHER' 
 
       # Extract the left and right lemmatized words of the head (LHL, RHL)
       if span[0] > 0:
-        left_class = wordclasses[span[0]-1]
+        left_idx = span[0]-1 if wordclasses[span[0]-1] != '.' else span[0]-2
+        left_class = wordclasses[left_idx] 
         pos_abbrev = left_class[0].lower() if left_class in ['NOUN', 'VERB', 'ADJ'] else 'n'
-        left_word = lemmatizer.lemmatize(tokens[span[0]-1], pos=pos_abbrev)
+        left_word = lemmatizer.lemmatize(tokens[left_idx], pos=pos_abbrev)
       else:
         left_word = NULL
       
@@ -219,24 +226,26 @@ def extract_event_linguistic_features(config, split, out_prefix): # TODO
 
       # Extract the left and right lemmatized event mentions (LHE, RHE)
       if span_idx > 0:
-        left_span = sorted(label_dict[doc_id])[span_idx-1] 
-        left_event, left_head_idx = _head_word(label_dict[doc_id][left_span])
+        left_span = sorted(label_dict[doc_id])[span_idx-1]
+        left_event = label_dict[doc_id][left_span]['tokens'].split()
+        left_event_head, left_head_idx = _head_word(left_event)
         left_ev_class = wordclasses[left_span[0]+left_head_idx]
         pos_abbrev = left_ev_class[0].lower() if left_ev_class in ['NOUN', 'VERB', 'ADJ'] else 'n'
-        new_mention['left_event_lemma'] = lemmatizer.lemmatize(left_event, pos=pos_abbrev)
+        new_mention['left_event_lemma'] = lemmatizer.lemmatize(left_event_head, pos=pos_abbrev)
       else:
         new_mention['left_event_lemma'] = NULL
 
       if span_idx < len(label_dict[doc_id]) - 1:
         right_span = sorted(label_dict[doc_id])[span_idx+1]
-        right_event, right_head_idx = _head_word(label_dict[doc_id][right_span])
+        right_event = label_dict[doc_id][right_span]['tokens'].split()
+        right_event_head, right_head_idx = _head_word(right_event)
         right_ev_class = wordclasses[right_span[0]+right_head_idx]
         pos_abbrev = right_ev_class[0].lower() if right_ev_class in ['NOUN', 'VERB', 'ADJ'] else 'n'
-        new_mention['right_event_lemma'] = lemmatizer.lemmatize(right_event, pos=pos_abbrev)
+        new_mention['right_event_lemma'] = lemmatizer.lemmatize(right_event_head, pos=pos_abbrev)
       else:
         new_mention['right_event_lemma'] = NULL
-    new_event_mentions.append(new_mention)
-    json.dump(new_event_mentions, open(out_prefix+'_events_with_linguistic_features.json', 'w'), indent=2)
+      new_event_mentions.append(new_mention)
+  json.dump(new_event_mentions, open(out_prefix+'_events_with_linguistic_features.json', 'w'), indent=2)
     
 def cleanup(documents, config):
     filtered_documents = {}
