@@ -14,6 +14,7 @@ import itertools
 import torch
 import matplotlib
 matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import argparse
 from scipy.special import logsumexp
 from region_vgmm import *
@@ -450,9 +451,10 @@ class GraphMixtureEventAligner(object):
           action_vocab[y] = len(action_vocab)
 
     for object_label in object_labels:
-      for y in object_label:
-        if not y in object_vocab:
-          object_vocab[y] = len(object_vocab)
+      for ys in object_label:
+        for y in ys:
+          if not y in object_vocab:
+            object_vocab[y] = len(object_vocab)
 
     for event_label in event_labels:
       for y in event_label:
@@ -460,9 +462,10 @@ class GraphMixtureEventAligner(object):
           event_vocab[y] = len(event_vocab)
   
     for entity_label in entity_labels:
-      for y in entity_label:
-        if not y in entity_vocab:
-          entity_vocab[y] = len(entity_vocab)
+      for ys in entity_label:
+        for y in ys:
+          if not y in entity_vocab:
+            entity_vocab[y] = len(entity_vocab)
 
     n_action_vocab = len(action_vocab)
     n_event_vocab = len(event_vocab)
@@ -487,8 +490,8 @@ class GraphMixtureEventAligner(object):
     ti = np.arange(n_event_vocab+1)
     T, S = np.meshgrid(ti, si)
     plt.pcolormesh(T, S, confusion)
-    for i in range(n_src_vocab):
-      for j in range(n_trg_vocab):
+    for i in range(n_action_vocab):
+      for j in range(n_event_vocab):
         plt.text(j, i, confusion[i, j], color='orange')
     ax.set_xticks(ti[1:]-0.5)
     ax.set_yticks(si[1:]-0.5)
@@ -499,8 +502,8 @@ class GraphMixtureEventAligner(object):
     plt.savefig(out_prefix+'_confusion.png')
     plt.close()
     json.dump({'confusion': confusion.tolist(),
-               'action_vocab': sorted(action_vocab, key=lambda x:src_vocab[x]),
-               'event_vocab': sorted(event_vocab, key=lambda x:trg_vocab[x])}, 
+               'action_vocab': sorted(action_vocab, key=lambda x:action_vocab[x]),
+               'event_vocab': sorted(event_vocab, key=lambda x:event_vocab[x])}, 
               open(out_prefix+'_confusion.json', 'w'), indent=2)
 
 
@@ -679,7 +682,7 @@ def load_text_features(config, vocab, vocab_entity, doc_to_feat, split):
           a_span = (min(a['tokens_ids']), max(a['tokens_ids']))
         a_token = lemmatizer.lemmatize(a_token.lower())
         label_dicts[m['doc_id']][span]['arguments'][a_span] = {'token_id': vocab_entity[a_token],
-                                                               'type': a['entity_type']} 
+                                                               'type': a['role']}
 
   for feat_idx, doc_id in enumerate(sorted(label_dicts)): # XXX
     feat_id = doc_to_feat[doc_id]
@@ -745,26 +748,28 @@ def load_visual_features(config, label_dicts, action_classes, object_classes, sp
     action_types.append([action_classes[k] for k in action_type_int])
 
     o_feats = []
+    o_types = []
     cur_vo_maps = []
     for o_feat in object_feats_npz[feat_id]:
       n_roles = (o_feat.mean(-1) != -1).sum()
-      o_feats.append(o_feat[:n_roles])
+      o_feats.append(to_one_hot(o_feat[:n_roles, 1], len(object_classes))) # XXX
     o_feats = np.concatenate(o_feats, axis=0)
 
     o_idx = 0
-    for o_feat in object_feats_npz[feat_id]:
+    for o_feat, o_label in zip(object_feats_npz[feat_id], object_labels_npz[feat_id]):
       n_roles = (o_feat.mean(-1) != -1).sum()
       vo_map = np.zeros((n_roles, o_feats.shape[0]))
+      o_label_int = o_feat[:n_roles, 1].astype(int)
+      o_types.extend([object_classes[k] for k in o_label_int])
       for r_idx in range(n_roles):
         vo_map[r_idx, o_idx] = 1.
         o_idx += 1
       cur_vo_maps.append(vo_map)
+      
     object_feats.append(o_feats)
-    object_type_int = np.argmax(object_labels_npz[feat_id], axis=-1)
-    object_types.append([object_classes[k] for k in object_type_int])
+    object_types.append(o_types)
     vo_maps.append(cur_vo_maps)
-  return action_feats, object_feats, 
-         action_types, object_types, vo_maps
+  return action_feats, object_feats, action_types, object_types, vo_maps
 
 
 def load_data(config):
@@ -786,7 +791,7 @@ def load_data(config):
   action_feats_test_npz = np.load(os.path.join(config['data_folder'], config['action_feature_test']))
   visual_class_dict = json.load(open(os.path.join(config['data_folder'], '../ontology.json')))
   action_classes = visual_class_dict['event']
-  object_classes = visual_class_dict['entities']
+  object_classes = visual_class_dict['arguments'] # XXX
 
   doc_to_feat_train = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in action_feats_train_npz}
   doc_to_feat_test = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in action_feats_test_npz}
@@ -855,7 +860,7 @@ def load_data(config):
   action_feats_test,\
   object_feats_test,\
   action_types_test,\
-  object_feats_test,\
+  object_types_test,\
   vo_maps_test = load_visual_features(config, label_dict_test, action_classes, object_classes, split='test')
 
   return event_feats_train,\
@@ -885,7 +890,7 @@ def load_data(config):
          object_types_test,\
          vo_maps_test,\
          vocab, vocab_entity,\
-         action_classes, entity_classes
+         action_classes, object_classes
 
 
 if __name__ == '__main__':
@@ -937,10 +942,6 @@ if __name__ == '__main__':
                                      object_feats_train, #+object_feats_test,
                                      event_feats_train, #+event_feats_test,
                                      entity_feats_train, #+entity_feats_test,  
-                                     action_types_test,\
-                                     object_types_test,\
-                                     event_types_test,\
-                                     entity_types_test,\
                                      vo_maps_train, #+vo_maps_test,
                                      ea_maps_train, #+ea_maps_test,
                                      configs={'n_action_vocab':Kv, 
@@ -952,7 +953,10 @@ if __name__ == '__main__':
                 object_feats_test,
                 event_feats_test,
                 entity_feats_test,
-                action_labels_test,
+                action_types_test,
+                object_types_test,
+                event_types_test,
+                entity_types_test,
                 vo_maps_test,
                 ea_maps_test,
                 out_prefix=os.path.join(config['model_path'],
