@@ -84,6 +84,51 @@ def extract_glove_embeddings(config, split, glove_file, dimension=300, out_prefi
         doc_embeddings[embed_id] = np.asarray(doc_embedding)
     np.savez(out_prefix+'.npz', **doc_embeddings)
 
+def extract_event_glove_embeddings(config, split, glove_file, dimension=300, out_prefix='event_glove_embedding'):
+    mention_json = os.path.join(config['data_folder'], split+'_events.json')
+    mentions = json.load(open(mention_json, 'r'))
+    vocab = {'$$$UNK$$$': 0}
+    label_dicts = dict()
+    for m in sorted(mentions):
+      token = m['head_lemma']
+      span = (min(m['tokens_ids']), max(m['tokens_ids']))
+      label_dicts[m['doc_id']][span] = {'token': token,
+                                        'event_type': m['event_type']}
+      if not token in vocab:
+        vocab[token] = len(vocab)
+    print(f'Vocabulary size: {len(vocab)}')
+    
+    embed_matrix = [[0.0] * dimension]
+    vocab_emb = {'$$$UNK$$$': 0}
+    with codecs.open(glove_file, 'r', 'utf-8') as f:
+      for line in f:
+        segments = line.strip().split()
+        if len(segments) == 0:
+          print('Empty line')
+          break
+        word = ' '.join(segments[:-300])
+        if word in vocab:
+          embed_matrix.append([float(x) for x in segments[-300:]])
+          vocab_emb[word] = len(vocab_emb)
+    print(f'Vocabulary size with embeddings: {len(vocab_emb)}')
+    json.dump(vocab_emb, open(out_prefix+'_vocab_glove_emb.json', 'w'), indent=4, sort_keys=True)
+
+    event_embs = dict()
+    labels = dict()
+    for idx, doc_id in enumerate(sorted(label_dicts)):
+      embed_id = 
+      event_embs[embed_id] = []
+      labels[embed_id] = [] 
+      
+      for span in sorted(label_dicts[doc_id]):
+        token = label_dicts[doc_id][span]['token']        
+        event_type = label_dicts[doc_id][span]['event_type']
+        event_embs[embed_id].append(embed_matrix[vocab_emb.get(token, 0)])
+        labels[embed_id].append(event_type) 
+      event_embs[embed_id] = np.asarray(event_embs[embed_id])
+    np.save(out_prefix+'.npz', **event_embs)
+    json.dump(labels, open(out_prefix+'_event_labels.json', 'w'), indent=2)
+
 def extract_bert_embeddings(config, split, out_prefix='bert_embedding'):
     device = torch.device('cuda:{}'.format(config.gpu_num[0]))
     bert_tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
@@ -156,8 +201,6 @@ def extract_type_embeddings(type_to_idx, glove_file):
                 embed_matrix.append(embed)
                 vocab_emb[word] = len(vocab_emb)
     print('Vocabulary size with embeddings: {}'.format(len(vocab_emb)))
-
-
 
 def extract_event_linguistic_features(config, split, out_prefix):
   def _head_word(phrase):
@@ -286,6 +329,8 @@ def main():
     extract_bert_embeddings(config, args.split, out_prefix=args.split)
   if 2 in tasks:
     extract_event_linguistic_features(config, args.split, out_prefix=args.split)
+  if 3 in tasks:
+    extract_event_glove_embeddings(config, args.split, glove_file, out_prefix=f'{args.split}_event_glove_embeddings')
 
 if __name__ == '__main__':
   main()
