@@ -85,13 +85,15 @@ def extract_glove_embeddings(config, split, glove_file, dimension=300, out_prefi
     np.savez(out_prefix+'.npz', **doc_embeddings)
 
 def extract_event_glove_embeddings(config, split, glove_file, dimension=300, out_prefix='event_glove_embedding'):
-    mention_json = os.path.join(config['data_folder'], split+'_events.json')
+    mention_json = os.path.join(config['data_folder'], split+'_events_with_linguistic_features.json')
     mentions = json.load(open(mention_json, 'r'))
     vocab = {'$$$UNK$$$': 0}
     label_dicts = dict()
-    for m in sorted(mentions):
+    for m in mentions:
       token = m['head_lemma']
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
+      if not m['doc_id'] in label_dicts:
+        label_dicts[m['doc_id']] = dict()
       label_dicts[m['doc_id']][span] = {'token': token,
                                         'event_type': m['event_type']}
       if not token in vocab:
@@ -116,7 +118,7 @@ def extract_event_glove_embeddings(config, split, glove_file, dimension=300, out
     event_embs = dict()
     labels = dict()
     for idx, doc_id in enumerate(sorted(label_dicts)):
-      embed_id = 
+      embed_id = f'{doc_id}_{idx}' 
       event_embs[embed_id] = []
       labels[embed_id] = [] 
       
@@ -124,9 +126,9 @@ def extract_event_glove_embeddings(config, split, glove_file, dimension=300, out
         token = label_dicts[doc_id][span]['token']        
         event_type = label_dicts[doc_id][span]['event_type']
         event_embs[embed_id].append(embed_matrix[vocab_emb.get(token, 0)])
-        labels[embed_id].append(event_type) 
+        labels[embed_id].append((token, event_type)) 
       event_embs[embed_id] = np.asarray(event_embs[embed_id])
-    np.save(out_prefix+'.npz', **event_embs)
+    np.savez(out_prefix+'.npz', **event_embs)
     json.dump(labels, open(out_prefix+'_event_labels.json', 'w'), indent=2)
 
 def extract_bert_embeddings(config, split, out_prefix='bert_embedding'):
@@ -287,30 +289,15 @@ def extract_event_linguistic_features(config, split, out_prefix):
         new_mention['right_event_lemma'] = lemmatizer.lemmatize(right_event_head, pos=pos_abbrev)
       else:
         new_mention['right_event_lemma'] = NULL
+      
+      # Extract argument head lemma
+      for a_idx, a in enumerate(new_mention['arguments']):
+        a_token = a['text'].split()
+        a_head, a_head_idx = _head_word(a_token) 
+        new_mention['arguments'][a_idx]['head_lemma'] = lemmatizer.lemmatize(a_head)
       new_event_mentions.append(new_mention)
   json.dump(new_event_mentions, open(out_prefix+'_events_with_linguistic_features.json', 'w'), indent=2)
-    
-def cleanup(documents, config):
-    filtered_documents = {}
-    img_ids = [img_id.split('.')[0] for img_id in os.listdir(config['image_dir'])]
-    # config['image_dir'] = os.path.join(config['data_folder'], 'train_resnet152') # XXX
-    img_files = os.listdir(config['image_dir'])
-
-    if img_files[0].split('.')[-1] == '.jpg':
-      img_ids = [img_id.split('.jpg')[0] for img_id in img_files]
-    elif img_files[0].split('.')[-1] == '.npy':
-      img_ids = ['_'.join(img_id.split('_')[:-1]) for img_id in os.listdir(config['image_dir'])]     
-
-    for doc_id in sorted(documents): 
-        filename = os.path.join(config['image_dir'], doc_id+'.mp4')
-        if os.path.exists(filename):
-            filtered_documents[doc_id] = documents[doc_id]
-        elif doc_id in img_ids:
-            filtered_documents[doc_id] = documents[doc_id]
-    print('Keep {} out of {} documents'.format(len(filtered_documents), len(documents)))
-    return filtered_documents
-
-
+ 
 def main():
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   parser.add_argument('--config', type=str, default='configs/config_grounded.json')
@@ -321,9 +308,9 @@ def main():
   if not os.path.isdir(config['log_path']):
     os.mkdir(config['log_path']) 
   tasks = [args.task]
+  glove_file = 'm2e2/data/glove/glove.840B.300d.txt'
 
   if 0 in tasks:
-    glove_file = 'm2e2/data/glove/glove.840B.300d.txt'
     extract_glove_embeddings(config, args.split, glove_file, out_prefix='{}_glove_embeddings'.format(args.split))
   if 1 in tasks:
     extract_bert_embeddings(config, args.split, out_prefix=args.split)
