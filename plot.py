@@ -80,6 +80,7 @@ def visualize_glove_features(embed_file,
 
   X = X[select_idxs]
   y = [labels[i] for i in select_idxs]
+  tokens = [tokens[i] for i in select_idxs]
   df = pd.DataFrame({'t-SNE dim 0': X[:, 0], 
                      't-SNE dim 1': X[:, 1],
                      'Event type': y})
@@ -87,10 +88,10 @@ def visualize_glove_features(embed_file,
   fig, ax = plt.subplots(figsize=(10, 10))
   plt.axis([min(X[:, 0])-1, max(X[:, 0])+1, min(X[:, 1])-1, max(X[:, 1])+1])
   palette = sns.color_palette('husl', 10)
-  for i in range(len(select_idxs)):
+  for i in range(200):
     plt.text(X[i, 0], X[i, 1], 
              tokens[i], 
-             fontsize=3, 
+             fontsize=10, 
              color=palette[stoi[y[i]]])
   plt.savefig(f'{out_prefix}_text.png')
   plt.close()

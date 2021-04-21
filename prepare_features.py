@@ -129,7 +129,7 @@ def extract_event_glove_embeddings(config, split, glove_file, dimension=300, out
         labels[embed_id].append((token, event_type)) 
       event_embs[embed_id] = np.asarray(event_embs[embed_id])
     np.savez(out_prefix+'.npz', **event_embs)
-    json.dump(labels, open(out_prefix+'_event_labels.json', 'w'), indent=2)
+    json.dump(labels, open(out_prefix+'_labels.json', 'w'), indent=2)
 
 def extract_bert_embeddings(config, split, out_prefix='bert_embedding'):
     device = torch.device('cuda:{}'.format(config.gpu_num[0]))
@@ -246,7 +246,7 @@ def extract_event_linguistic_features(config, split, out_prefix):
       head, head_idx = _head_word(span_tokens) 
       head_class = wordclasses[span[0]+head_idx]
       pos_abbrev = head_class[0].lower() if head_class in ['NOUN', 'VERB', 'ADJ'] else 'n'
-      new_mention['head_lemma'] = lemmatizer.lemmatize(head, pos=pos_abbrev)
+      new_mention['head_lemma'] = lemmatizer.lemmatize(head.lower(), pos=pos_abbrev)
       new_mention['pos_tag'] = postags[span[0]+head_idx]
       new_mention['word_class'] = head_class if head_class in ['NOUN', 'VERB', 'ADJ'] else 'OTHER' 
 
@@ -255,14 +255,14 @@ def extract_event_linguistic_features(config, split, out_prefix):
         left_idx = span[0]-1 if wordclasses[span[0]-1] != '.' else span[0]-2
         left_class = wordclasses[left_idx] 
         pos_abbrev = left_class[0].lower() if left_class in ['NOUN', 'VERB', 'ADJ'] else 'n'
-        left_word = lemmatizer.lemmatize(tokens[left_idx], pos=pos_abbrev)
+        left_word = lemmatizer.lemmatize(tokens[left_idx].lower(), pos=pos_abbrev)
       else:
         left_word = NULL
       
       if span[1] < len(tokens)-1:
         right_class = wordclasses[span[1]+1]
         pos_abbrev = right_class[0].lower() if right_class in ['NOUN', 'VERB', 'ADJ'] else 'n'
-        right_word = lemmatizer.lemmatize(tokens[span[1]+1], pos=pos_abbrev)
+        right_word = lemmatizer.lemmatize(tokens[span[1]+1].lower(), pos=pos_abbrev)
       else:
         right_word = NULL
 
@@ -276,7 +276,7 @@ def extract_event_linguistic_features(config, split, out_prefix):
         left_event_head, left_head_idx = _head_word(left_event)
         left_ev_class = wordclasses[left_span[0]+left_head_idx]
         pos_abbrev = left_ev_class[0].lower() if left_ev_class in ['NOUN', 'VERB', 'ADJ'] else 'n'
-        new_mention['left_event_lemma'] = lemmatizer.lemmatize(left_event_head, pos=pos_abbrev)
+        new_mention['left_event_lemma'] = lemmatizer.lemmatize(left_event_head.lower(), pos=pos_abbrev)
       else:
         new_mention['left_event_lemma'] = NULL
 
@@ -286,7 +286,7 @@ def extract_event_linguistic_features(config, split, out_prefix):
         right_event_head, right_head_idx = _head_word(right_event)
         right_ev_class = wordclasses[right_span[0]+right_head_idx]
         pos_abbrev = right_ev_class[0].lower() if right_ev_class in ['NOUN', 'VERB', 'ADJ'] else 'n'
-        new_mention['right_event_lemma'] = lemmatizer.lemmatize(right_event_head, pos=pos_abbrev)
+        new_mention['right_event_lemma'] = lemmatizer.lemmatize(right_event_head.lower(), pos=pos_abbrev)
       else:
         new_mention['right_event_lemma'] = NULL
       
@@ -294,7 +294,7 @@ def extract_event_linguistic_features(config, split, out_prefix):
       for a_idx, a in enumerate(new_mention['arguments']):
         a_token = a['text'].split()
         a_head, a_head_idx = _head_word(a_token) 
-        new_mention['arguments'][a_idx]['head_lemma'] = lemmatizer.lemmatize(a_head)
+        new_mention['arguments'][a_idx]['head_lemma'] = lemmatizer.lemmatize(a_head.lower())
       new_event_mentions.append(new_mention)
   json.dump(new_event_mentions, open(out_prefix+'_events_with_linguistic_features.json', 'w'), indent=2)
  
