@@ -185,6 +185,57 @@ def extract_bert_embeddings(config, split, out_prefix='bert_embedding'):
                     docs_embeddings[emb_id] = bert_embedding
     np.savez(f"{out_prefix}_{config['bert_model']}.npz", **docs_embeddings)
 
+def extract_event_bert_embeddings(config, split, glove_file, dimension=300, out_prefix='event_bert_embedding'):
+    bert_tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
+    doc_embs = np.load(os.path.join(config['data_folder'], 'doc_embeddings.npz')) # TODO 
+    doc_to_emb = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in sorted(doc_embs, key=lambda x:int(x.split('_')[-1]))}
+
+    doc_json = os.path.join(config['data_folder'], split+'.json')
+    mention_json = os.path.join(config['data_folder'], split+'_events_with_linguistic_features.json') 
+    documents = json.load(open(doc_json))
+    mentions = json.load(open(mention_json))
+    label_dicts = dict()
+
+    for m in mentions:
+      token = m['head_lemma']
+      span = (min(m['tokens_ids']), max(m['tokens_ids']))
+      if not m['doc_id'] in label_dicts:
+        label_dicts[m['doc_id']] = dict()
+      label_dicts[m['doc_id']][span] = {'token': token,
+                                        'event_type': m['event_type']}
+
+    event_embs = dict()
+    labels = dict()
+    for idx, doc_id in enumerate(label_dicts):
+      tokens = documents[doc_id]
+      clean_start_end = -1 * np.ones(len(tokens), dtype=np.int)
+      bert_cursor = -1
+      start_bert_idx, end_bert_idx = []
+      for i, token in enumerate(tokens):
+        sent_id, token_id, token_text, flag_sentence = token
+        bert_token = bert_tokenizer.encode(token_text, add_special_tokens=True)[1:-1]
+        if bert_token:
+          bert_start_index = bert_cursor + 1
+          start_bert_idx.append(bert_start_index)
+          bert_cursor += len(bert_token)
+
+          bert_end_index = bert_cursor
+          end_bert_idx.append(bert_end_index)
+
+          clean_start_end[i] = len(original_tokens)
+      bert_spans = np.concatenate((np.expand_dims(start_bert_idx, 1), np.expand_dims(end_bert_idx, 1)), axis=1)
+
+      doc_emb = doc_embs[doc_to_emb[doc_id]]  
+      event_embs[doc_id] = []
+      for span in sorted(label_dicts[doc_id]):
+        bert_span = (bert_spans[clean_start_end[span[0]]][0],\
+                     bert_spans[clean_start_end[span[1]]][1])
+        event_embs[doc_id].append(doc_emb[bert_span[0]:bert_span[1]+1].mean(axis=0))
+      event_embs[doc_id] = np.stack(event_embs)
+      print(doc_id, event_embs[doc_id].shape) # XXX 
+    np.savez(f"{out_prefix}_event_{config['bert_model']}", **event_embs)
+        
+
 def extract_type_embeddings(type_to_idx, glove_file):
     vocab_embs = sorted(type_to_idx, key=lambda x:type_to_idx[x])
     vocab_emb = {''}
