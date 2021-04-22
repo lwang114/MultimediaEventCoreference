@@ -410,10 +410,9 @@ def load_data(config):
       src_feats_test: a list of arrays of shape (src sent length, src dimension)
       trg_feats_test: a list of arrays of shape (trg sent length, trg dimension)
   """
-  lemmatizer = WordNetLemmatizer() 
-  event_mentions_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train_events.json'), 'r', 'utf-8'))
+  event_mentions_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train_events_with_linguistic_features.json'), 'r', 'utf-8'))
   doc_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train.json')))
-  event_mentions_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test_events.json'), 'r', 'utf-8'))
+  event_mentions_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test_events_with_linguistic_features.json'), 'r', 'utf-8'))
   doc_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test.json')))
 
   visual_feats = np.load(os.path.join(config['data_folder'], 'train_mmaction_event_feat_labels.npz')) # XXX
@@ -427,8 +426,7 @@ def load_data(config):
   label_dict_train = {}
   label_dict_test = {}
   for m in event_mentions_train + event_mentions_test:
-    trigger = m['tokens']
-    trigger = lemmatizer.lemmatize(trigger.lower(), pos='v')
+    trigger = m['head_lemma']
     if not trigger in vocab:
       vocab[trigger] = len(vocab)
       vocab_freq[trigger] = 1
@@ -441,7 +439,7 @@ def load_data(config):
     if m['doc_id'] in doc_to_feat:
       if not m['doc_id'] in label_dict_train:
         label_dict_train[m['doc_id']] = {}
-      token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
+      token = m['head_lemma']
       label_dict_train[m['doc_id']][(min(m['tokens_ids']), max(m['tokens_ids']))] = {'token_id': vocab[token],
                                                                                      'cluster_id': m['cluster_id'], 
                                                                                      'type': m['event_type']} 
@@ -450,7 +448,7 @@ def load_data(config):
     if m['doc_id'] in doc_to_feat:
       if not m['doc_id'] in label_dict_test:
         label_dict_test[m['doc_id']] = {}
-      token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
+      token = m['head_lemma']
       label_dict_test[m['doc_id']][(min(m['tokens_ids']), max(m['tokens_ids']))] = {'token_id': vocab[token],
                                                                                     'cluster_id': m['cluster_id'],
                                                                                     'type': m['event_type']}

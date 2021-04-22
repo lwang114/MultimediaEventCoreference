@@ -183,13 +183,12 @@ class HDPEventAligner(object):
   def __init__(self,
                event_features_train,
                alpha0, beta0,
-               Kc, Kf): # TODO
+               Kc, Kf):
     """
     Attributes:
         event_crp: a Restaurant object storing the distribution for the event clusters,
-        argument_crp: a Restaurant object storing the distribution for the entity/argument clusters,
+        feature_crps: a dict from feature type (str) to a list of Restaurant objects
         e_feats_train: a list of list of strs,
-        a_feats_train: a list of list of list of strs,
         cluster_ids: a list of list of ints
     """ 
     feature_types = sorted(Kf)
@@ -210,11 +209,19 @@ class HDPEventAligner(object):
     if c in self.event_crp.name2table:
       table_idx = self.event_crp.name2table[c]
       for feat_type in e:
-        if e[feat_type] != NULL:
+        if feat_type == 'arguments':
+          for a in e['arguments']:
+            p *= self.feature_crps['arguments'][table_idx].prob(a)
+        else:
+          # XXX if e[feat_type] != NULL:
           p *= self.feature_crps[feat_type][table_idx].prob(e[feat_type])
     else: 
       for feat_type in e:
-        if e[feat_type] != NULL:
+        if feat_type == 'arguments':
+          for a in e['arguments']:
+            p *= Restaurant(self.alpha0, self.Kf['arguments']).prob(a)
+        else:
+          # XXX if e[feat_type] != NULL:
           p *= Restaurant(self.alpha0, self.Kf[feat_type]).prob(e[feat_type])
     return p
   
@@ -262,7 +269,6 @@ class HDPEventAligner(object):
             out_dir='./'):
     # inv_temp_start, inv_temp_end = 0.1, 1
     # anneal_temps = 1. / np.linspace(inv_temp_start, inv_temp_end, n_iter)
-
     order = list(range(len(self.e_feats_train)))
     for i_iter in range(n_iter):
       random.shuffle(order)
@@ -322,20 +328,32 @@ class HDPEventAligner(object):
       self.event_crp.seat_to(c)
       for feat_type in e:
         new_feat_crp = Restaurant(self.alpha0, self.Kf[feat_type])
-        new_feat_crp.seat_to(e[feat_type])
+        if feat_type == 'arguments':
+          for a in e['arguments']:
+            new_feat_crp.seat_to(a)
+        else:
+          new_feat_crp.seat_to(e[feat_type])
         self.feature_crps[feat_type].append(new_feat_crp)
     else:
       self.event_crp.seat_to(c)
       table_idx = self.event_crp.name2table[c]
       for feat_type in e:
-        self.feature_crps[feat_type][table_idx].seat_to(e[feat_type])
+        if feat_type == 'arguments':
+          for a in e['arguments']:
+            self.feature_crps[feat_type][table_idx].seat_to(a)
+        else:
+          self.feature_crps[feat_type][table_idx].seat_to(e[feat_type])
   
   def unseat_from(self, c, e):
     table_idx = self.event_crp.name2table[c] 
     self.event_crp.unseat_from(c)
 
     for feat_type in e:
-      self.feature_crps[feat_type][table_idx].unseat_from(e[feat_type])
+      if feat_type == 'arguments':
+        for a in e['arguments']:
+          self.feature_crps['arguments'][table_idx].unseat_from(a)
+      else:
+        self.feature_crps[feat_type][table_idx].unseat_from(e[feat_type])
 
       if self.feature_crps[feat_type][table_idx].ntables == 0: # Replace the empty restaurant with the last restaurant
         self.feature_crps[feat_type][table_idx] = deepcopy(self.feature_crps[feat_type][-1])
@@ -405,10 +423,15 @@ def load_text_features(config, split):
       token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
       label_dicts[m['doc_id']][span] = {'token_id': token,
-                                        'cluster_id': m['cluster_id'],
-                                        'arguments': {}}
+                                        'cluster_id': m['cluster_id']}
+
       for feat_type in feature_types:
-        label_dicts[m['doc_id']][span][feat_type] = m[feat_type] 
+        if feat_type == 'arguments':
+          label_dicts[m['doc_id']][span]['arguments'] = [a['head_lemma'] for a in m['arguments']]
+          if len(m['arguments']) == 0:
+            label_dicts[m['doc_id']][span]['arguments'].append(NULL)
+        else:
+          label_dicts[m['doc_id']][span][feat_type] = m[feat_type] 
         
   for feat_idx, doc_id in enumerate(sorted(label_dicts)): # XXX
     label_dict = label_dicts[doc_id]
@@ -438,12 +461,20 @@ def load_data(config):
   vocab_feats = {feat_type:dict() for feat_type in feature_types}
   vocab_feats_freq = {feat_type:dict() for feat_type in feature_types}
   for m in event_mentions_train + event_mentions_test:    
-    for feat_type in feature_types:  
-      if not m[feat_type] in vocab_feats[feat_type]:
-        vocab_feats[feat_type][m[feat_type]] = len(vocab_feats[feat_type])
-        vocab_feats_freq[feat_type][m[feat_type]] = 1
+    for feat_type in feature_types: 
+      if feat_type == 'arguments':
+        for a in m['arguments']:
+          if not a['head_lemma'] in vocab_feats['arguments']:
+            vocab_feats['arguments'][a['head_lemma']] = len(vocab_feats['arguments'])
+            vocab_feats_freq['arguments'][a['head_lemma']] = 1
+          else:
+            vocab_feats_freq['arguments'][a['head_lemma']] += 1
       else:
-        vocab_feats_freq[feat_type][m[feat_type]] += 1
+        if not m[feat_type] in vocab_feats[feat_type]:
+          vocab_feats[feat_type][m[feat_type]] = len(vocab_feats[feat_type])
+          vocab_feats_freq[feat_type][m[feat_type]] = 1
+        else:
+          vocab_feats_freq[feat_type][m[feat_type]] += 1
 
   json.dump(vocab_feats_freq, open('vocab_feats_freq.json', 'w'), indent=2)
 
@@ -484,18 +515,6 @@ if __name__ == '__main__':
     os.makedirs(config['model_path'])
   logging.basicConfig(filename=os.path.join(config['model_path'], 'train.log'), level=logging.DEBUG)
 
-  ## Test cases for HDP
-  run_test = False
-  if run_test:
-    efeats = [[1, 2, 3] for _ in range(10)]
-    afeats = [[[1], [2], [3]] for _ in range(10)]
-    aligner = HDPEventAligner(efeats, afeats,
-                              alpha0=1., beta0=10.,
-                              K=3, Kf=3) # TODO
-    if not os.path.exists('models/test'):
-      os.makedirs('models/test')
-    aligner.train(10, out_dir='models/test')
-
   event_feats_train,\
   doc_ids_train,\
   spans_train,\
@@ -511,7 +530,7 @@ if __name__ == '__main__':
   Kf = {feat_type:len(vocab_feats[feat_type]) for feat_type in vocab_feats}
   print(f'Max num of events: {Kc}')
   for feat_type in Kf:
-    print(f'{feat_type} vocab size: {Kf[feat_type]}') # TODO
+    print(f'{feat_type} vocab size: {Kf[feat_type]}')
 
   ## Model training
   aligner = HDPEventAligner(event_feats_train+event_feats_test, 
@@ -519,7 +538,7 @@ if __name__ == '__main__':
                             beta0=config['beta0'],
                             Kc=Kc,
                             Kf=Kf)
-  aligner.train(100, out_dir=config['model_path'])
+  aligner.train(350, out_dir=config['model_path'])
 
   ## Test and evaluation
   pred_cluster_ids = [np.asarray(cluster_ids) for cluster_ids in aligner.cluster_ids[len(event_feats_train):]]

@@ -58,11 +58,11 @@ def visualize_image_features(embed_file,
   plt.savefig(out_prefix+'.png')
   plt.close()
 
-def visualize_glove_features(embed_file,
-                             label_file,
-                             label_type='event',
-                             out_prefix='glove_tsne',
-                             n_class=10):
+def visualize_text_features(embed_file,
+                            label_file,
+                            label_type='event',
+                            out_prefix='glove_tsne',
+                            n_class=10):
   feat_npz = np.load(embed_file)
   label_dict = json.load(open(label_file, 'r'))
   feats = np.concatenate([feat_npz[k] for k in sorted(feat_npz, key=lambda x:int(x.split('_')[-1]))])
@@ -83,7 +83,7 @@ def visualize_glove_features(embed_file,
   tokens = [tokens[i] for i in select_idxs]
   df = pd.DataFrame({'t-SNE dim 0': X[:, 0], 
                      't-SNE dim 1': X[:, 1],
-                     'Event type': y})
+                     '{label_type} type': y})
 
   fig, ax = plt.subplots(figsize=(10, 10))
   plt.axis([min(X[:, 0])-1, max(X[:, 0])+1, min(X[:, 1])-1, max(X[:, 1])+1])
@@ -98,7 +98,7 @@ def visualize_glove_features(embed_file,
 
   fig, ax = plt.subplots(figsize=(10, 10))
   sns.scatterplot(data=df, x='t-SNE dim 0', y='t-SNE dim 1', 
-                  hue='Event type', style='Event type',
+                  hue='{label_type} type', style='{label_type} type',
                   palette=palette)
   plt.savefig(f'{out_prefix}.png')
   plt.close()
@@ -107,6 +107,7 @@ if __name__ == '__main__':
   import argparse
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   parser.add_argument('--task', type=int)
+  parser.add_argument('--mention_type', choices={'events', 'entities'}, default='events')
   args = parser.parse_args()
 
   if args.task == 0:
@@ -114,6 +115,17 @@ if __name__ == '__main__':
     out_prefix = os.path.join(data_dir, 'train_event_glove_embeddings')
     embed_file = f'{out_prefix}.npz'
     label_file = f'{out_prefix}_labels.json'
-    visualize_glove_features(embed_file,
-                             label_file,
-                             out_prefix=f'{out_prefix}_tsne')
+    visualize_text_features(embed_file,
+                            label_file,
+                            out_prefix=f'{out_prefix}_tsne')
+  if args.task == 1:
+    data_dir = 'data/video_m2e2/mentions/'
+    label_type = 'Event' if args.mention_type == 'events' else 'Entity' 
+    out_prefix = os.path.join(data_dir, 'train_{args.mention_type}_roberta-large')
+    embed_file = f'{out_prefix}.npz'
+    label_file = f'{out_prefix}_labels.json'
+    visualize_text_features(embed_file,
+                            label_file,
+                            label_type=label_type,
+                            out_prefix=f'{out_prefix}_tsne')
+

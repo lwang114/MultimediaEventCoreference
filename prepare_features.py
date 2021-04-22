@@ -185,24 +185,24 @@ def extract_bert_embeddings(config, split, out_prefix='bert_embedding'):
                     docs_embeddings[emb_id] = bert_embedding
     np.savez(f"{out_prefix}_{config['bert_model']}.npz", **docs_embeddings)
 
-def extract_event_bert_embeddings(config, split, glove_file, dimension=300, out_prefix='event_bert_embedding'):
+def extract_mention_bert_embeddings(config, split, mention_type='events', out_prefix='mention_bert_embedding'):
     bert_tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
-    doc_embs = np.load(os.path.join(config['data_folder'], 'doc_embeddings.npz')) # TODO 
+    doc_embs = np.load(os.path.join(config['data_folder'], f"{split}_{config['bert_model']}.npz"))
     doc_to_emb = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in sorted(doc_embs, key=lambda x:int(x.split('_')[-1]))}
 
     doc_json = os.path.join(config['data_folder'], split+'.json')
-    mention_json = os.path.join(config['data_folder'], split+'_events_with_linguistic_features.json') 
+    mention_json = os.path.join(config['data_folder'], f'{split}_{mention_type}.json') 
     documents = json.load(open(doc_json))
     mentions = json.load(open(mention_json))
     label_dicts = dict()
 
     for m in mentions:
-      token = m['head_lemma']
+      token = m['tokens']
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
       if not m['doc_id'] in label_dicts:
         label_dicts[m['doc_id']] = dict()
       label_dicts[m['doc_id']][span] = {'token': token,
-                                        'event_type': m['event_type']}
+                                        'type': m['event_type'] if mention_type == 'events' else m['entity_type']}
 
     event_embs = dict()
     labels = dict()
@@ -210,7 +210,8 @@ def extract_event_bert_embeddings(config, split, glove_file, dimension=300, out_
       tokens = documents[doc_id]
       clean_start_end = -1 * np.ones(len(tokens), dtype=np.int)
       bert_cursor = -1
-      start_bert_idx, end_bert_idx = []
+      clean_tokens = []
+      start_bert_idx, end_bert_idx = [], []
       for i, token in enumerate(tokens):
         sent_id, token_id, token_text, flag_sentence = token
         bert_token = bert_tokenizer.encode(token_text, add_special_tokens=True)[1:-1]
@@ -222,19 +223,25 @@ def extract_event_bert_embeddings(config, split, glove_file, dimension=300, out_
           bert_end_index = bert_cursor
           end_bert_idx.append(bert_end_index)
 
-          clean_start_end[i] = len(original_tokens)
+          clean_start_end[i] = len(clean_tokens)
+          clean_tokens.append(token)
       bert_spans = np.concatenate((np.expand_dims(start_bert_idx, 1), np.expand_dims(end_bert_idx, 1)), axis=1)
 
       doc_emb = doc_embs[doc_to_emb[doc_id]]  
-      event_embs[doc_id] = []
+      embed_id = f'{doc_id}_{idx}'
+      event_embs[embed_id] = []
+      labels[embed_id] = []
       for span in sorted(label_dicts[doc_id]):
         bert_span = (bert_spans[clean_start_end[span[0]]][0],\
                      bert_spans[clean_start_end[span[1]]][1])
-        event_embs[doc_id].append(doc_emb[bert_span[0]:bert_span[1]+1].mean(axis=0))
-      event_embs[doc_id] = np.stack(event_embs)
-      print(doc_id, event_embs[doc_id].shape) # XXX 
-    np.savez(f"{out_prefix}_event_{config['bert_model']}", **event_embs)
-        
+        event_embs[embed_id].append(doc_emb[bert_span[0]:bert_span[1]+1].mean(axis=0))
+
+        token = label_dicts[doc_id][span]['token']
+        token_type = label_dicts[doc_id][span]['type']
+        labels[embed_id].append((token, token_type))
+      event_embs[embed_id] = np.stack(event_embs[embed_id])
+    np.savez(f"{out_prefix}_{mention_type}_{config['bert_model']}.npz", **event_embs)
+    json.dump(labels, open(f"{out_prefix}_{mention_type}_{config['bert_model']}.json", 'w'), indent=2) 
 
 def extract_type_embeddings(type_to_idx, glove_file):
     vocab_embs = sorted(type_to_idx, key=lambda x:type_to_idx[x])
@@ -353,6 +360,7 @@ def main():
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   parser.add_argument('--config', type=str, default='configs/config_grounded.json')
   parser.add_argument('--split', choices={'train', 'test'}, default='train')
+  parser.add_argument('--mention_type', choices={'events', 'entities'}, default='events')
   parser.add_argument('--task', type=int)
   args = parser.parse_args()  
   config = pyhocon.ConfigFactory.parse_file(args.config) 
@@ -369,6 +377,8 @@ def main():
     extract_event_linguistic_features(config, args.split, out_prefix=args.split)
   if 3 in tasks:
     extract_event_glove_embeddings(config, args.split, glove_file, out_prefix=f'{args.split}_event_glove_embeddings')
+  if 4 in tasks:
+    extract_mention_bert_embeddings(config, args.split, mention_type=args.mention_type, out_prefix=f'{args.split}')
 
 if __name__ == '__main__':
   main()

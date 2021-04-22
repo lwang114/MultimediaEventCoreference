@@ -644,8 +644,7 @@ def to_antecedents(labels):
   return antecedents
 
 def load_text_features(config, vocab, vocab_entity, doc_to_feat, split):
-  lemmatizer = WordNetLemmatizer() 
-  event_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events.json'), 'r', 'utf-8'))
+  event_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events_with_linguistic_features.json'), 'r', 'utf-8'))
   doc_train = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}.json')))
   vocab_size = len(vocab)
   vocab_entity_size = len(vocab_entity)
@@ -666,7 +665,7 @@ def load_text_features(config, vocab, vocab_entity, doc_to_feat, split):
     if m['doc_id'] in doc_to_feat:
       if not m['doc_id'] in label_dicts:
         label_dicts[m['doc_id']] = {}
-      token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
+      token = m['head_lemma']
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
       label_dicts[m['doc_id']][span] = {'token_id': vocab[token],
                                         'cluster_id': m['cluster_id'],
@@ -675,12 +674,11 @@ def load_text_features(config, vocab, vocab_entity, doc_to_feat, split):
       
       for a in m['arguments']:
         if 'text' in a:
-          a_token = a['text']
+          a_token = a['head_lemma']
           a_span = (a['start'], a['end'])
         else:
-          a_token = a['tokens']
+          a_token = a['head_lemma']
           a_span = (min(a['tokens_ids']), max(a['tokens_ids']))
-        a_token = lemmatizer.lemmatize(a_token.lower())
         label_dicts[m['doc_id']][span]['arguments'][a_span] = {'token_id': vocab_entity[a_token],
                                                                'type': a['role']}
 
@@ -780,11 +778,9 @@ def load_data(config):
       src_feats_test: a list of arrays of shape (src sent length, src dimension)
       trg_feats_test: a list of arrays of shape (trg sent length, trg dimension)
   """
-  lemmatizer = WordNetLemmatizer() 
-
-  event_mentions_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train_events.json'), 'r', 'utf-8'))
+  event_mentions_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train_events_with_linguistic_features.json'), 'r', 'utf-8'))
   doc_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train.json')))
-  event_mentions_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test_events.json'), 'r', 'utf-8'))
+  event_mentions_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test_events_with_linguistic_features.json'), 'r', 'utf-8'))
   doc_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test.json')))
 
   action_feats_train_npz = np.load(os.path.join(config['data_folder'], config['action_feature_train']))
@@ -801,8 +797,7 @@ def load_data(config):
   vocab_entity = dict()
   vocab_entity_freq = dict()
   for m in event_mentions_train + event_mentions_test:
-    trigger = m['tokens']
-    trigger = lemmatizer.lemmatize(trigger.lower(), pos='v')
+    trigger = m['head_lemma']
     if not trigger in vocab:
       vocab[trigger] = len(vocab)
       vocab_freq[trigger] = 1
@@ -810,11 +805,7 @@ def load_data(config):
       vocab_freq[trigger] += 1
     
     for a in m['arguments']:
-      if 'text' in a:
-        argument = a['text']
-      else:
-        argument = a['tokens']
-      argument = lemmatizer.lemmatize(argument.lower())
+      argument = a['head_lemma']
       if not argument in vocab_entity:
         vocab_entity[argument] = len(vocab_entity)
         vocab_entity_freq[argument] = len(vocab_entity)
@@ -938,12 +929,12 @@ if __name__ == '__main__':
   Ko = len(object_classes)
 
   ## Model training
-  aligner = GraphMixtureEventAligner(action_feats_train, #+action_feats_test,
-                                     object_feats_train, #+object_feats_test,
-                                     event_feats_train, #+event_feats_test,
-                                     entity_feats_train, #+entity_feats_test,  
-                                     vo_maps_train, #+vo_maps_test,
-                                     ea_maps_train, #+ea_maps_test,
+  aligner = GraphMixtureEventAligner(action_feats_train+action_feats_test,
+                                     object_feats_train+object_feats_test,
+                                     event_feats_train+event_feats_test,
+                                     entity_feats_train+entity_feats_test,  
+                                     vo_maps_train+vo_maps_test,
+                                     ea_maps_train+ea_maps_test,
                                      configs={'n_action_vocab':Kv, 
                                               'n_object_vocab':Ko,
                                               'n_event_vocab':Ke,

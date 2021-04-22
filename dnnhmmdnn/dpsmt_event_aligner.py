@@ -101,24 +101,31 @@ class DirichletTranslationEventAligner(object):
                action_features_train,
                event_features_train,
                alpha0, beta0,
-               vocab, Kv,
-               include_null=True):
+               vocab, Kv):
     """
     Attributes:
       alignment_crps: a list of Restaurant objects storing the distribution for the event-action alignments
       translation_crps: a list of Restaurant objects storing the distribution of action classes for each trigger word
     """
+    self.e_feats_train = event_features_train
+    self.v_feats_train = action_features_train
+
+    for i in range(len(action_feats_train)):
+      vocab[NULL] = len(vocab)
+      Nv = self.v_feats_train[i].shape[0]
+      v_feat_new = np.zeros((Nv+1, Kv+1), dtype=np.int)
+      v_feat_new[:Nv, :Kv] = self.v_feats_train[i].astype(int)
+      v_feat_new[Nv, Kv] = 1
+      self.v_feats_train[i] = deepcopy(v_feat_new)
+
     self.Ke = len(vocab)
-    self.Kv = Kv
+    self.Kv = Kv + 1
     self.vocab = vocab
     self.alpha0 = alpha0
     self.beta0 = beta0
 
-    if include_null:
-      for i in range(len(self.v_feats_train)):
-        self.v_feats_train[i].append(NULL)
     self.alignment_crps = [Restaurant(alpha0, len(v_feat)) for v_feat in self.v_feats_train]
-    self.translation_crps = [Restaurant(beta0, Kv) for _ in range(Ke)] 
+    self.translation_crps = [Restaurant(beta0, Kv) for _ in range(self.Ke)] 
     self.alignments = [[] for _ in self.e_feats_train]
 
   def prob(self, e, v):
@@ -136,10 +143,12 @@ class DirichletTranslationEventAligner(object):
 
   def gibbs_sample(self, e, vs, crp):
     """ Sample from P(a_ji|a^-ji, e_ji=e, v_ji=v, e^-ji) """
+    prior = [crp.prob(j) for j in range(len(vs))]
     P = [crp.prob(j) * self.prob(e, v) for j, v in enumerate(vs)]
+
     norm = sum(P)
     x = norm * random.random()
-    for j, w in enumerate(P)
+    for j, w in enumerate(P):
       if x < w: return j
       x -= w
     return j    
@@ -157,18 +166,21 @@ class DirichletTranslationEventAligner(object):
         mention_order = list(range(len(e_feat)))
         random.shuffle(mention_order) 
         for i_m in mention_order:
-          e = e_feat[i]
+          e = e_feat[i_m]
           if i_iter > 0:
             a_i = self.alignments[i][i_m]
             v = np.argmax(v_feat[a_i]) # XXX
-            self.alignment_crps[i].unseat_from(a_i)
-            self.translation_crps[self.vocab[e]].unseat_from(v) 
+            if v < self.Kv - 1:
+              self.alignment_crps[i].unseat_from(a_i)
+              self.translation_crps[self.vocab[e]].unseat_from(v) 
           
-          a_i = self.gibbs_sample(e, self.alignment_crps[i])
+          a_i = self.gibbs_sample(e, v_feat, self.alignment_crps[i])
           v = np.argmax(v_feat[a_i]) # XXX
+          new_alignment[i_m] = a_i
+          if v == self.Kv - 1: # Skip if v is NULL
+            continue
           self.alignment_crps[i].seat_to(a_i)
           self.translation_crps[self.vocab[e]].seat_to(v)
-          new_alignment[i_m] = a_i
         self.alignments[i] = deepcopy(new_alignment)
       
       if i_iter % 10 == 0:
@@ -207,6 +219,15 @@ class DirichletTranslationEventAligner(object):
     f_out.write(out_str)
     f_out.close()
 
+def to_one_hot(sent, K):
+  sent = np.asarray(sent)
+  if len(sent.shape) < 2:
+    es = np.eye(K)
+    sent = np.asarray([es[int(w)] if w < K else 1./K*np.ones(K) for w in sent])
+    return sent
+  else:
+    return sent
+
 def to_pairwise(labels):
   n = labels.shape[0]
   if n <= 1:
@@ -230,8 +251,7 @@ def to_antecedents(labels):
   return antecedents
 
 def load_text_features(config, vocab, vocab_entity, doc_to_feat, split):
-  lemmatizer = WordNetLemmatizer() 
-  event_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events.json'), 'r', 'utf-8'))
+  event_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events_with_linguistic_features.json'), 'r', 'utf-8'))
   doc_train = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}.json')))
   vocab_size = len(vocab)
   vocab_entity_size = len(vocab_entity)
@@ -252,22 +272,20 @@ def load_text_features(config, vocab, vocab_entity, doc_to_feat, split):
     if m['doc_id'] in doc_to_feat:
       if not m['doc_id'] in label_dicts:
         label_dicts[m['doc_id']] = {}
-      token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
-      label_dicts[m['doc_id']][span] = {'token_id': vocab[token],
+      label_dicts[m['doc_id']][span] = {'token_id': m['head_lemma'],
                                         'cluster_id': m['cluster_id'],
                                         'type': m['event_type'],
                                         'arguments': {}} 
       
       for a in m['arguments']:
         if 'text' in a:
-          a_token = a['text']
+          a_token = a['head_lemma']
           a_span = (a['start'], a['end'])
         else:
-          a_token = a['tokens']
+          a_token = a['head_lemma']
           a_span = (min(a['tokens_ids']), max(a['tokens_ids']))
-        a_token = lemmatizer.lemmatize(a_token.lower())
-        label_dicts[m['doc_id']][span]['arguments'][a_span] = {'token_id': vocab_entity[a_token],
+        label_dicts[m['doc_id']][span]['arguments'][a_span] = {'token_id': a_token,
                                                                'type': a['role']}
 
   for feat_idx, doc_id in enumerate(sorted(label_dicts)): # XXX
@@ -292,8 +310,8 @@ def load_text_features(config, vocab, vocab_entity, doc_to_feat, split):
         entity_idx += 1
       ea_maps.append(ea_map)
 
-    event_feats.append(to_one_hot(events, vocab_size))
-    entity_feats.append(to_one_hot(entities, vocab_entity_size))
+    event_feats.append(events)
+    entity_feats.append(entities)
     ea_maps_all.append(ea_maps)
     doc_ids.append(doc_id)
     spans_all.append(spans)
@@ -366,11 +384,9 @@ def load_data(config):
       src_feats_test: a list of arrays of shape (src sent length, src dimension)
       trg_feats_test: a list of arrays of shape (trg sent length, trg dimension)
   """
-  lemmatizer = WordNetLemmatizer() 
-
-  event_mentions_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train_events.json'), 'r', 'utf-8'))
+  event_mentions_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train_events_with_linguistic_features.json'), 'r', 'utf-8'))
   doc_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train.json')))
-  event_mentions_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test_events.json'), 'r', 'utf-8'))
+  event_mentions_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test_events_with_linguistic_features.json'), 'r', 'utf-8'))
   doc_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test.json')))
 
   action_feats_train_npz = np.load(os.path.join(config['data_folder'], config['action_feature_train']))
@@ -387,8 +403,7 @@ def load_data(config):
   vocab_entity = dict()
   vocab_entity_freq = dict()
   for m in event_mentions_train + event_mentions_test:
-    trigger = m['tokens']
-    trigger = lemmatizer.lemmatize(trigger.lower(), pos='v')
+    trigger = m['head_lemma']
     if not trigger in vocab:
       vocab[trigger] = len(vocab)
       vocab_freq[trigger] = 1
@@ -396,11 +411,7 @@ def load_data(config):
       vocab_freq[trigger] += 1
     
     for a in m['arguments']:
-      if 'text' in a:
-        argument = a['text']
-      else:
-        argument = a['tokens']
-      argument = lemmatizer.lemmatize(argument.lower())
+      argument = a['head_lemma']
       if not argument in vocab_entity:
         vocab_entity[argument] = len(vocab_entity)
         vocab_entity_freq[argument] = len(vocab_entity)
@@ -520,8 +531,8 @@ if __name__ == '__main__':
   Kv = len(action_classes)
 
   ## Model training 
-  aligner = DirichletTranslationEventAligner(action_feats_train,
-                                             event_feats_train,
+  aligner = DirichletTranslationEventAligner(action_feats_train+action_feats_test,
+                                             event_feats_train+event_feats_test,
                                              alpha0=config['alpha0'], 
                                              beta0=config['beta0'],
                                              vocab=vocab,

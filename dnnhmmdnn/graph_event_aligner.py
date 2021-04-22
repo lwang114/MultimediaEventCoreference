@@ -12,6 +12,9 @@ from nltk.stem import WordNetLemmatizer
 import pyhocon
 import itertools
 import torch
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import argparse
 from scipy.special import logsumexp
 from region_vgmm import *
