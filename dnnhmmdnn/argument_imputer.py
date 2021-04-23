@@ -264,11 +264,15 @@ if __name__ == '__main__':
   logging.basicConfig(filename=os.path.join(config['model_path'], 'train.log'), level=logging.DEBUG)
 
   event_feats_train, event_feats_test, argument_types = load_data(config)
+  old_event_feats_train = [e for e_feat in event_feats_train for e in e_feat]
+  old_event_feats_test = [e for e_feat in event_feats_test for e in e_feat]
+  json.dump(old_event_feats_train, open(os.path.join(config['model_path'], 'train_events_before_impute.json'), 'w'), indent=2)
+  json.dump(old_event_feats_test, open(os.path.join(config['model_path'], 'test_events_before_impute.json'), 'w'), indent=2)
+
   imputer = MixtureArgumentImputer(event_feats_train+event_feats_test, argument_types)
   new_event_feats_train = imputer.impute(event_feats_train)
   new_event_feats_train = [e for e_feat in new_event_feats_train for e in e_feat]
   new_event_feats_test = imputer.impute(event_feats_test)
   new_event_feats_test = [e for e_feat in new_event_feats_test for e in e_feat]
-
   json.dump(new_event_feats_train, open(os.path.join(config['model_path'], 'train_events_imputed.json'), 'w'), indent=2)
   json.dump(new_event_feats_test, open(os.path.join(config['model_path'], 'test_events_imputed.json'), 'w'), indent=2)
