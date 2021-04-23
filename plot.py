@@ -121,7 +121,7 @@ if __name__ == '__main__':
   if args.task == 1:
     data_dir = 'data/video_m2e2/mentions/'
     label_type = 'Event' if args.mention_type == 'events' else 'Entity' 
-    out_prefix = os.path.join(data_dir, 'train_{args.mention_type}_roberta-large')
+    out_prefix = os.path.join(data_dir, f'train_{args.mention_type}_glove_embeddings') # os.path.join(data_dir, f'train_{args.mention_type}_roberta-large')
     embed_file = f'{out_prefix}.npz'
     label_file = f'{out_prefix}_labels.json'
     visualize_text_features(embed_file,
