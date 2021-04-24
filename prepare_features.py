@@ -84,18 +84,19 @@ def extract_glove_embeddings(config, split, glove_file, dimension=300, out_prefi
         doc_embeddings[embed_id] = np.asarray(doc_embedding)
     np.savez(out_prefix+'.npz', **doc_embeddings)
 
-def extract_event_glove_embeddings(config, split, glove_file, dimension=300, out_prefix='event_glove_embedding'):
-    mention_json = os.path.join(config['data_folder'], split+'_events_with_linguistic_features.json')
+def extract_mention_glove_embeddings(config, split, glove_file, dimension=300, mention_type='events', out_prefix='event_glove_embedding'):
+    mention_json = os.path.join(config['data_folder'], f'{split}_{mention_type}.json')
     mentions = json.load(open(mention_json, 'r'))
     vocab = {'$$$UNK$$$': 0}
     label_dicts = dict()
     for m in mentions:
-      token = m['head_lemma']
+      # XXX token = m['head_lemma']
+      token = m['tokens']
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
       if not m['doc_id'] in label_dicts:
         label_dicts[m['doc_id']] = dict()
       label_dicts[m['doc_id']][span] = {'token': token,
-                                        'event_type': m['event_type']}
+                                        'type': m['event_type'] if mention_type == 'events' else m['entity_type']}
       if not token in vocab:
         vocab[token] = len(vocab)
     print(f'Vocabulary size: {len(vocab)}')
@@ -123,8 +124,8 @@ def extract_event_glove_embeddings(config, split, glove_file, dimension=300, out
       labels[embed_id] = [] 
       
       for span in sorted(label_dicts[doc_id]):
-        token = label_dicts[doc_id][span]['token']        
-        event_type = label_dicts[doc_id][span]['event_type']
+        token = label_dicts[doc_id][span]['token']   
+        event_type = label_dicts[doc_id][span]['type']
         event_embs[embed_id].append(embed_matrix[vocab_emb.get(token, 0)])
         labels[embed_id].append((token, event_type)) 
       event_embs[embed_id] = np.asarray(event_embs[embed_id])
@@ -241,7 +242,7 @@ def extract_mention_bert_embeddings(config, split, mention_type='events', out_pr
         labels[embed_id].append((token, token_type))
       event_embs[embed_id] = np.stack(event_embs[embed_id])
     np.savez(f"{out_prefix}_{mention_type}_{config['bert_model']}.npz", **event_embs)
-    json.dump(labels, open(f"{out_prefix}_{mention_type}_{config['bert_model']}.json", 'w'), indent=2) 
+    json.dump(labels, open(f"{out_prefix}_{mention_type}_{config['bert_model']}_labels.json", 'w'), indent=2) 
 
 def extract_type_embeddings(type_to_idx, glove_file):
     vocab_embs = sorted(type_to_idx, key=lambda x:type_to_idx[x])
@@ -376,7 +377,7 @@ def main():
   if 2 in tasks:
     extract_event_linguistic_features(config, args.split, out_prefix=args.split)
   if 3 in tasks:
-    extract_event_glove_embeddings(config, args.split, glove_file, out_prefix=f'{args.split}_event_glove_embeddings')
+    extract_mention_glove_embeddings(config, args.split, glove_file, mention_type=args.mention_type, out_prefix=f'{args.split}_{args.mention_type}_glove_embeddings')
   if 4 in tasks:
     extract_mention_bert_embeddings(config, args.split, mention_type=args.mention_type, out_prefix=f'{args.split}')
 

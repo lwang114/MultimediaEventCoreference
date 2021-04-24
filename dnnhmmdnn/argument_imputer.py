@@ -39,7 +39,7 @@ class MixtureArgumentImputer:
           self.P_ea[a_type][trigger] = dict()
         
         for a in self.vocab['argument']:
-          self.P_ea[a_type][trigger][a] = 1 ./ len(self.vocab['argument']) 
+          self.P_ea[a_type][trigger][a] = 1. / len(self.vocab['argument']) 
 
   def get_vocab(self, event_feats):
     vocab = {'trigger': dict(), 'argument': dict()}
@@ -83,18 +83,20 @@ class MixtureArgumentImputer:
       ea_count = dict()
       for e_idx, e in enumerate(e_feat):
         trigger = e['head_lemma']
-        a_types = self.get_a_types(e)
+        a_types = self.get_arg_types(e)
         for a_type in a_types:
           ea_count[(e_idx, a_type)] = dict()
 
-          a = e[feat_type]
+          a = e[a_type]
           if a == NULL: # Impute the data
             for e_idx2, e2 in enumerate(e_feat):
-              if e_idx == e_idx2:
+              if e_idx2 == e_idx:
                 continue
-              a_types2 = self.get_a_types(e2)
+              a_types2 = self.get_arg_types(e2)
               for a_type2 in a_types2:
                 a2 = e2[a_type2]
+                if a2 == NULL:
+                  continue
                 ea_count[(e_idx, a_type)][(e_idx2, a_type2)] = self.P_ea[a_type][trigger][a2]
             
             if len(ea_count[(e_idx, a_type)]) == 0: # If there is only one event, keep the empty entry
@@ -136,12 +138,12 @@ class MixtureArgumentImputer:
   def log_likelihood(self):
     ll = 0.
     for ex, e_feat in enumerate(self.event_features):
-      for e_idx in enumerate(e_feat):
+      for e_idx, e in enumerate(e_feat):
         trigger = e['head_lemma']
         a_types = self.get_arg_types(e)
         for a_type in a_types:
           a = e[a_type]
-          if a == 'NULL':
+          if a == NULL:
             probs = []
             for e_idx2, e2 in enumerate(e_feat):
               if e_idx2 == e_idx:
@@ -149,8 +151,13 @@ class MixtureArgumentImputer:
               a_types2 = self.get_arg_types(e2)
               for a_type2 in a_types2:
                 a2 = e2[a_type2]
+                if a2 == NULL:
+                  continue
                 probs.append(self.P_ea[a_type][trigger][a2])
-            ll += np.log(np.maximum(np.mean(probs), EPS))
+            if len(probs) > 0:
+              ll += np.log(np.maximum(np.mean(probs), EPS))
+            else:
+              ll += np.log(np.maximum(self.P_ea[a_type][trigger][a], EPS))
           else:
             ll += np.log(np.maximum(self.P_ea[a_type][trigger][a], EPS))
     return ll
@@ -162,28 +169,36 @@ class MixtureArgumentImputer:
       print(f'Iteration {epoch}, log likelihood: {self.log_likelihood()}')
 
   def impute(self, event_features):
-    for event_feat in event_features:
-      for e_idx, e in enumerate(event_feat):
+    event_features_imputed = []
+    for e_feat in event_features:
+      e_feat_imputed = []
+      for e_idx, e in enumerate(e_feat):
         trigger = e['head_lemma']
         a_types = self.get_arg_types(e)
+        e_imputed = deepcopy(e)
         for a_type in a_types:
           a = e[a_type]
-          if a == 'NULL':
+          if a == NULL:
             probs = [] 
             candidates = []
             for e_idx2, e2 in enumerate(e_feat):
-              if e_idx == e_idx2:
+              if e_idx2 == e_idx:
                 continue
               a_types2 = self.get_arg_types(e2)
               for a_type2 in a_types2:
                 a2 = e2[a_type2]
+                if a2 == NULL:
+                  continue
                 probs.append(self.P_ea[a_type][trigger][a2])
                 candidates.append(a2)
-
+                
             if len(probs) > 0:
               best_idx = np.argmax(probs)
-              e[a_type] = candidates[best_idx]
-    return event_features
+              e_imputed[a_type] = candidates[best_idx]
+              # print(f'impute {a_type} for trigger {trigger}: {e_imputed[a_type]}') # XXX
+        e_feat_imputed.append(e_imputed)
+      event_features_imputed.append(e_feat_imputed)
+    return event_features_imputed
 
 def load_data(config):
   event_mentions_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train_events_with_linguistic_features.json'), 'r', 'utf-8'))
@@ -200,6 +215,7 @@ def load_data(config):
   arg_types = [a for e in ontology for a in ontology[e]]
   json.dump(ontology, open(os.path.join(config['data_folder'], 'text_ontology.json'), 'w'), indent=2)
 
+  label_dicts = dict()
   doc_ids_train = []
   for m in event_mentions_train:
     if not m['doc_id'] in label_dicts:
@@ -241,12 +257,12 @@ def load_data(config):
     label_dicts[m['doc_id']][span] = deepcopy(new_m)
 
   event_features_train = []
-  for doc_id in doc_ids_train[:20]: # XXX
+  for doc_id in doc_ids_train: # XXX
     e_feat = [label_dicts[doc_id][span] for span in sorted(label_dicts[doc_id])]
     event_features_train.append(e_feat)
 
   event_features_test = []
-  for doc_id in doc_ids_test[:20]: # XXX
+  for doc_id in doc_ids_test: # XXX
     e_feat = [label_dicts[doc_id][span] for span in sorted(label_dicts[doc_id])]
     event_features_test.append(e_feat)
 
@@ -254,7 +270,7 @@ def load_data(config):
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-  parser.add_argument('--config', 'c')
+  parser.add_argument('--config')
   args = parser.parse_args()
 
   config_file = args.config
@@ -270,6 +286,7 @@ if __name__ == '__main__':
   json.dump(old_event_feats_test, open(os.path.join(config['model_path'], 'test_events_before_impute.json'), 'w'), indent=2)
 
   imputer = MixtureArgumentImputer(event_feats_train+event_feats_test, argument_types)
+  imputer.trainEM(n_iter=10)
   new_event_feats_train = imputer.impute(event_feats_train)
   new_event_feats_train = [e for e_feat in new_event_feats_train for e in e_feat]
   new_event_feats_test = imputer.impute(event_feats_test)
