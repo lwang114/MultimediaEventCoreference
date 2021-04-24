@@ -4,9 +4,8 @@ import numpy as np
 import codecs
 import os
 import collections
+from nltk.stem import WordNetLemmatizer
 from copy import deepcopy
-from nltk.translate import bleu_score
-from nltk.metrics.scores import precision, recall, f_measure 
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 import matplotlib
@@ -17,7 +16,62 @@ import pandas as pd
 np.random.seed(2)
 
 PUNCT = [',', '.', '\'', '\"', ':', ';', '?', '!', '<', '>', '~', '%', '$', '|', '/', '@', '#', '^', '*']
-def get_mention_doc(data_json, out_prefix, inclusive=False):
+def get_mention_doc_oneie(data_dir, out_prefix): # TODO Deal with ASR transcripts and OneIE results
+  '''
+  :param data_dir: str of directory of text files with each line in each file containing a dict of format
+      doc_id: str,
+      sent_id: [doc_id]-[sentence idx],
+      tokens: a list of strs, tokenized sentence,
+      graph: a dict of format
+          {'trigger': a list of list of [start idx, end idx+1, event type, score],
+           'entities': a list of list of [start idx, end idx+1, entity type, score],
+           'roles': a list of list of [event idx, entity idx, role, score]}
+  '''
+  lemmatizer = WordNetLemmatizer()
+  data_files = os.path.listdir(data_dir)
+  documents = {}
+  mentions = []
+  for data_file in data_files:
+    doc_id = None
+    tokens = []
+    start_sent = 0
+    with open(data_file, 'r') as f:
+      for line in f:
+        sent_dict = json.loads(line)
+        if not doc_id:
+          doc_id = sent_dict['doc_id']
+        sent_idx = int(sent_dict['sent_id'].split('-')[-1])
+        postags = [t[1] for t in nltk.pos_tag(sent_dict['tokens'], tagset='universal')]
+        tokens.extend([[sent_idx, start_sent+i, token, tag]\
+                      for i, (token, tag) in enumerate(zip(sent_dict['tokens'], postags)])
+        graph = sent_dict['graph']
+        triggers_info = graph['triggers']
+        entities_info = graph['entities']
+        roles_info = graph['roles']
+        
+        for trigger_idx, trigger in enumerate(triggers_info):
+          trigger_tokens = sent_dict['tokens'][trigger[0]:trigger[1]]
+          mention = {'doc_id': doc_id,
+                     'tokens': trigger_tokens,
+                     'tokens_ids': list(range(trigger[0], trigger[1])),
+                     'event_type': trigger[2],
+                     'arguments': [],
+                     'cluster_id': 0}
+          pos_abbrev = postags[trigger[1]-1][0].lower() if postags[trigger[1]-1] in ['NOUN', 'VERB', 'ADJ'] else 'n'   
+          head_lemma = lemmatizer.lemmatize(trigger_tokens[-1], pos=pos_abbrev) 
+          mention['head_lemma'] = head_lemma
+          for role in roles_info:
+            if role[0] == trigger_idx:
+              entity = entities_info[role[1]]
+              mention['arguments'].append({'start': entity[0],
+                                           'end': entity[1]-1,
+                                           'role': role[2]})
+          mentions.append(mention)
+      documents[doc_id] = tokens
+  json.dump(documents, open(f'{out_prefix}.json', 'w'), indent=2)
+  json.dump(mentions, open(f'{out_prefix}_events.json', 'w'), indent=2)
+
+def get_mention_doc_m2e2(data_json, out_prefix, inclusive=False):
   '''
   :param data_json: str of filename of the meta info file storing a list of dicts with keys:
       sentence_id: str, file prefix of the image for the caption
@@ -345,52 +399,7 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_fi
   np.savez(f'{out_prefix}_argument_labels.npz', **argument_labels)
   json.dump(entity_frequency, open(f'{out_prefix}_entity_frequency.npz', 'w'), indent=4, sort_keys=True)
   json.dump(event_frequency, open(f'{out_prefix}_event_frequency.json', 'w'), indent=4, sort_keys=True)
-
-def visualize_features(embed_file,
-                       label_file,
-                       ontology_file,
-                       freq_file,
-                       label_type='event',
-                       out_prefix='tsne',
-                       n_class=10):
-  """ Visualize the embeddings with TSNE """
-  plt.rc('xtick', labelsize=15)
-  plt.rc('ytick', labelsize=15)
-  plt.rc('axes', labelsize=20)
-  plt.rc('figure', titlesize=30)
-  plt.rc('font', size=20)
-
-  if not os.path.exists(f'{out_prefix}.csv'):
-    ontology = json.load(open(ontology_file))
-    label_types = ontology[label_type]
-      
-    feat_npz = np.load(embed_file)
-    feats = np.concatenate([feat_npz[k] for k in sorted(feat_npz, key=lambda x:int(x.split('_')[-1]))]) # XXX
-    label_npz = np.load(label_file)
-    labels = [label_types[y] for k in sorted(label_npz, key=lambda x:int(x.split('_')[-1]))
-              for y in np.argmax(label_npz[k], axis=1)]
-    freq = json.load(open(freq_file))
-
-    top_types = [label_types[int(k)] for k in sorted(freq, key=lambda x:freq[x], reverse=True)[:n_class]]
-    X = TSNE(n_components=2).fit_transform(feats)
-    select_idxs = [i for i, y in enumerate(labels) if str(y) in top_types]
-
-    X = X[select_idxs]
-    y = [labels[i] for i in select_idxs]
-    df = pd.DataFrame({'t-SNE dim 0': X[:, 0], 
-                       't-SNE dim 1': X[:, 1],
-                       'Event type': y})
-    df.to_csv(out_prefix+'.csv')
-  else:
-    df = pd.read_csv(f'{out_prefix}.csv')
-
-  fig, ax = plt.subplots(figsize=(10, 10))
-  sns.scatterplot(data=df, x='t-SNE dim 0', y='t-SNE dim 1', 
-                  hue='Event type', style='Event type',
-                  palette=sns.color_palette('husl', 10))
-  plt.savefig(out_prefix+'.png')
-  plt.close()
-  
+ 
 def extract_image_embeddings(data_dir, csv_dir, mapping_file, out_prefix, image_ids=None):
   # Create a mapping from Youtube id to short description
   mapping_dict = json.load(open(mapping_file))
@@ -608,4 +617,3 @@ if __name__ == '__main__':
     freq_file = f'{out_prefix}_event_frequency.json'
     ontology_file = os.path.join(data_dir, '../ontology.json')
     visualize_features(embed_file, label_file, ontology_file, freq_file, out_prefix=f'{out_prefix}_tsne')
-  
