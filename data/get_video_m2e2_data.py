@@ -4,6 +4,7 @@ import numpy as np
 import codecs
 import os
 import collections
+import nltk
 from nltk.stem import WordNetLemmatizer
 from copy import deepcopy
 from sklearn.decomposition import PCA
@@ -16,8 +17,10 @@ import pandas as pd
 np.random.seed(2)
 
 PUNCT = [',', '.', '\'', '\"', ':', ';', '?', '!', '<', '>', '~', '%', '$', '|', '/', '@', '#', '^', '*']
-def get_mention_doc_oneie(data_dir, out_prefix): # TODO Deal with ASR transcripts and OneIE results
+def get_mention_doc_oneie(data_dir, out_prefix):
   '''
+  Deal with ASR transcripts and OneIE results.
+  
   :param data_dir: str of directory of text files with each line in each file containing a dict of format
       doc_id: str,
       sent_id: [doc_id]-[sentence idx],
@@ -28,32 +31,35 @@ def get_mention_doc_oneie(data_dir, out_prefix): # TODO Deal with ASR transcript
            'roles': a list of list of [event idx, entity idx, role, score]}
   '''
   lemmatizer = WordNetLemmatizer()
-  data_files = os.path.listdir(data_dir)
+  data_files = os.listdir(data_dir)
   documents = {}
   mentions = []
-  for data_file in data_files:
+  for data_file in data_files: # XXX
+    print(data_file)
     doc_id = None
     tokens = []
+    cur_mentions = []
     start_sent = 0
-    with open(data_file, 'r') as f:
+    with open(os.path.join(data_dir, data_file), 'r') as f:
       for line in f:
         sent_dict = json.loads(line)
+        graph = sent_dict['graph']
+        triggers_info = graph['triggers']
+        entities_info = graph['entities']
+        roles_info = graph['roles']
+
         if not doc_id:
           doc_id = sent_dict['doc_id']
         sent_idx = int(sent_dict['sent_id'].split('-')[-1])
         postags = [t[1] for t in nltk.pos_tag(sent_dict['tokens'], tagset='universal')]
         tokens.extend([[sent_idx, start_sent+i, token, tag]\
-                      for i, (token, tag) in enumerate(zip(sent_dict['tokens'], postags)])
-        graph = sent_dict['graph']
-        triggers_info = graph['triggers']
-        entities_info = graph['entities']
-        roles_info = graph['roles']
+                      for i, (token, tag) in enumerate(zip(sent_dict['tokens'], postags))])
         
         for trigger_idx, trigger in enumerate(triggers_info):
           trigger_tokens = sent_dict['tokens'][trigger[0]:trigger[1]]
           mention = {'doc_id': doc_id,
-                     'tokens': trigger_tokens,
-                     'tokens_ids': list(range(trigger[0], trigger[1])),
+                     'tokens': ' '.join(trigger_tokens),
+                     'tokens_ids': list(range(start_sent+trigger[0], start_sent+trigger[1])),
                      'event_type': trigger[2],
                      'arguments': [],
                      'cluster_id': 0}
@@ -63,11 +69,18 @@ def get_mention_doc_oneie(data_dir, out_prefix): # TODO Deal with ASR transcript
           for role in roles_info:
             if role[0] == trigger_idx:
               entity = entities_info[role[1]]
-              mention['arguments'].append({'start': entity[0],
-                                           'end': entity[1]-1,
+              mention['arguments'].append({'start': start_sent+entity[0],
+                                           'end': start_sent+entity[1]-1,
+                                           'token': ' '.join(sent_dict['tokens'][entity[0]:entity[1]]),
                                            'role': role[2]})
-          mentions.append(mention)
+          cur_mentions.append(mention)
+        start_sent += len(sent_dict['tokens'])
+
+    if len(cur_mentions) > 0:
+      mentions.extend(cur_mentions)
       documents[doc_id] = tokens
+  
+  print(f'Number of documents: {len(documents)}')
   json.dump(documents, open(f'{out_prefix}.json', 'w'), indent=2)
   json.dump(mentions, open(f'{out_prefix}_events.json', 'w'), indent=2)
 
@@ -125,7 +138,6 @@ def get_mention_doc_m2e2(data_json, out_prefix, inclusive=False):
   cur_id = ''
   for sen_dict in sen_dicts: # XXX
     doc_id = sen_dict['image']
-    # XXX '0_{}'.format(sen_dict['image']) # Prepend a dummy topic id to run on coref
     sent_id = sen_dict['sentence_id']
     tokens = sen_dict['words']
     entity_mentions = sen_dict['golden-entity-mentions']
@@ -159,7 +171,6 @@ def get_mention_doc_m2e2(data_json, out_prefix, inclusive=False):
 
         for mention in coreference['events'][cluster_id]:
           event2coref[mention[1]] = event_cluster2id[cluster_id]
-          print('doc id: {}, mention id: {}, event cluster id: {}, event cluster idx: {}'.format(doc_id, mention[1], cluster_id, event2coref[mention[1]])) # XXX
 
       for mention_id in event_mention_ids:
         if not mention_id in event2coref:
@@ -174,7 +185,6 @@ def get_mention_doc_m2e2(data_json, out_prefix, inclusive=False):
 
         for mention in coreference['entities'][cluster_id]:
           entity2coref[mention[1]] = entity_cluster2id[cluster_id]
-          print('doc id: {}, mention id: {}, entity cluster id: {}, entity cluster idx: {}'.format(doc_id, mention[1], cluster_id, entity2coref[mention[1]])) # XXX
       
       for mention_id in entity_mention_ids:
         if not mention_id in entity2coref:
@@ -400,25 +410,32 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_fi
   json.dump(entity_frequency, open(f'{out_prefix}_entity_frequency.npz', 'w'), indent=4, sort_keys=True)
   json.dump(event_frequency, open(f'{out_prefix}_event_frequency.json', 'w'), indent=4, sort_keys=True)
  
-def extract_image_embeddings(data_dir, csv_dir, mapping_file, out_prefix, image_ids=None):
+def extract_visual_embeddings(csv_dirs, out_prefix, mapping_file=None, image_ids=None):
   # Create a mapping from Youtube id to short description
-  mapping_dict = json.load(open(mapping_file))
-  id2desc = {v['id'].split('v=')[-1]:k for k, v in mapping_dict.items()}
-  doc_ids = sorted(id2desc)
-  is_csv_used = {fn:0 for fn in os.listdir(csv_dir)}
+  id2desc = None
+  if mapping_file:
+    mapping_dict = json.load(open(mapping_file))
+    id2desc = {v['id'].split('v=')[-1]:k for k, v in mapping_dict.items()}
+    doc_ids = sorted(id2desc)
+  else:
+    doc_ids = [os.path.join(csv_dir, '.'.join(fn.split('.')[:-1])) for csv_dir in csv_dirs for fn in os.listdir(csv_dir)] 
 
   img_feats = {}
   for idx, doc_id in enumerate(doc_ids): # XXX
     print(idx, doc_id)
     # Convert the .csv file to numpy array 
-    desc = id2desc[doc_id]
-    for punct in PUNCT:
-      desc = desc.replace(punct, '')
-    csv_file = os.path.join(csv_dir, desc+'.csv')
+    if id2desc is not None:
+      desc = id2desc[doc_id]
+      for punct in PUNCT:
+        desc = desc.replace(punct, '')
+      csv_file = os.path.join(csv_dirs[0], desc+'.csv')
+    else:
+      csv_file = os.path.join(doc_id+'.csv')
+      doc_id = doc_id.split('/')[-1].replace(' ', '_') # Replace space with '_' to be consistent with OneIE 
+
     if not os.path.exists(csv_file):
       print('File {} not found'.format(csv_file))
       continue
-    is_csv_used[desc+'.csv'] = 1 
 
     img_feat = []
     skip_header = 1
@@ -454,50 +471,6 @@ def train_test_split(feat_file, test_id_file, mapping_file, out_prefix): # TODO 
   np.savez('{}_train.npz'.format(out_prefix), **train_feats)
   np.savez('{}_test.npz'.format(out_prefix), **test_feats)
 
-def compute_bleu_similarity(doc_json, mapping_file, out_prefix):
-  mapping_dict = json.load(open(mapping_file))
-  documents = json.load(open(doc_json))
-  # Extract mapping from youtube id to short description
-  id2shortdesc = {v['id'].split('v=')[-1]:k for k, v in mapping_dict.items()}
-
-  # Extract mapping from youtube id to long description
-  id2longdesc = {k:[token[2] for token in documents[k]] for k in id2shortdesc if k in documents}
-
-  # Extract a list of document ids
-  doc_ids = sorted(documents)
-  doc_num = len(doc_ids)
-  bleu_scores = np.zeros((doc_num, doc_num))
-  out_f = open('{}_bleu.txt'.format(out_prefix), 'w')
-
-  # Iterate through every pair of documents  
-  for i, first_id in enumerate(doc_ids):
-    for j, second_id in enumerate(doc_ids):
-      # Extract the short and long descriptions of the pair 
-      first_short_desc = id2shortdesc[first_id].replace('- BBC News', '').split()
-      second_short_desc = id2shortdesc[second_id].replace('- BBC News', '').split()
-      first_long_desc = id2longdesc[first_id]
-      second_long_desc = id2longdesc[second_id]
-
-      # Compute BLEU score
-      # bleu_scores[i, j] = round(bleu_score.sentence_bleu([first_long_desc], 
-      #                                              second_long_desc, 
-      #                                              weights=[0.5, 0.5]), 4) 
-      if j > i:
-        bleu_score_short = round(bleu_score.sentence_bleu([first_short_desc], 
-                                                    second_short_desc,
-                                                    weights=[0.5, 0.5]), 4)
-        prec = round(precision(set(first_short_desc), set(second_short_desc)), 4)
-        rec = round(recall(set(first_short_desc), set(second_short_desc)), 4)
-        f1 = round(f_measure(set(first_short_desc), set(second_short_desc)), 4)
-        if bleu_score_short > 0:
-          print(first_id, second_id, bleu_score_short, f1)
-          out_f.write('{}, {}: BLEU score={:.2f}, BLEU score (short)={:.2f}\n'.format(first_id, second_id, bleu_scores[i, j], bleu_score_short))
-          out_f.write('{}, {}: Precision (short)={:.2f}, Recall (short)={:.2f}, F1 (short)={:.2f}\n'.format(first_id, second_id, prec, rec, f1))
-          out_f.write('{}: {}\n'.format(first_id, first_short_desc))
-          out_f.write('{}: {}\n\n'.format(second_id, second_short_desc))
-
-  np.save('{}_bleu.npy'.format(out_prefix), bleu_scores)
-
 def to_fix_length(x, L, pad_val=-1):
   shape = x.shape[1:]
   if x.shape[0] < L:
@@ -529,26 +502,17 @@ if __name__ == '__main__':
     get_mention_doc(data_json, out_prefix, inclusive=False) 
     data_json = 'video_m2e2/grounding_video_m2e2_test.json'
     out_prefix = os.path.join(data_dir, 'test')
-    get_mention_doc(data_json, out_prefix, inclusive=True)
+    get_mention_doc_m2e2(data_json, out_prefix, inclusive=True)
   elif args.task == 1:
     save_gold_conll_files(out_prefix+'.json', out_prefix+'_mixed.json', os.path.join(data_dir, 'gold')) 
   elif args.task == 2:
-    data_dir = 'video_m2e2/mentions'
+    data_dir = 'video_m2e2'
     csv_dir = os.path.join(data_dir, 'mmaction_feat')
     out_prefix = '{}/{}'.format(data_dir, csv_dir.split('/')[-1])
-    extract_image_embeddings(data_dir, csv_dir, mapping_file, out_prefix)
+    extract_visual_embeddings([csv_dir], out_prefix, mapping_file=mapping_file)
   elif args.task == 3:
     train_test_split('{}/{}.npz'.format(data_dir, csv_dir.split('/')[-1]), os.path.join(data_dir, 'test.json'), mapping_file, out_prefix)
   elif args.task == 4:
-    print('Extract BLEU scores between training document pairs')
-    doc_json = '{}/train.json'.format(data_dir)
-    out_prefix = '{}/train'.format(data_dir)
-    compute_bleu_similarity(doc_json, mapping_file, out_prefix)
-    print('Extract BLEU scores for test document pairs')
-    doc_json = '{}/test.json'.format(data_dir)
-    out_prefix = '{}/test'.format(data_dir)
-    compute_bleu_similarity(doc_json, mapping_file, out_prefix)
-  elif args.task == 5:
     # Xudong's split
     out_dir = 'video_m2e2_old/mentions/'
     if not os.path.exists(out_dir):
@@ -597,7 +561,7 @@ if __name__ == '__main__':
     json.dump(mixed_mentions_test, open(os.path.join(out_dir, 'test_mixed.json'), 'w'), indent=2)
     json.dump(entity_mentions_test, open(os.path.join(out_dir, 'test_entities.json'), 'w'), indent=2)
     json.dump(event_mentions_test, open(os.path.join(out_dir, 'test_events.json'), 'w'), indent=2)
-  elif args.task == 6:
+  elif args.task == 5:
     annotation_file = os.path.join(data_dir, '../master.json')
     duration_file = os.path.join(data_dir, '../anet_anno.json')
     if not os.path.exists(duration_file):
@@ -607,13 +571,30 @@ if __name__ == '__main__':
       test_dur_dict = json.load(open(test_duration_file))
       train_dur_dict.update(test_dur_dict)
       json.dump(train_dur_dict, open(duration_file, 'w'), indent=2)
-    
     out_prefix = os.path.join(data_dir, 'train_mmaction_event_feat')
     extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_file, annotation_file, out_prefix=out_prefix)
-  elif args.task == 7:
+  elif args.task == 6:
     out_prefix = os.path.join(data_dir, 'train_mmaction_event_feat')
     embed_file = f'{out_prefix}.npz'
     label_file = f'{out_prefix}_labels.npz'
     freq_file = f'{out_prefix}_event_frequency.json'
     ontology_file = os.path.join(data_dir, '../ontology.json')
     visualize_features(embed_file, label_file, ontology_file, freq_file, out_prefix=f'{out_prefix}_tsne')
+  elif args.task == 7:
+    anno_dir = 'video_m2e2/json/'
+    out_prefix = os.path.join(data_dir, 'train_unlabeled')
+    get_mention_doc_oneie(anno_dir, out_prefix)
+  elif args.task == 8:
+    anno_dir = 'video_m2e2/json_asr/'
+    out_prefix = os.path.join(data_dir, 'train_asr')
+    get_mention_doc_oneie(anno_dir, out_prefix)
+  elif args.task == 9: # Unlabeled video feature extraction
+    data_dir = 'video_m2e2'
+    csv_dir = os.path.join(data_dir, 'output_feat')
+    out_prefix = os.path.join(data_dir, 'mentions/train_unlabeled_mmaction_feat')
+    extract_visual_embeddings([csv_dir], out_prefix=out_prefix)
+  elif args.task == 10:
+    data_dir = 'video_m2e2'
+    csv_dirs = [os.path.join(data_dir, 'mmaction_feat'), os.path.join(data_dir, 'output_feat')]
+    out_prefix = os.path.join(data_dir, 'mentions/train_asr_mmaction_feat')
+    extract_visual_embeddings(csv_dirs, out_prefix=out_prefix)

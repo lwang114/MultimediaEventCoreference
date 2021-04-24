@@ -90,8 +90,10 @@ def extract_mention_glove_embeddings(config, split, glove_file, dimension=300, m
     vocab = {'$$$UNK$$$': 0}
     label_dicts = dict()
     for m in mentions:
-      # XXX token = m['head_lemma']
-      token = m['tokens']
+      if 'head_lemma' in m:
+        token = m['head_lemma']
+      else:
+        token = m['tokens']
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
       if not m['doc_id'] in label_dicts:
         label_dicts[m['doc_id']] = dict()
@@ -243,6 +245,8 @@ def extract_mention_bert_embeddings(config, split, mention_type='events', out_pr
       event_embs[embed_id] = np.stack(event_embs[embed_id])
     np.savez(f"{out_prefix}_{mention_type}_{config['bert_model']}.npz", **event_embs)
     json.dump(labels, open(f"{out_prefix}_{mention_type}_{config['bert_model']}_labels.json", 'w'), indent=2) 
+
+def extract_mention_cluster_embeddings(mention_embed_file): # TODO
 
 def extract_type_embeddings(type_to_idx, glove_file):
     vocab_embs = sorted(type_to_idx, key=lambda x:type_to_idx[x])
