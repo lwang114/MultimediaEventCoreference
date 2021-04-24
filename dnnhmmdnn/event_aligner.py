@@ -21,7 +21,7 @@ from negative_square import NegativeSquare
 from evaluator import Evaluation, CoNLLEvaluation
 
 logger = logging.getLogger(__name__)
-EPS = 1e-15
+EPS = 1e-100
 class FullyContinuousMixtureAligner(object):
   """An alignment model based on Brown et. al., 1993. capable of modeling continuous bilingual sentences"""
   def __init__(self, source_features_train, target_features_train, configs):
@@ -120,8 +120,8 @@ class FullyContinuousMixtureAligner(object):
     return np.mean(log_probs)
 
   def update_counts_i(self, i, src_feat, trg_feat):
-    src_sent = self.src_feats[self.src_vec_ids_train[i]]
-    # XXX np.exp(self.src_model.log_prob_z(i, normalize=False))
+    src_sent = np.exp(self.src_model.log_prob_z(i, normalize=False))
+    # XXX self.src_feats[self.src_vec_ids_train[i]] 
     trg_sent = trg_feat
 
     V_src = to_one_hot(src_sent, self.Ks)
@@ -158,7 +158,7 @@ class FullyContinuousMixtureAligner(object):
   def trainEM(self, n_iter, out_file):
     for i_iter in range(n_iter):
       log_prob = self.update_counts()
-      # self.update_components() # XXX
+      self.update_components() # XXX
       print('Iteration {}, log likelihood={}'.format(i_iter, log_prob))
       logger.info('Iteration {}, log likelihood={}'.format(i_iter, log_prob))
       if (i_iter + 1) % 5 == 0:
@@ -182,20 +182,20 @@ class FullyContinuousMixtureAligner(object):
                   alignment_type='text'): 
     alignments = []
     scores = []
+    P_a_norm = []
     for src_feat, trg_feat in zip(source_feats_test, target_feats_test):
       trg_sent = trg_feat
-      src_sent = src_feat
-      # XXX src_sent = [np.exp(self.src_model.log_prob_z_given_X(src_feat[i], normalize=False))\
-      #            for i in range(len(src_feat))]
+      # src_sent = src_feat
+      src_sent = [np.exp(self.src_model.log_prob_z_given_X(src_feat[i], normalize=False))\
+                  for i in range(len(src_feat))]
 
       V_trg = to_one_hot(trg_sent, self.Kt)
       V_src = to_one_hot(src_sent, self.Ks)
-      null_prob = V_src.mean() * np.ones((V_trg.shape[0], 1))
+      null_prob = V_src.mean(axis=0, keepdims=True) # V_src.mean() * np.ones((V_trg.shape[0], 1))
       P_a = V_trg @ self.P_ts @ V_src.T
 
-
       if alignment_type.split('_')[0] == 'text':
-        P_a = np.concatenate([null_prob, P_a], axis=1)
+        P_a = np.concatenate([null_prob, P_a], axis=0)
         scores.append(np.prod(np.max(P_a, axis=0)))
         alignments.append(np.argmax(P_a, axis=1)) 
       elif alignment_type == 'image':
@@ -204,6 +204,7 @@ class FullyContinuousMixtureAligner(object):
       else:
         raise ValueError('Alignment type not implemented')
 
+      P_a_norm.append(P_a / P_a.sum(axis=-1, keepdims=True))
     return alignments, np.asarray(scores)
 
   def align(self, 
@@ -227,9 +228,10 @@ class FullyContinuousMixtureAligner(object):
 
     n_src_vocab = len(src_vocab)
     n_trg_vocab = len(trg_vocab)
-    alignments, _ = self.align_sents(source_feats,
-                                     target_feats,
-                                     alignment_type=alignment_type) 
+    alignments, _, P_a_norm = self.align_sents(source_feats,
+                                               target_feats,
+                                               alignment_type=alignment_type) 
+
     if alignment_type == 'image':
       confusion = np.zeros((n_src_vocab, n_trg_vocab))
     elif alignment_type == 'text':
@@ -246,31 +248,62 @@ class FullyContinuousMixtureAligner(object):
           confusion[src_vocab[y], trg_vocab[y_pred]] += 1
       elif alignment_type == 'text':
         for trg_idx, y in enumerate(trg_label):
-          if trg_idx == 0:
-            y_pred = '###NULL###'
-          y_pred = src_label[alignment[trg_idx]-1]
+          y_pred = src_label[alignment[trg_idx+1]]
           confusion[src_vocab[y_pred], trg_vocab[y]] += 1
 
-    fig, ax = plt.subplots(figsize=(30, 10))
-    si = np.arange(n_src_vocab+1)
-    ti = np.arange(n_trg_vocab+1)
-    T, S = np.meshgrid(ti, si)
-    plt.pcolormesh(T, S, confusion)
-    for i in range(n_src_vocab):
-      for j in range(n_trg_vocab):
-        plt.text(j, i, confusion[i, j], color='orange')
-    ax.set_xticks(ti[1:]-0.5)
-    ax.set_yticks(si[1:]-0.5)
-    ax.set_xticklabels(sorted(trg_vocab, key=lambda x:trg_vocab[x]))
-    ax.set_yticklabels(sorted(src_vocab, key=lambda x:src_vocab[x]))
-    plt.xticks(rotation=45)
-    plt.colorbar()
-    plt.savefig(out_prefix+'_confusion.png')
-    plt.close()
-    json.dump({'confusion': confusion.tolist(),
-               'src_vocab': sorted(src_vocab, key=lambda x:src_vocab[x]),
-               'trg_vocab': sorted(trg_vocab, key=lambda x:trg_vocab[x])}, 
-              open(out_prefix+'_confusion.json', 'w'), indent=2)
+    if len(source_labels) > 0:
+      fig, ax = plt.subplots(figsize=(30, 10))
+      si = np.arange(n_src_vocab+1)
+      ti = np.arange(n_trg_vocab+1)
+      T, S = np.meshgrid(ti, si)
+      plt.pcolormesh(T, S, confusion)
+      for i in range(n_src_vocab):
+        for j in range(n_trg_vocab):
+          plt.text(j, i, confusion[i, j], color='orange')
+      ax.set_xticks(ti[1:]-0.5)
+      ax.set_yticks(si[1:]-0.5)
+      ax.set_xticklabels(sorted(trg_vocab, key=lambda x:trg_vocab[x]))
+      ax.set_yticklabels(sorted(src_vocab, key=lambda x:src_vocab[x]))
+      plt.xticks(rotation=45)
+      plt.colorbar()
+      plt.savefig(out_prefix+'_confusion.png')
+      plt.close()
+      json.dump({'confusion': confusion.tolist(),
+                 'src_vocab': sorted(src_vocab, key=lambda x:src_vocab[x]),
+                 'trg_vocab': sorted(trg_vocab, key=lambda x:trg_vocab[x])}, 
+                open(out_prefix+'_confusion.json', 'w'), indent=2)
+    return P_a_norm
+
+  def predict_antecedent(self, P_a):
+    span_num = P_a.shape[0] - 1
+    antecedents = -1 * np.ones(span_num, dtype=np.int64)
+    
+    # antecedent prediction
+    for idx2 in range(1, span_num+1):
+      distances = []
+      for idx1 in range(idx2):
+        distances.append(kl_divergence(P_a[idx2], P_a[idx1]))
+      antecedents[idx2-1] = np.argmin(distances)-1
+    
+    return antecedents                
+
+  def predict_pairwise(self, P_a):
+    span_num = P_a.shape[0] - 1
+    first, second = zip(*list(itertools.combinations(range(n), 2)))
+    first = list(first)
+    second = list(second)
+    labels = []
+    for first_idx in first:
+      for second_idx in second:
+        kl1 = self.kl_divergence(P_a[first_idx+1], P_a[second_idx+1])
+        kl2 = self.kl_divergence(P_a[second_idx+1], P_a[first_idx+1])
+        kl_null1 = self.kl_divergence(P_a[first_idx+1], P_a[0])
+        kl_null2 = self.kl_divergence(P_a[second_idx+1], P_a[0])
+        if kl1 + kl2 > kl_null1 + kl_null2:
+          labels.append(1)
+        else:
+          labels.append(0)
+    return labels
 
   def retrieve(self, 
                source_features_test, 
@@ -287,7 +320,7 @@ class FullyContinuousMixtureAligner(object):
         src_feats = [source_features_test[i_utt] for _ in range(n)] 
         trg_feats = [target_features_test[j_utt] for j_utt in range(n)]
        
-      _, scores[i_utt] = self.align_sents(src_feats, trg_feats, alignment_type='image') 
+      _, scores[i_utt], _ = self.align_sents(src_feats, trg_feats, alignment_type='image') 
 
     I_kbest = np.argsort(-scores, axis=1)[:, :kbest]
     P_kbest = np.argsort(-scores, axis=0)[:kbest]
@@ -370,6 +403,8 @@ class FullyContinuousMixtureAligner(object):
     with open(out_file, 'w') as f:
       json.dump(align_dicts, f, indent=4, sort_keys=True)
 
+def kl_divergence(p, q):
+  return np.sum(p * (np.log(np.maximum(p, EPS)) - np.log(np.maximum(q, EPS))))
 
 def to_one_hot(sent, K):
   sent = np.asarray(sent)
@@ -402,7 +437,7 @@ def to_antecedents(labels):
         break
   return antecedents
 
-def load_data(config):
+def load_data(config): # TODO Change filenames # TODO Match filenames between ASR and visual feats
   """
   Returns:
       src_feats_train: a list of arrays of shape (src sent length, src dimension)
@@ -410,51 +445,53 @@ def load_data(config):
       src_feats_test: a list of arrays of shape (src sent length, src dimension)
       trg_feats_test: a list of arrays of shape (trg sent length, trg dimension)
   """
-  event_mentions_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train_events_with_linguistic_features.json'), 'r', 'utf-8'))
-  doc_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train.json')))
-  event_mentions_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test_events_with_linguistic_features.json'), 'r', 'utf-8'))
-  doc_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test.json')))
-
-  visual_feats = np.load(os.path.join(config['data_folder'], 'train_mmaction_event_feat_labels.npz')) # XXX
-  visual_labels = np.load(os.path.join(config['data_folder'], 'train_mmaction_event_feat_labels.npz'))
+  event_mentions = dict()
+  documents = dict()
+  vocab = dict()
+  vocab_freq = dict()
   visual_class_dict = json.load(open(os.path.join(config['data_folder'], '../ontology.json')))
   visual_classes = visual_class_dict['event']
-  doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in visual_feats}
+  visual_labels = None # TODO
+  doc_to_feat = dict()
+  for split in config['splits']:
+    for dataset in config['splits'][split]:
+      event_mentions[dataset] = json.load(codecs.open(os.path.join(config['data_folder'], f'{dataset}_events.json'), 'r', 'utf-8'))
+      documents[dataset] = json.load(codecs.open(os.path.join(config['data_folder'], f'{dataset}.json')))
 
-  vocab = dict()
-  vocab_freq = {}
-  label_dict_train = {}
-  label_dict_test = {}
-  for m in event_mentions_train + event_mentions_test:
-    trigger = m['head_lemma']
-    if not trigger in vocab:
-      vocab[trigger] = len(vocab)
-      vocab_freq[trigger] = 1
-    else:
-      vocab_freq[trigger] += 1
+      for m in event_mentions[dataset]:
+        trigger = m['head_lemma']
+        if not trigger in vocab:
+          vocab[trigger] = len(vocab)
+          vocab_freq[trigger] = 1
+        else:
+          vocab_freq[trigger] += 1
+      visual_feats = np.load(os.path.join(config['data_folder'], f'{dataset}_mmaction_feat.npz')) # XXX
+      doc_to_feat.update({'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in visual_feats})
+            
   json.dump(vocab_freq, open('vocab_freq.json', 'w'), indent=2)
-  vocab_size = len(vocab)
+  vocab_size = len(vocab) 
 
-  for m in event_mentions_train:
-    if m['doc_id'] in doc_to_feat:
-      if not m['doc_id'] in label_dict_train:
-        label_dict_train[m['doc_id']] = {}
-      token = m['head_lemma']
-      label_dict_train[m['doc_id']][(min(m['tokens_ids']), max(m['tokens_ids']))] = {'token_id': vocab[token],
-                                                                                     'cluster_id': m['cluster_id'], 
-                                                                                     'type': m['event_type']} 
-
-  for m in event_mentions_test:
-    if m['doc_id'] in doc_to_feat:
-      if not m['doc_id'] in label_dict_test:
-        label_dict_test[m['doc_id']] = {}
-      token = m['head_lemma']
-      label_dict_test[m['doc_id']][(min(m['tokens_ids']), max(m['tokens_ids']))] = {'token_id': vocab[token],
-                                                                                    'cluster_id': m['cluster_id'],
-                                                                                    'type': m['event_type']}
+  label_dict = dict()
+  train_num = 0
+  test_num = 0
+  for split in config['splits']:
+    for dataset in config['splits'][split]:
+      label_dict[dataset] = dict()
+      for m in event_mentions[dataset]:
+        if m['doc_id'] in doc_to_feat:
+          if not m['doc_id'] in label_dict_train:
+            label_dict_train[m['doc_id']] = {}
+          token = m['head_lemma']
+          label_dict[dataset][m['doc_id']][(min(m['tokens_ids']), max(m['tokens_ids']))] = {'token_id': vocab[token],
+                                                                                            'cluster_id': m['cluster_id'], 
+                                                                                            'type': m['event_type']} 
+      if split == 'train':
+        train_num += len(label_dict[dataset])
+      else:
+        test_num += len(label_dict[dataset]) 
   print(f'Vocab size: {vocab_size}')
-  print(f'Number of training examples: {len(label_dict_train)}')
-  print(f'Number of test examples: {len(label_dict_test)}')
+  print(f'Number of training examples: {train_num}')
+  print(f'Number of test examples: {test_num}')
 
   src_feats_train = []
   trg_feats_train = []
@@ -470,36 +507,40 @@ def load_data(config):
   spans_test = []
   cluster_ids_test = []
   tokens_test = []
-  for feat_idx, doc_id in enumerate(sorted(label_dict_train)): # XXX
-    feat_id = doc_to_feat[doc_id]
-    src_feats_train.append(visual_feats[feat_id])
 
-    spans = sorted(label_dict_train[doc_id])
-    trg_sent = [label_dict_train[doc_id][span]['token_id'] for span in spans]
-    cluster_ids = [label_dict_train[doc_id][span]['cluster_id'] for span in spans]
+  for dataset in config['splits']['train']: 
+    for feat_idx, doc_id in enumerate(sorted(label_dict[dataset])): # XXX
+      feat_id = doc_to_feat[doc_id]
+      src_feats_train.append(visual_feats[feat_id])
 
-    spans_train.append(spans)
-    trg_feats_train.append(to_one_hot(trg_sent, vocab_size))
-    doc_ids_train.append(doc_id)
-    cluster_ids_train.append(np.asarray(cluster_ids))
-    tokens_train.append([t[2] for t in doc_train[doc_id]])
+      spans = sorted(label_dict_train[doc_id])
+      trg_sent = [label_dict_train[doc_id][span]['token_id'] for span in spans]
+      cluster_ids = [label_dict_train[doc_id][span]['cluster_id'] for span in spans]
 
-  for feat_idx, doc_id in enumerate(sorted(label_dict_test)): # XXX
-    feat_id = doc_to_feat[doc_id]
-    src_feats_test.append(visual_feats[feat_id])
-    visual_labels_int = np.argmax(visual_labels[feat_id], axis=-1)
-    src_labels_test.append([visual_classes[k] for k in visual_labels_int])
+      spans_train.append(spans)
+      trg_feats_train.append(to_one_hot(trg_sent, vocab_size))
+      doc_ids_train.append(doc_id)
+      cluster_ids_train.append(np.asarray(cluster_ids))
+      tokens_train.append([t[2] for t in doc_train[doc_id]])
 
-    spans = sorted(label_dict_test[doc_id])
-    trg_sent = [label_dict_test[doc_id][span]['token_id'] for span in spans]
-    trg_labels = [label_dict_test[doc_id][span]['type'] for span in spans]
-    cluster_ids = [label_dict_test[doc_id][span]['cluster_id'] for span in spans]
-    spans_test.append(spans)
-    trg_feats_test.append(to_one_hot(trg_sent, vocab_size))
-    trg_labels_test.append(trg_labels)
-    doc_ids_test.append(doc_id)
-    cluster_ids_test.append(np.asarray(cluster_ids))
-    tokens_test.append([t[2] for t in doc_test[doc_id]])
+  for dataset in config['splits']['test']:
+    for feat_idx, doc_id in enumerate(sorted(label_dict_test)): # XXX
+      feat_id = doc_to_feat[doc_id]
+      src_feats_test.append(visual_feats[feat_id])
+      if visual_labels is not None: # TODO Creat visual label for the whole video
+        visual_labels_int = np.argmax(visual_labels[feat_id], axis=-1)
+        src_labels_test.append([visual_classes[k] for k in visual_labels_int])
+
+      spans = sorted(label_dict_test[doc_id])
+      trg_sent = [label_dict_test[doc_id][span]['token_id'] for span in spans]
+      trg_labels = [label_dict_test[doc_id][span]['type'] for span in spans]
+      cluster_ids = [label_dict_test[doc_id][span]['cluster_id'] for span in spans]
+      spans_test.append(spans)
+      trg_feats_test.append(to_one_hot(trg_sent, vocab_size))
+      trg_labels_test.append(trg_labels)
+      doc_ids_test.append(doc_id)
+      cluster_ids_test.append(np.asarray(cluster_ids))
+      tokens_test.append([t[2] for t in doc_test[doc_id]])
 
   return src_feats_train, trg_feats_train,\
          src_feats_test, trg_feats_test,\
@@ -526,7 +567,7 @@ if __name__ == '__main__':
   cluster_ids_train, cluster_ids_test,\
   tokens_train, tokens_test,\
   src_vocab, trg_vocab = load_data(config)
-  Ks = len(src_vocab)# 33
+  Ks = 100
   Kt = len(trg_vocab)
     
   ## Model training
@@ -535,31 +576,31 @@ if __name__ == '__main__':
                                           configs={'n_trg_vocab':Kt, 
                                                    'n_src_vocab':Ks})
   aligner.trainEM(15, os.path.join(config['model_path'], 'mixture'))  
-  aligner.align(src_feats_test,
-                trg_feats_test,
-                src_labels_test,
-                trg_labels_test,
-                out_prefix=os.path.join(config['model_path'], 
-                                        'alignment'),
-                alignment_type='text')  
+  P_a_norm = aligner.align(src_feats_test,
+                           trg_feats_test,
+                           src_labels_test,
+                           trg_labels_test,
+                           out_prefix=os.path.join(config['model_path'], 
+                                                   'alignment'),
+                           alignment_type='text')  
+  antecedents = [aligner.predict_antecedents(P_a) for P_a in P_a_norm]
 
   ## Test and evaluation
   conll_eval = CoNLLEvaluation()
-  alignments, _ = aligner.align_sents(src_feats_test, trg_feats_test)
-  pred_labels = [torch.LongTensor(to_pairwise(a)) for a in alignments if a.shape[0] > 1]
+  pred_labels = [torch.LongTensor(aligner.predict_pairwise(P_a)) for P_a in P_a_norm if P_a.shape[0] > 2]
   gold_labels = [torch.LongTensor(to_pairwise(c)) for c in cluster_ids_test if c.shape[0] > 1]
+  assert len(pred_labels) == len(gold_labels)
   pred_labels = torch.cat(pred_labels)
   gold_labels = torch.cat(gold_labels) 
   
   # Compute pairwise scores
-  pairwise_eval = Evaluation(pred_labels, gold_labels)  
+  pairwise_eval = Evaluation(pred_labels, gold_labels)
   print(f'Pairwise - Precision: {pairwise_eval.get_precision():.4f}, Recall: {pairwise_eval.get_recall():.4f}, F1: {pairwise_eval.get_f1():.4f}')
   logger.info(f'Pairwise precision: {pairwise_eval.get_precision()}, recall: {pairwise_eval.get_recall()}, F1: {pairwise_eval.get_f1()}')
   
   # Compute CoNLL scores and save readable predictions
   f_out = open(os.path.join(config['model_path'], 'prediction.readable'), 'w')
-  for doc_id, token, span, alignment, cluster_id in zip(doc_ids_test, tokens_test, spans_test, alignments, cluster_ids_test):
-    antecedent = to_antecedents(alignment)
+  for doc_id, token, span, antecedent, cluster_id in zip(doc_ids_test, tokens_test, spans_test, antecedents, cluster_ids_test):
     pred_clusters, gold_clusters = conll_eval(torch.LongTensor(span),
                                               torch.LongTensor(antecedent),
                                               torch.LongTensor(span),
