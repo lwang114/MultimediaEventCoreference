@@ -288,6 +288,7 @@ def get_mention_doc_m2e2(data_json, out_prefix, inclusive=False):
   json.dump(entities+events, codecs.open(out_prefix+'_mixed.json', 'w', 'utf-8'), indent=4, sort_keys=True)
 
 def extract_asr_sentence_features(visual_embed_file,
+                                  doc_file,
                                   event_file, 
                                   asr_file,
                                   duration_file,
@@ -302,15 +303,29 @@ def extract_asr_sentence_features(visual_embed_file,
   # dict[str, dict[int, int]] 
   segment_to_sent = dict()
   for doc_id in asr_dict:
-    if not doc_id in asr_dict:
+    if not doc_id in segment_to_sent:
       segment_to_sent[doc_id] = [] 
-    for sent_idx, sent in enumerate(asr_dict['ASR']):
-      for _ in sent.split('\n'):
+    for sent_idx, sent in enumerate(asr_dict[doc_id]['ASR']):
+      for _ in sent['text'].split('\n'):
         segment_to_sent[doc_id].append(sent_idx)
   
-  doc_dur = json.load(open(duration_file)) 
+  doc_dur = json.load(open(duration_file))
+  documents = json.load(open(doc_file)) 
   event_mentions = json.load(open(event_file))
   label_dict = dict()
+  new_documents = dict()
+  for segment_id in sorted(documents):
+    doc_id = '-'.join(segment_id.split('-')[:-1])
+    doc_id_spc = doc_id.replace('_', ' ')
+    segment_idx = int(segment_id.split('-')[-1])
+    sent_idx = segment_to_sent[doc_id_spc][segment_idx]
+    sent_id = f'{doc_id}-{sent_idx}'    
+    if not sent_id in label_dict:
+      label_dict[sent_id] = asr_dict[doc_id_spc]['ASR'][sent_idx]
+      new_documents[sent_id] = []
+    new_documents[sent_id].extend(documents[segment_id])
+  json.dump(new_documents, open(out_prefix+'.json', 'w'), indent=2)
+
   new_event_mentions = []
   for m in event_mentions:
     segment_id = m['doc_id']
@@ -318,11 +333,7 @@ def extract_asr_sentence_features(visual_embed_file,
     doc_id_spc = doc_id.replace('_', ' ')
     segment_idx = int(segment_id.split('-')[-1])
     sent_idx = segment_to_sent[doc_id_spc][segment_idx]
-    sent_id = f'{doc_id}-{sent_idx}'
-
-    if not sent_id in label_dict:
-      label_dict[sent_id] = asr_dict[doc_id_spc]['ASR'][sent_idx]
-    
+    sent_id = f'{doc_id}-{sent_idx}'    
     new_mention = deepcopy(m)
     new_mention['doc_id'] = sent_id 
     new_event_mentions.append(new_mention)    
@@ -331,7 +342,7 @@ def extract_asr_sentence_features(visual_embed_file,
   visual_embed_npz = np.load(visual_embed_file)
   doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in visual_embed_npz}
   visual_event_embeds = dict()
-  for idx, sent_id in sorted(label_dict):
+  for idx, sent_id in enumerate(sorted(label_dict)):
     doc_id = '-'.join(sent_id.split('-')[:-1])
     doc_id_spc = doc_id.replace('_', ' ')
 
@@ -339,11 +350,12 @@ def extract_asr_sentence_features(visual_embed_file,
     visual_embed = visual_embed_npz[feat_id]
     start = label_dict[sent_id]['start']
     end = start + label_dict[sent_id]['duration']
-    dur = doc_dur[doc_id_spc]
+    dur = doc_dur[doc_id_spc]['duration_second']
 
     start_frame = int(start / dur * 100)
     end_frame = int(end / dur * 100)
-    visual_event_embeds[feat_id] = visual_embed[start_frame:end_frame+1]  
+    new_feat_id = f'{sent_id}_{idx}'
+    visual_event_embeds[new_feat_id] = visual_embed[start_frame:end_frame+1]  
 
   np.savez(out_prefix+'.npz', **visual_event_embeds)
   
@@ -680,11 +692,12 @@ if __name__ == '__main__':
     extract_visual_embeddings(csv_dirs, out_prefix=out_prefix)
   elif args.task == 11:
     anno_dir = 'video_m2e2/json_asr/'
-    get_mention_doc_oneie(anno_dir, 
-                          os.path.join(data_dir, 'train_asr_segment'), 
-                          separate_sentence=True)
+    # get_mention_doc_oneie(anno_dir, 
+    #                       os.path.join(data_dir, 'train_asr_segment'), 
+    #                       separate_sentence=True)
     out_prefix = os.path.join(data_dir, 'train_asr_sentence')
-    extract_asr_sentence_feature(os.path.join(data_dir, 'train_asr_mmaction_feat.npz'),
+    extract_asr_sentence_features(os.path.join(data_dir, 'train_asr_mmaction_feat.npz'),
+                                 os.path.join(data_dir, 'train_asr_segment.json'),
                                  os.path.join(data_dir, 'train_asr_segment_events.json'),
                                  os.path.join(data_dir, '../AIDA_additional_video_data_master_filtered_for_invalid_videos_v1 (1).json'),
                                  os.path.join(data_dir, '../anet_anno.json'),
