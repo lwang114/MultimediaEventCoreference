@@ -273,7 +273,13 @@ def get_mention_doc_m2e2(data_json, out_prefix, inclusive=False):
   json.dump(events, codecs.open(out_prefix+'_events.json', 'w', 'utf-8'), indent=4, sort_keys=True)
   json.dump(entities+events, codecs.open(out_prefix+'_mixed.json', 'w', 'utf-8'), indent=4, sort_keys=True)
 
-def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_file, annotation_file, out_prefix='mmaction_event_feats', k=5):
+def extract_visual_event_embeddings(data_dir, 
+                                    csv_dir, 
+                                    mapping_file, 
+                                    duration_file, 
+                                    annotation_file, 
+                                    out_prefix='mmaction_event_feats', 
+                                    k=5):
   ''' Extract visual event embeddings
   :param config: str, config file for the dataset,
   :param split: str, 'train' or 'test',
@@ -375,18 +381,17 @@ def extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_fi
       argument_feat.append(cur_arg_feat)
       argument_label.append(cur_arg_label)
 
-      # Extract the top k subspace vectors
-      '''
-      if end - start + 1 > k:
-        event_feat.append(PCA(n_components=k).fit(frame_feats[start:end+1]).components_)
-      elif end - start:
-        feat = PCA(n_components=end-start+1).fit(frame_feats[start:end+1]).components_
-        feat = np.concatenate([feat, np.zeros((k-(end-start+1), feat.shape[-1]))], axis=0)
-        event_feat.append(feat)
-      else:
-        event_feat.append(np.tile(frame_feats[start][np.newaxis], (k, 1)))
-      '''
-      event_feat.append(frame_feats[start:end+1].mean(axis=0))
+      # Subsample k vectors
+      e_feat = frame_feats[start:end+1]
+      if end - start + 1 < k:
+        gap = k - (end - start + 1)
+        e_feat_pad = np.repeat(frame_feats[end][np.newaxis], gap, axis=0)
+        e_feat = np.concatenate([e_feat, e_feat_pad], axis=0)
+      nframes_in_multiple = int(np.floor(e_feat.shape[0] / k)) * k
+      e_feat_new = np.mean(
+          e_feat[:nframes_in_multiple].reshape(k, -1, e_feat.shape[-1]),
+          axis=1).flatten('C')
+      event_feat.append(e_feat_new)
     
     event_feat = np.stack(event_feat, axis=0)
     argument_feat = np.stack(argument_feat, axis=0)
@@ -490,7 +495,7 @@ if __name__ == '__main__':
   mapping_file = 'video_m2e2/video_m2e2.json'
   test_desc_file = 'video_m2e2/unannotatedVideos_textEventCount.json'
   data_json = 'video_m2e2/grounding_video_m2e2.json'
-  csv_dir = os.path.join(data_dir, 'mmaction_feat')
+  csv_dir = os.path.join(data_dir, '../mmaction_feat')
   
   if not os.path.isdir(data_dir):
     os.makedirs(data_dir)
