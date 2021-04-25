@@ -9,13 +9,14 @@ import codecs
 import json
 import math
 from copy import deepcopy
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+from scipy.special import logsumexp
 import nltk
 from nltk.stem import WordNetLemmatizer
 from allennlp.predictors.predictor import Predictor
 import allennlp_models.structured_prediction
-# XXX
-# import torchvision.transforms as transforms
-import PIL.Image as Image
 from tqdm import tqdm
 from datetime import datetime
 from transformers import AutoTokenizer, AutoModel
@@ -246,7 +247,21 @@ def extract_mention_bert_embeddings(config, split, mention_type='events', out_pr
     np.savez(f"{out_prefix}_{mention_type}_{config['bert_model']}.npz", **event_embs)
     json.dump(labels, open(f"{out_prefix}_{mention_type}_{config['bert_model']}_labels.json", 'w'), indent=2) 
 
-def extract_mention_cluster_embeddings(mention_embed_file): # TODO
+def extract_mention_cluster_probabilities(embed_file, 
+                                          out_prefix,
+                                          n_clusters=400,
+                                          var=30):
+    kmeans = KMeans(n_clusters=n_clusters)
+    embed_npz = np.load(embed_file)
+    feat_ids = sorted(embed_npz, key=lambda x:int(x.split('_')[-1]))
+    X = np.concatenate([embed_npz[feat_id] for feat_id in feat_ids][:200]) # XXX 
+    centroids = kmeans.fit(X).cluster_centers_
+    np.save(out_prefix+'.npy', centroids)
+
+    cluster_probs = dict()
+    for feat_id in feat_ids:
+      cluster_probs[feat_id] = gaussian_softmax(embed_npz[feat_id], centroids, var)
+    np.savez(out_prefix+'.npz', **cluster_probs)
 
 def extract_type_embeddings(type_to_idx, glove_file):
     vocab_embs = sorted(type_to_idx, key=lambda x:type_to_idx[x])
@@ -360,13 +375,49 @@ def extract_event_linguistic_features(config, split, out_prefix):
         new_mention['arguments'][a_idx]['head_lemma'] = lemmatizer.lemmatize(a_head.lower())
       new_event_mentions.append(new_mention)
   json.dump(new_event_mentions, open(out_prefix+'_events_with_linguistic_features.json', 'w'), indent=2)
- 
+
+def gaussian_softmax(X, centroids, var):
+  T = X.shape[0]
+  precision = 1. / var 
+  # (T, K)
+  logits = np.sum(precision * (X[:, np.newaxis] - centroids[np.newaxis])**2, axis=-1) 
+  # (T, K)
+  log_probs = logits - logsumexp(logits, axis=1)[:, np.newaxis]
+  return np.exp(log_probs)
+
+def reduce_dim(embed_file, out_prefix, reduced_dim=300):
+  embed_npz = np.load(embed_file)
+  pca = PCA(n_components=reduced_dim)
+  X = np.concatenate([embed_npz[feat_id] for feat_id in sorted(embed_npz, key=lambda x:int(x.split('_')[-1]))]) 
+  print(X.shape)
+  pca.fit(X)
+  print(f'Explained variance ratio: {pca.explained_variance_ratio_}')
+  
+  embed_reduced = dict()
+  for feat_id in sorted(embed_npz, key=lambda x:int(x.split('_')[-1])):
+    embed_reduced[feat_id] = pca.transform(embed_npz[feat_id])
+  np.savez(out_prefix+'.npz', **embed_reduced)
+
+def concat_embeddings(embed_files, out_prefix):
+  embed_npzs = [np.load(embed_file) for embed_file in embed_files]
+  feat_ids = sorted(np.load(embed_files[0]), key=lambda x:int(x.split('_')[-1]))
+  new_embed_dict = dict()
+  for feat_id in feat_ids:
+    new_embed_dict[feat_id] = np.concatenate([embed_npz[feat_id] for embed_npz in embed_npzs], axis=1)
+  np.savez(out_prefix+'.npz', **new_embed_dict)
+
 def main():
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   parser.add_argument('--config', type=str, default='configs/config_grounded.json')
   parser.add_argument('--split', choices={'train', 'test'}, default='train')
   parser.add_argument('--mention_type', choices={'events', 'entities'}, default='events')
-  parser.add_argument('--task', type=int)
+  parser.add_argument('--task', choices={'extract_glove_embeddings',
+                                         'extract_bert_embeddings',
+                                         'extract_event_linguistic_features',
+                                         'extract_mention_glove_embeddings',
+                                         'extract_mention_bert_embeddings',
+                                         'reduced_dim',
+                                         'concat_embeddings'})
   args = parser.parse_args()  
   config = pyhocon.ConfigFactory.parse_file(args.config) 
   if not os.path.isdir(config['log_path']):
@@ -374,16 +425,50 @@ def main():
   tasks = [args.task]
   glove_file = 'm2e2/data/glove/glove.840B.300d.txt'
 
-  if 0 in tasks:
-    extract_glove_embeddings(config, args.split, glove_file, out_prefix='{}_glove_embeddings'.format(args.split))
-  if 1 in tasks:
-    extract_bert_embeddings(config, args.split, out_prefix=args.split)
-  if 2 in tasks:
-    extract_event_linguistic_features(config, args.split, out_prefix=args.split)
-  if 3 in tasks:
-    extract_mention_glove_embeddings(config, args.split, glove_file, mention_type=args.mention_type, out_prefix=f'{args.split}_{args.mention_type}_glove_embeddings')
-  if 4 in tasks:
-    extract_mention_bert_embeddings(config, args.split, mention_type=args.mention_type, out_prefix=f'{args.split}')
+  if args.task == 'extract_glove_embeddings':
+    func = extract_glove_embeddings
+    kwargs = {'config': config, 
+              'split': args.split, 
+              'glove_file': glove_file, 
+              'out_prefix': '{}_glove_embeddings'.format(args.split)}
+  elif args.task == 'extract_bert_embeddings':
+    func = extract_bert_embeddings
+    kwargs = {'config': config, 
+              'split': args.split, 
+              'out_prefix': args.split}
+  elif args.task == 'extract_event_linguistic_features':
+    func = extract_event_linguistic_features
+    kwargs = {'config': config, 
+              'split': args.split, 
+              'out_prefix': args.split}
+  elif args.task == 'extract_mention_glove_embeddings':
+    func = extract_mention_glove_embeddings
+    kwargs = {'config': config, 
+              'split': args.split, 
+              'glove_file': glove_file, 
+              'mention_type': args.mention_type, 
+              'out_prefix': f'{args.split}_{args.mention_type}_glove_embeddings'}
+  elif args.task == 'extract_mention_bert_embeddings':
+    func = extract_mention_bert_embeddings
+    kwargs = {'config': config,
+              'split': args.split, 
+              'mention_type': args.mention_type, 
+              'out_prefix': f'{args.split}'}
+  elif args.task == 'reduced_dim':
+    func = reduced_dim
+    embed_file = os.path.join(config['data_path'], 'train_events_roberta-large.npz')
+    out_prefix = os.path.join(config['data_path'], 'train_events_roberta-large_pca300dim')
+    kwargs = {'embed_file': embed_file, 'out_prefix': out_prefix, 'reduced_dim': 300}
+  elif args.task == 'concat_embeddings':
+    func = concat_embeddings
+    kwargs = {'embed_files': [os.path.join(config['data_path'], 'train_events_glove_embeddings'), 
+                              os.path.join(config['data_path'], 'train_events_roberta-large_pca300dim')],
+              'out_prefix': os.path.join(config['data_path'], 'train_events_glove_roberta-large_pca300dim')}
+  elif args.task == 'extract_mention_cluster_probabilities':
+    func = extract_mention_cluster_probabilities
+    kwargs = {'embed_file': os.path.join(config['data_path'], 'train_events_glove_roberta-large_pca300dim.npz'), 
+              'out_prefix': os.path.join(config['data_path'], 'train_events_cluster_probs')}
+  func(**kwargs)
 
 if __name__ == '__main__':
   main()
