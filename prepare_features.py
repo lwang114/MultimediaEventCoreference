@@ -266,24 +266,46 @@ def extract_mention_cluster_probabilities(embed_files,
         cluster_probs[feat_id] = gaussian_softmax(embed_npz[feat_id], centroids, var)
       np.savez(embed_file.split('.')[0]+'_cluster_probs.npz', **cluster_probs)
 
-def extract_type_embeddings(type_to_idx, glove_file):
-    vocab_embs = sorted(type_to_idx, key=lambda x:type_to_idx[x])
-    vocab_emb = {''}
-    embed_matrix = [[0.0] * dimension] 
-    # Load the embeddings
-    with codecs.open(glove_file, 'r', 'utf-8') as f:
-        for line in f:
-            segments = line.strip().split()
-            if len(segments) == 0:
-                print('Empty line')
-                break
-            word = ' '.join(segments[:-300])
-            if word in vocabs:
-                # print('Found {}'.format(word))
-                embed= [float(x) for x in segments[-300:]]
-                embed_matrix.append(embed)
-                vocab_emb[word] = len(vocab_emb)
-    print('Vocabulary size with embeddings: {}'.format(len(vocab_emb)))
+def extract_mention_token_encodings(config,
+                                    out_dir,
+                                    mention_type='events'):
+  def to_one_hot(sent):
+    K = len(vocab)
+    sent = np.asarray(sent)
+    if len(sent.shape) < 2:
+      es = np.eye(len(vocab))
+      sent = np.asarray([es[int(w)] if w < K else 1./K*np.ones(K) for w in sent])
+      return sent
+    else:
+      return sent
+
+  label_dict = dict()
+  vocab = dict()
+  for split in config['splits']:
+    for dataset in config['splits'][split]:
+      label_dict[dataset] = dict()
+      mention_json = os.path.join(config['data_folder'], f'{dataset}_{mention_type}.json')
+      mentions = json.load(open(mention_json, 'r'))
+      for m in mentions:
+        if 'head_lemma' in m:
+          token = m['head_lemma']
+        else:
+          token = m['tokens']
+        span = (min(m['tokens_ids']), max(m['tokens_ids']))
+        if not m['doc_id'] in label_dict[dataset]:
+          label_dict[dataset][m['doc_id']] = dict()
+        label_dict[dataset][m['doc_id']][span] = token
+        if not token in vocab:
+          vocab[token] = len(vocab)
+  print(f'Vocabulary size: {len(vocab)}')
+
+  for split in config['splits']:
+    for dataset in config['splits'][split]:
+      out_file = f'{out_dir}/{dataset}_{mention_type}_labels.npz' 
+      features = {}
+      for feat_idx, doc_id in enumerate(sorted(label_dict[dataset])):
+        features[f'{doc_id}_{feat_idx}'] = to_one_hot([vocab[label_dict[dataset][doc_id][span]] for span in sorted(label_dict[dataset][doc_id])])
+      np.savez(out_file, **features)
 
 def extract_event_linguistic_features(config, split, out_prefix):
   def _head_word(phrase):
@@ -422,11 +444,12 @@ def main():
                                          'extract_mention_bert_embeddings',
                                          'extract_mention_cluster_probabilities',
                                          'reduce_dim',
-                                         'concat_embeddings'})
+                                         'concat_embeddings',
+                                         'extract_mention_token_encodings'})
   args = parser.parse_args()  
   config = pyhocon.ConfigFactory.parse_file(args.config) 
   if not os.path.isdir(config['log_path']):
-    os.mkdir(config['log_path']) 
+    os.makedirs(config['log_path']) 
   tasks = [args.task]
   glove_file = 'm2e2/data/glove/glove.840B.300d.txt'
 
@@ -471,6 +494,8 @@ def main():
     kwargs = {'embed_files': [os.path.join(config['data_folder'], f'{split}_events_glove_roberta-large_pca300dim.npz')
                               for split in ['train', 'test']]}
     extract_mention_cluster_probabilities(**kwargs)
+  elif args.task == 'extract_mention_token_encodings':
+    extract_mention_token_encodings(config, config['data_folder'])
 
 if __name__ == '__main__':
   main()
