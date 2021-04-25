@@ -306,8 +306,9 @@ def extract_asr_sentence_features(visual_embed_file,
     if not doc_id in segment_to_sent:
       segment_to_sent[doc_id] = [] 
     for sent_idx, sent in enumerate(asr_dict[doc_id]['ASR']):
-      for _ in sent['text'].split('\n'):
-        segment_to_sent[doc_id].append(sent_idx)
+      for segment in sent['text'].split('\n'):
+        if len(segment) > 0:
+          segment_to_sent[doc_id].append(sent_idx)
   
   doc_dur = json.load(open(duration_file))
   documents = json.load(open(doc_file)) 
@@ -357,7 +358,7 @@ def extract_asr_sentence_features(visual_embed_file,
     new_feat_id = f'{sent_id}_{idx}'
     visual_event_embeds[new_feat_id] = visual_embed[start_frame:end_frame+1]  
 
-  np.savez(out_prefix+'.npz', **visual_event_embeds)
+  np.savez(out_prefix+'_mmaction_feat.npz', **visual_event_embeds)
   
 
 def extract_visual_event_embeddings(data_dir, 
@@ -701,5 +702,5 @@ if __name__ == '__main__':
                                  os.path.join(data_dir, 'train_asr_segment_events.json'),
                                  os.path.join(data_dir, '../AIDA_additional_video_data_master_filtered_for_invalid_videos_v1 (1).json'),
                                  os.path.join(data_dir, '../anet_anno.json'),
-                                 out_prefix+'_mmaction_feat')
+                                 out_prefix)
      
