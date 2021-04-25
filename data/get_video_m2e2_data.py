@@ -37,7 +37,7 @@ def get_mention_doc_oneie(data_dir, out_prefix, separate_sentence=False):
   for data_file in data_files: # XXX
     print(data_file)
     doc_id = None
-    tokens = []
+    tokens_all = []
     cur_mentions = []
     start_sent = 0
     with open(os.path.join(data_dir, data_file), 'r') as f:
@@ -53,16 +53,17 @@ def get_mention_doc_oneie(data_dir, out_prefix, separate_sentence=False):
         if not doc_id:
           doc_id = sent_dict['doc_id']
         sent_idx = int(sent_dict['sent_id'].split('-')[-1])
-        postags = [t[1] for t in nltk.pos_tag(sent_dict['tokens'], tagset='universal')]
+        tokens = [t.lower() for t in sent_dict['tokens']]
+        postags = [t[1] for t in nltk.pos_tag(tokens, tagset='universal')]
         if not separate_sentence:
-          tokens.extend([[sent_idx, start_sent+i, token, tag]\
-                        for i, (token, tag) in enumerate(zip(sent_dict['tokens'], postags))])
+          tokens_all.extend([[sent_idx, start_sent+i, token, tag]\
+                            for i, (token, tag) in enumerate(zip(tokens, postags))])
         else:
           documents[f'{doc_id}-{sent_idx}'] = [[0, i, token, tag]\
-                                              for i, (token, tag) in enumerate(zip(sent_dict['tokens'], postags))]
+                                              for i, (token, tag) in enumerate(zip(tokens, postags))]
 
         for trigger_idx, trigger in enumerate(triggers_info):
-          trigger_tokens = sent_dict['tokens'][trigger[0]:trigger[1]]
+          trigger_tokens = tokens[trigger[0]:trigger[1]]
           
           if separate_sentence:
             event_id = f'{doc_id}-{sent_idx}'
@@ -84,14 +85,14 @@ def get_mention_doc_oneie(data_dir, out_prefix, separate_sentence=False):
               entity = entities_info[role[1]]
               mention['arguments'].append({'start': entity[0] if separate_sentence else start_sent+entity[0],
                                            'end': entity[1]-1 if separate_sentence else start_sent+entity[1]-1,
-                                           'token': ' '.join(sent_dict['tokens'][entity[0]:entity[1]]),
+                                           'token': ' '.join(tokens[entity[0]:entity[1]]),
                                            'role': role[2]})
           cur_mentions.append(mention)
-        start_sent += len(sent_dict['tokens'])
+        start_sent += len(tokens)
 
     mentions.extend(cur_mentions)
     if len(cur_mentions) > 0 and not separate_sentence:
-      documents[doc_id] = tokens
+      documents[doc_id] = tokens_all
   
   print(f'Number of documents: {len(documents)}')
   json.dump(documents, open(f'{out_prefix}.json', 'w'), indent=2)
@@ -286,37 +287,62 @@ def get_mention_doc_m2e2(data_json, out_prefix, inclusive=False):
   json.dump(events, codecs.open(out_prefix+'_events.json', 'w', 'utf-8'), indent=4, sort_keys=True)
   json.dump(entities+events, codecs.open(out_prefix+'_mixed.json', 'w', 'utf-8'), indent=4, sort_keys=True)
 
-def extract_visual_event_embeddings_asr(embed_file,
-                                        event_file, 
-                                        asr_file,
-                                        out_prefix):
+def extract_asr_sentence_features(visual_embed_file,
+                                  event_file, 
+                                  asr_file,
+                                  duration_file,
+                                  out_prefix):
+  """
+  :param visual_embed_file: filename to an Npz object from [doc id with '_' delimiter]_[idx] to an array of shape (number of frames, embedding dim)
+  :param event_file: filename to a list of dicts (doc id with '_' delimiter)
+  :param asr_file: filename to a json file storing dict from doc id with ' ' delimiter to ASR results 
+  :param duration_file: filename to a json file storing dict from doc_id to a dict with ' ' delimiter from 'duration_second' to duration of the video 
+  """
   asr_dict = json.load(open(asr_file))
+  # dict[str, dict[int, int]] 
+  segment_to_sent = dict()
+  for doc_id in asr_dict:
+    if not doc_id in asr_dict:
+      segment_to_sent[doc_id] = [] 
+    for sent_idx, sent in enumerate(asr_dict['ASR']):
+      for _ in sent.split('\n'):
+        segment_to_sent[doc_id].append(sent_idx)
+  
+  doc_dur = json.load(open(duration_file)) 
   event_mentions = json.load(open(event_file))
   label_dict = dict()
-  doc_dur = dict()
+  new_event_mentions = []
   for m in event_mentions:
-    if not m['doc_id'] in label_dict:
-      doc_id = '-'.join(m['doc_id'].split('-')[:-1])
-      if not doc_id in doc_dur:
-        doc_dur[doc_id] = asr_dict[doc_id.replace('_', ' ')]['ASR'][-1]['start'] +\
-                          asr_dict[doc_id.replace('_', ' ')]['ASR'][-1]['duration']
-      sent_idx = int(m['doc_id'].split('-')[-1])
-      print(doc_id, m['tokens'], len(asr_dict[doc_id]['ASR'])) # XXX 
-      label_dict[m['doc_id']] = asr_dict[doc_id]['ASR'][sent_idx]
-  
-  visual_embed_npz = np.load(embed_file)
+    segment_id = m['doc_id']
+    doc_id = '-'.join(segment_id.split('-')[:-1])
+    doc_id_spc = doc_id.replace('_', ' ')
+    segment_idx = int(segment_id.split('-')[-1])
+    sent_idx = segment_to_sent[doc_id_spc][segment_idx]
+    sent_id = f'{doc_id}-{sent_idx}'
+
+    if not sent_id in label_dict:
+      label_dict[sent_id] = asr_dict[doc_id_spc]['ASR'][sent_idx]
+    
+    new_mention = deepcopy(m)
+    new_mention['doc_id'] = sent_id 
+    new_event_mentions.append(new_mention)    
+  json.dump(new_event_mentions, open(out_prefix+'_events.json', 'w'), indent=2)
+
+  visual_embed_npz = np.load(visual_embed_file)
   doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in visual_embed_npz}
   visual_event_embeds = dict()
-  for idx, doc_id in sorted(label_dict):
-    feat_id = doc_to_feat['-'.join(doc_id.split('-')[:-1])]
+  for idx, sent_id in sorted(label_dict):
+    doc_id = '-'.join(sent_id.split('-')[:-1])
+    doc_id_spc = doc_id.replace('_', ' ')
+
+    feat_id = doc_to_feat[doc_id]
     visual_embed = visual_embed_npz[feat_id]
-    start = label_dict[doc_id]['start']
-    end = start + label_dict[doc_id]['duration']
-    dur = doc_dur['-'.join(doc_id.split('-')[:-1])]
+    start = label_dict[sent_id]['start']
+    end = start + label_dict[sent_id]['duration']
+    dur = doc_dur[doc_id_spc]
 
     start_frame = int(start / dur * 100)
     end_frame = int(end / dur * 100)
-
     visual_event_embeds[feat_id] = visual_embed[start_frame:end_frame+1]  
 
   np.savez(out_prefix+'.npz', **visual_event_embeds)
@@ -654,10 +680,13 @@ if __name__ == '__main__':
     extract_visual_embeddings(csv_dirs, out_prefix=out_prefix)
   elif args.task == 11:
     anno_dir = 'video_m2e2/json_asr/'
+    get_mention_doc_oneie(anno_dir, 
+                          os.path.join(data_dir, 'train_asr_segment'), 
+                          separate_sentence=True)
     out_prefix = os.path.join(data_dir, 'train_asr_sentence')
-    # get_mention_doc_oneie(anno_dir, out_prefix, separate_sentence=True)
-    extract_visual_event_embeddings_asr(os.path.join(data_dir, 'train_asr_mmaction_feat.npz'),
-                                        os.path.join(data_dir, 'train_asr_sentence_events.json'),
-                                        os.path.join(data_dir, '../AIDA_additional_video_data_master_filtered_for_invalid_videos_v1 (1).json'),
-                                        out_prefix+'_mmaction_feat')
+    extract_asr_sentence_feature(os.path.join(data_dir, 'train_asr_mmaction_feat.npz'),
+                                 os.path.join(data_dir, 'train_asr_segment_events.json'),
+                                 os.path.join(data_dir, '../AIDA_additional_video_data_master_filtered_for_invalid_videos_v1 (1).json'),
+                                 os.path.join(data_dir, '../anet_anno.json'),
+                                 out_prefix+'_mmaction_feat')
      
