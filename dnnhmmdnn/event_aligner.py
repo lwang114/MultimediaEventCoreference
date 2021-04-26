@@ -27,12 +27,12 @@ np.random.seed(2)
 class FullyContinuousMixtureAligner(object):
   """An alignment model based on Brown et. al., 1993. capable of modeling continuous bilingual sentences"""
   def __init__(self, source_features_train, target_features_train, configs):
-    self.Ks = configs.get('n_src_vocab', 80)
-    self.Kt = configs.get('n_trg_vocab', 2001)
+    self.Ks = configs.get('n_src_vocab', 50)
+    self.Kt = configs.get('n_trg_vocab', 400)
     self.use_null = configs.get('use_null', False)
     self.pretrained_vgmm_model = configs.get('pretrained_vgmm_model', None)
     self.pretrained_translateprob = configs.get('pretrained_translateprob', None)
-    var = configs.get('var', 160.) # XXX
+    var = configs.get('var', 30.) # XXX
     logger.info('n_src_vocab={}, n_trg_vocab={}'.format(self.Ks, self.Kt))
     self.alpha = configs.get('alpha', 0.)
     if target_features_train[0].ndim <= 1:
@@ -434,6 +434,8 @@ def load_data(config):
       trg_feats_test: a list of arrays of shape (trg sent length, trg dimension)
   """
   event_mentions = dict()
+  text_feat_files = dict()
+  doc_to_text_feat = dict()
   documents = dict()
   vocab = dict()
   vocab_freq = dict()
@@ -441,12 +443,14 @@ def load_data(config):
   visual_classes = visual_class_dict['event']
   visual_feat_files = dict()
   visual_labels = None # TODO
-  doc_to_feat = dict()
+  doc_to_visual_feat = dict()
   for split in config['splits']:
     for dataset in config['splits'][split]:
       event_mentions[dataset] = json.load(codecs.open(os.path.join(config['data_folder'], f'{dataset}_events.json'), 'r', 'utf-8'))
       documents[dataset] = json.load(codecs.open(os.path.join(config['data_folder'], f'{dataset}.json')))
-      doc_to_feat[dataset] = dict()
+
+      doc_to_text_feat[dataset] = dict()
+      doc_to_visual_feat[dataset] = dict()
       for m in event_mentions[dataset]:
         trigger = m['head_lemma']
         if not trigger in vocab:
@@ -454,9 +458,27 @@ def load_data(config):
           vocab_freq[trigger] = 1
         else:
           vocab_freq[trigger] += 1
-      visual_feat_files[dataset] = os.path.join(config['data_folder'], f'{dataset}_mmaction_feat.npz')  
+
+      text_feat_type = config.get('text_feature_type', 'token')
+      if text_feat_type == 'token':
+        text_feat_files[dataset] = os.path.join(config['data_folder'], f'{dataset}_events_labels.npz')
+      elif text_feature_type == 'cluster_probs':
+        text_feat_files[dataset] = os.path.join(config['data_folder'], f'{dataset}_events_cluster_probs.npz')
+      else:
+        raise ValueError
+
+      visual_feat_type = config.get('visual_feature_type', 'frame')
+      if visual_feat_type == 'event':
+        visual_feat_files[dataset] = os.path.join(config['data_folder'], f'{dataset}_mmaction_event_feat.npz') 
+      elif visual_feat_type == 'frame':
+        visual_feat_files[dataset] = os.path.join(config['data_folder'], f'{dataset}_mmaction_feat.npz') 
+      else:
+        raise ValueError
+
+      text_feats = np.load(text_feat_files[dataset])
       visual_feats = np.load(visual_feat_files[dataset])
-      doc_to_feat[dataset] = {'_'.join(feat_id.split('/')[-1].split('_')[:-1]):feat_id for feat_id in visual_feats}
+      doc_to_text_feat[dataset] = {'_'.join(feat_id.split('/')[-1].split('_')[:-1]):feat_id for feat_id in text_feats}
+      doc_to_visual_feat[dataset] = {'_'.join(feat_id.split('/')[-1].split('_')[:-1]):feat_id for feat_id in visual_feats}
 
   json.dump(vocab_freq, open('vocab_freq.json', 'w'), indent=2)
   vocab_size = len(vocab) 
@@ -468,7 +490,7 @@ def load_data(config):
     for dataset in config['splits'][split]:
       label_dict[dataset] = dict()
       for m in event_mentions[dataset]:
-        if m['doc_id'] in doc_to_feat[dataset]:
+        if m['doc_id'] in doc_to_visual_feat[dataset]:
           if not m['doc_id'] in label_dict[dataset]:
             label_dict[dataset][m['doc_id']] = dict()
           token = m['head_lemma']
@@ -499,13 +521,15 @@ def load_data(config):
   tokens_test = []
 
   for dataset in config['splits']['train']: 
+    text_feats = np.load(text_feat_files[dataset])
     visual_feats = np.load(visual_feat_files[dataset])
     for feat_idx, doc_id in enumerate(sorted(label_dict[dataset])): # XXX
-      feat_id = doc_to_feat[dataset][doc_id]
-      src_feats_train.append(visual_feats[feat_id])
+      visual_feat_id = doc_to_visual_feat[dataset][doc_id]
+      src_feats_train.append(visual_feats[visual_feat_id])
 
       spans = sorted(label_dict[dataset][doc_id])
-      trg_sent = [label_dict[dataset][doc_id][span]['token_id'] for span in spans]
+      text_feat_id = doc_to_text_feat[dataset][doc_id]
+      trg_sent = text_feats[text_feat_id] 
       cluster_ids = [label_dict[dataset][doc_id][span]['cluster_id'] for span in spans]
 
       spans_train.append(spans)
@@ -515,16 +539,18 @@ def load_data(config):
       tokens_train.append([t[2] for t in documents[dataset][doc_id]])
 
   for dataset in config['splits']['test']:
+    text_feats = np.load(text_feat_files[dataset])
     visual_feats = np.load(visual_feat_files[dataset])
     for feat_idx, doc_id in enumerate(sorted(label_dict[dataset])): # XXX
-      feat_id = doc_to_feat[dataset][doc_id]
-      src_feats_test.append(visual_feats[feat_id])
+      visual_feat_id = doc_to_visual_feat[dataset][doc_id]
+      src_feats_test.append(visual_feats[visual_feat_id])
       if visual_labels is not None: # TODO Creat visual label for the whole video
-        visual_labels_int = np.argmax(visual_labels[feat_id], axis=-1)
+        visual_labels_int = np.argmax(visual_labels[visual_feat_id], axis=-1)
         src_labels_test.append([visual_classes[k] for k in visual_labels_int])
 
       spans = sorted(label_dict[dataset][doc_id])
-      trg_sent = [label_dict[dataset][doc_id][span]['token_id'] for span in spans]
+      text_feat_id = doc_to_text_feat[dataset][doc_id]
+      trg_sent = text_feats[text_feat_id] 
       trg_labels = [label_dict[dataset][doc_id][span]['type'] for span in spans]
       cluster_ids = [label_dict[dataset][doc_id][span]['cluster_id'] for span in spans]
       spans_test.append(spans)
@@ -563,8 +589,8 @@ if __name__ == '__main__':
   cluster_ids_train, cluster_ids_test,\
   tokens_train, tokens_test,\
   src_vocab, trg_vocab = load_data(config)
-  Ks = 200
-  Kt = len(trg_vocab)
+  Ks = config.get('Ks', 50)
+  Kt = config.get('Kt', trg_feats_train[0].shape[-1])
     
   ## Model training
   aligner = FullyContinuousMixtureAligner(src_feats_train+src_feats_test, 
