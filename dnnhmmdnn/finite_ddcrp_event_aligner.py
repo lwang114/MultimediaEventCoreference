@@ -80,7 +80,7 @@ class Restaurant:
       w += self.tables[i] 
     return w / (self.alpha0 + self.ncustomers) 
 
-  def log_likelihood(self):
+  def log_likelihood(self): # TODO
     ll = math.lgamma(self.alpha0)\
          - self.ntables * math.lgamma(self.alpha0 / self.K_max)\
          + sum(math.lgamma(self.tables[i] + self.alpha0 / self.K_max) for i in range(self.ntables))\
@@ -199,11 +199,11 @@ class DDCRPEventAligner(object):
     self.beta0 = beta0
     self.Kc = Kc # Max number of event clusters 
     self.Kf = Kf # Size of event features vocabs
-    self.event_crp = Restaurant(alpha0, Kc) # Keep track of counts for each event
+    self.event_crp = Restaurant(alpha0, Kc) # Keep track of local cluster counts for each global event
     self.feature_crps = {feat_type:[] for feat_type in feature_types} # Keep track of counts for each feature within each event
-    self.cluster_ids = [[] for _ in self.e_feats_train]
+    self.cluster_ids = [[-1]*len(e_feat) for e_feat in self.e_feats_train]
     self.distance_scorer = None # Logistic regressor 
-    self.antecedents = [[] for _ in self.e_feats_train]
+    self.antecedents = [[-1]*len(e_feat) for e_feat in self.e_feats_train]
 
   def prob(self, c, e):
     p = 1.
@@ -214,7 +214,7 @@ class DDCRPEventAligner(object):
           p *= self.feature_crps[feat_type][table_idx].prob(e[feat_type])
     else: 
       for feat_type in e:
-        if feat_type in e:
+        if feat_type in self.Kf:
           p *= Restaurant(self.alpha0, self.Kf[feat_type]).prob(e[feat_type])
     return p
 
@@ -226,9 +226,14 @@ class DDCRPEventAligner(object):
   
   def log_likelihood(self):
     ll = 0
-    for crp in self.local_crps:
-      ll += crp.log_likelihood()
- 
+    for e_feat, antecedent in zip(self.e_feats_train, self.antecedents):
+      for e, a_idx in zip(e_feat, antecedent):
+        if a_idx == -1:
+          ll += np.log(self.beta0)
+        else:
+          pw_feat = self.compute_pairwise_features(e, e_feat[a_idx])
+          log_proba = self.distance_scorer.predict_log_proba(pw_feat[np.newaxis])[0, 1] 
+          ll += float(log_proba) 
     for feat_type in self.feature_crps:
       for crp in self.feature_crps[feat_type]:
         ll += crp.log_likelihood()
@@ -245,7 +250,9 @@ class DDCRPEventAligner(object):
       if self.distance_scorer is None:
         P[a_idx] = self.prob(c, a)
       else:
-        P[a_idx] = self.distance_scorer.predict_proba(pw_feats) * self.prob(c, a)
+        proba = self.distance_scorer.predict_proba(pw_feats[np.newaxis])[0, 1]
+        proba = 0 if proba < 0.5 else proba
+        P[a_idx] = proba * self.prob(c, a)
 
     P = np.asarray(P)
     
@@ -270,12 +277,15 @@ class DDCRPEventAligner(object):
       for c_idx, (c, w) in enumerate(zip(self.event_crp.table_names+[-1], P_c)):
         if x < w: break
         x -= w
+      
       if c == -1:
         new_c = 0
         while new_c in self.event_crp.name2table: # Create a new key for the new event
           new_c += 1
         c = new_c
-    return c, a_idx
+    
+    a_idx = -1 if a_idx == n_antecedents else a_idx
+    return c, a_idx 
 
   def train(self, n_iter=35, 
             out_dir='./'):
@@ -284,31 +294,32 @@ class DDCRPEventAligner(object):
       random.shuffle(order)
       for i in order:
         e_feat = self.e_feats_train[i]
-        new_cluster_ids = [-1]*len(e_feat)
-        new_antecedents = [-1]*len(e_feat)
-
         mention_order = list(range(len(e_feat)))
-        for i_m in mention_order:
-          if i_iter > 0: 
+
+        if i_iter > 0: 
+          for i_m in mention_order[::-1]:
             c = self.cluster_ids[i][i_m]
             e = e_feat[i_m]
-            self.unseat_from(c, e)
-          
+            a_idx = self.antecedents[i][i_m]
+            self.unseat_from(c, e, is_new=(a_idx==-1))
+            self.antecedents[i][i_m] = -1
+            self.cluster_ids[i][i_m] = -1
+
+        for i_m in mention_order:          
           for feat_type in self.feature_crps:
             assert len(self.feature_crps[feat_type]) == self.event_crp.ntables 
         
           e = e_feat[i_m] 
-          c, a_idx = self.gibbs_sample(e, e_feat[:i_m], cluster_ids[i][:i_m])
+          c, a_idx = self.gibbs_sample(e, e_feat[:i_m], self.cluster_ids[i][:i_m])
+          self.cluster_ids[i][i_m] = c
+          self.antecedents[i][i_m] = a_idx
 
-          self.seat_to(c, e)          
-          new_cluster_ids[i_m] = c
-          new_antecedents[i_m] = a_idx if a_idx < i_m else -1
-        self.antecedents[i] = deepcopy(new_antecedents)
-        self.cluster_ids[i] = deepcopy(new_cluster_ids)
+          self.seat_to(c, e, is_new=(a_idx==-1))          
       
       self.distance_scorer = LogisticRegression()
-      pw_feats = [self.compute_pairwise_features(e_feat[i], e_feat[j]) for e_feat in self.e_feats_train for i, j in itertools.combinations(range(len(e_feat)), 2)]
-      pw_labels = [to_pairwise(self.cluster_ids[i]) for i in range(len(self.e_feats_train))] 
+      pw_feats = [self.compute_pairwise_features(e_feat[i], e_feat[j]) for e_feat in self.e_feats_train for i, j in itertools.combinations(range(len(e_feat)), 2) if len(e_feat) > 1]
+      pw_labels = [to_pairwise(np.asarray(cluster_id)) for cluster_id in self.cluster_ids if len(cluster_id) > 1] 
+
       X = np.stack(pw_feats)
       y = np.concatenate(pw_labels)  
       self.distance_scorer.fit(X, y)
@@ -320,47 +331,39 @@ class DDCRPEventAligner(object):
   def cluster(self, 
               event_features_test):
     cluster_ids = []
-    crp = LocalRestaurant(self.alpha0, self.Kd)
     for e_sent in zip(event_features_test): 
-      cluster_ids.append([self.gibbs_sample(e, crp)[0] for e in e_sent])
+      cluster_ids.append([self.gibbs_sample(e, e_sent[:e_idx], cluster_ids[:e_idx])[0] for e_idx, e in enumerate(e_sent)])
     return cluster_ids
 
-  def seat_to(self, c, e):
+  def seat_to(self, c, e, is_new=False):
     if not c in self.event_crp.name2table: # Create CRPs for a new event
-      self.event_crp.seat_to(c)
       for feat_type in e:
-        new_feat_crp = Restaurant(self.alpha0, self.Kf[feat_type])
-        if feat_type == 'arguments':
-          for a in e['arguments']:
-            new_feat_crp.seat_to(a)
-        else:
+        if feat_type in self.Kf:
+          new_feat_crp = Restaurant(self.alpha0, self.Kf[feat_type])
           new_feat_crp.seat_to(e[feat_type])
-        self.feature_crps[feat_type].append(new_feat_crp)
+          self.feature_crps[feat_type].append(new_feat_crp)
     else:
-      self.event_crp.seat_to(c)
       table_idx = self.event_crp.name2table[c]
       for feat_type in e:
-        if feat_type == 'arguments':
-          for a in e['arguments']:
-            self.feature_crps[feat_type][table_idx].seat_to(a)
-        else:
+        if feat_type in self.Kf:
           self.feature_crps[feat_type][table_idx].seat_to(e[feat_type])
-  
-  def unseat_from(self, c, e):
-    table_idx = self.event_crp.name2table[c] 
-    self.event_crp.unseat_from(c)
+      
+    if is_new:
+      self.event_crp.seat_to(c)
+
+  def unseat_from(self, c, e, is_new=False): # TODO
+    table_idx = self.event_crp.name2table[c]
+    if is_new:
+      self.event_crp.unseat_from(c)
 
     for feat_type in e:
-      if feat_type == 'arguments':
-        for a in e['arguments']:
-          self.feature_crps['arguments'][table_idx].unseat_from(a)
-      else:
+      if feat_type in self.Kf:
         self.feature_crps[feat_type][table_idx].unseat_from(e[feat_type])
 
-      if self.feature_crps[feat_type][table_idx].ntables == 0: # Replace the empty restaurant with the last restaurant
-        self.feature_crps[feat_type][table_idx] = deepcopy(self.feature_crps[feat_type][-1])
-        del self.feature_crps[feat_type][-1]
-        assert self.event_crp.ntables == len(self.feature_crps[feat_type])
+        if self.feature_crps[feat_type][table_idx].ntables == 0: # Replace the empty restaurant with the last restaurant
+          self.feature_crps[feat_type][table_idx] = deepcopy(self.feature_crps[feat_type][-1])
+          del self.feature_crps[feat_type][-1]
+          assert self.event_crp.ntables == len(self.feature_crps[feat_type])
       
   def save(self, out_dir='./'):
     self.event_crp.save(os.path.join(out_dir, 'event_crp_'))
@@ -374,7 +377,7 @@ class DDCRPEventAligner(object):
       out_str += '\n'
     f_out.write(out_str)
     f_out.close()
-    np.save(os.path.join(out_dir, 'distance_scorer.npy'), self.distance_scorer.coeff_)
+    np.save(os.path.join(out_dir, 'distance_scorer.npy'), self.distance_scorer.coef_)
 
 def cosine_similarity(v1, v2):
   return v1 @ v2 / np.maximum(EPS, np.linalg.norm(v1) * np.linalg.norm(v2))
@@ -404,10 +407,10 @@ def to_antecedents(labels):
 def load_text_features(config, split):
   lemmatizer = WordNetLemmatizer()
   feature_types = config['feature_types']
-  event_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events_with_linguistic_features.json'), 'r', 'utf-8'))
+  event_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events.json'), 'r', 'utf-8'))
   doc_train = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}.json')))
-  docs_embs = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events_with_arguments_glove_embeddings.npz'))) 
-  doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in glove_embs}
+  docs_embs = np.load(os.path.join(config['data_folder'], f'{split}_events_with_arguments_glove_embeddings.npz')) 
+  doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in docs_embs}
 
   label_dicts = {}
   event_feats = []
@@ -425,12 +428,7 @@ def load_text_features(config, split):
                                         'cluster_id': m['cluster_id']}
 
       for feat_type in feature_types:
-        if feat_type == 'arguments':
-          label_dicts[m['doc_id']][span]['arguments'] = [a['head_lemma'] for a in m['arguments']]
-          if len(m['arguments']) == 0:
-            label_dicts[m['doc_id']][span]['arguments'].append(NULL)
-        else:
-          label_dicts[m['doc_id']][span][feat_type] = m[feat_type] 
+        label_dicts[m['doc_id']][span][feat_type] = m[feat_type] 
         
   for feat_idx, doc_id in enumerate(sorted(label_dicts)): # XXX
     doc_embs = docs_embs[doc_to_feat[doc_id]]
@@ -457,9 +455,9 @@ def load_text_features(config, split):
 
 def load_data(config):
   lemmatizer = WordNetLemmatizer() 
-  event_mentions_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train_events_with_linguistic_features.json'), 'r', 'utf-8'))
+  event_mentions_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train_events.json'), 'r', 'utf-8'))
   doc_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train.json')))
-  event_mentions_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test_events_with_linguistic_features.json'), 'r', 'utf-8'))
+  event_mentions_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test_events.json'), 'r', 'utf-8'))
   doc_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test.json')))
   feature_types = config['feature_types']
 
