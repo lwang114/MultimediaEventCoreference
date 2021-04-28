@@ -27,11 +27,12 @@ np.random.seed(2)
 class FullyContinuousMixtureAligner(object):
   """An alignment model based on Brown et. al., 1993. capable of modeling continuous bilingual sentences"""
   def __init__(self, source_features_train, target_features_train, configs):
-    self.Ks = configs.get('n_src_vocab', 50)
-    self.Kt = configs.get('n_trg_vocab', 400)
+    self.Ks = configs.get('Ks', 50)
+    self.Kt = configs.get('Kt', target_features_train[0].shape[-1])
     self.use_null = configs.get('use_null', False)
     self.pretrained_vgmm_model = configs.get('pretrained_vgmm_model', None)
     self.pretrained_translateprob = configs.get('pretrained_translateprob', None)
+    self.vocab = configs.get('vocab', None)
     var = configs.get('var', 30.) # XXX
     logger.info('n_src_vocab={}, n_trg_vocab={}'.format(self.Ks, self.Kt))
     self.alpha = configs.get('alpha', 0.)
@@ -60,6 +61,7 @@ class FullyContinuousMixtureAligner(object):
                                 vec_ids=self.src_vec_ids_train,
                                 pretrained_model=self.pretrained_vgmm_model)
     self.src_feats = self.src_model.X
+    self.src_null_vec = self.src_model.X.mean(axis=0)
     self.trg_feats = target_features_train
     if self.pretrained_translateprob:
       self.P_ts = np.load(self.pretrained_translateprob)
@@ -166,8 +168,14 @@ class FullyContinuousMixtureAligner(object):
         with open('{}_{}_means.json'.format(out_file, i_iter), 'w') as fm,\
              open('{}_{}_transprob.json'.format(out_file, i_iter), 'w') as ft:
           json.dump(self.src_model.means.tolist(), fm, indent=4, sort_keys=True)
-          json.dump(self.P_ts.tolist(), ft, indent=4, sort_keys=True)
-          
+          if self.vocab is not None:
+            P_ts_dict = dict()
+            for v, p in zip(self.vocab, self.P_ts.tolist()):
+              P_ts_dict[v] = p
+            json.dump(P_ts_dict, ft, indent=2, sort_keys=True) 
+          else:
+            json.dump(self.P_ts.tolist(), ft, indent=2, sort_keys=True)
+
         np.save('{}_{}_means.npy'.format(out_file, i_iter), self.src_model.means)
         np.save('{}_{}_transprob.npy'.format(out_file, i_iter), self.P_ts)
 
@@ -186,16 +194,19 @@ class FullyContinuousMixtureAligner(object):
     P_a_norm = []
     for src_feat, trg_feat in zip(source_feats_test, target_feats_test):
       trg_sent = trg_feat
+      if alignment_type.split('_')[0] == 'text':
+        src_feat = np.concatenate([self.src_null_vec[np.newaxis], src_feat], axis=0)
       src_sent = [np.exp(self.src_model.log_prob_z_given_X(src_feat[i], normalize=False))\
                   for i in range(len(src_feat))]
 
       V_trg = to_one_hot(trg_sent, self.Kt)
       V_src = to_one_hot(src_sent, self.Ks)
-      null_prob = V_src.T.mean(axis=0, keepdims=True) # V_src.mean() * np.ones((V_trg.shape[0], 1))
+
+      trg_null_prob = V_src.T.mean(axis=0, keepdims=True)
       P_a = V_trg @ self.P_ts @ V_src.T
 
       if alignment_type.split('_')[0] == 'text':
-        P_a = np.concatenate([null_prob, P_a], axis=0)
+        P_a = np.concatenate([trg_null_prob, P_a], axis=0)
         scores.append(np.prod(np.max(P_a, axis=0)))
         alignments.append(np.argmax(P_a, axis=1)) 
       elif alignment_type == 'image':
@@ -248,7 +259,7 @@ class FullyContinuousMixtureAligner(object):
           confusion[src_vocab[y], trg_vocab[y_pred]] += 1
       elif alignment_type == 'text':
         for trg_idx, y in enumerate(trg_label):
-          y_pred = src_label[alignment[trg_idx+1]]
+          y_pred = src_label[alignment[trg_idx+1]-1]
           confusion[src_vocab[y_pred], trg_vocab[y]] += 1
 
     if len(source_labels) > 0:
@@ -282,9 +293,8 @@ class FullyContinuousMixtureAligner(object):
     for idx2 in range(1, span_num+1):
       distances = []
       for idx1 in range(idx2):
-        distances.append(kl_divergence(P_a[idx2], P_a[idx1]))
+        distances.append(kl_divergence(P_a[idx2], P_a[idx1]) + kl_divergence(P_a[idx1], P_a[idx2]))
       antecedents[idx2-1] = np.argmin(distances)-1
-    
     return antecedents                
 
   def predict_pairwise(self, P_a):
@@ -425,6 +435,70 @@ def to_antecedents(labels):
         break
   return antecedents
 
+def filter_visual_event(text_event_features,
+                        visual_event_features,
+                        cluster_ids,
+                        spans,
+                        doc_ids,
+                        tokens,
+                        text_event_labels,
+                        visual_event_labels,
+                        ontology_map):
+  filtered_event_features = []
+  filtered_visual_features = []
+  filtered_cluster_ids = []
+  filtered_spans = []
+  filtered_event_labels = []
+  filtered_visual_labels = []
+  filtered_tokens = []
+  filtered_doc_ids = []
+  for inputs in zip(text_event_features,\
+                    visual_event_features,\
+                    cluster_ids,\
+                    spans,\
+                    doc_ids,\
+                    tokens,\
+                    text_event_labels,\
+                    visual_event_labels):
+    e_feat, v_feat, cluster_id, span, doc_id, token, text_label, visual_label = inputs
+    filtered_event_feature = []
+    filtered_cluster_id = []
+    filtered_span = []
+    filtered_event_label = []
+
+    n_spans = len(span)
+    is_visual = [0]*n_spans
+    for i in range(n_spans):
+      for y_t in ontology_map[text_label[i]]:
+        if y_t in visual_label:
+          filtered_event_feature.append(e_feat[i].tolist())
+          filtered_cluster_id.append(cluster_id[i])
+          filtered_span.append(span[i])
+          filtered_event_label.append(text_label[i])
+          break
+
+    if len(filtered_event_feature) > 0:
+      filtered_event_feature = np.asarray(filtered_event_feature)
+      filtered_cluster_id = np.asarray(filtered_cluster_id)
+
+      filtered_event_features.append(filtered_event_feature)
+      filtered_visual_features.append(v_feat)
+      filtered_cluster_ids.append(filtered_cluster_id)
+      filtered_spans.append(filtered_span)
+      filtered_event_labels.append(filtered_event_label)
+      filtered_visual_labels.append(visual_label)
+      filtered_doc_ids.append(doc_id)
+      filtered_tokens.append(token)
+
+  return filtered_event_features,\
+         filtered_visual_features,\
+         filtered_cluster_ids,\
+         filtered_spans,\
+         filtered_doc_ids,\
+         filtered_tokens,\
+         filtered_event_labels,\
+         filtered_visual_labels
+
 def load_data(config):
   """
   Returns:
@@ -439,10 +513,11 @@ def load_data(config):
   documents = dict()
   vocab = dict()
   vocab_freq = dict()
-  visual_class_dict = json.load(open(os.path.join(config['data_folder'], '../ontology.json')))
-  visual_classes = visual_class_dict['event']
+  ontology_map  = json.load(open(os.path.join(config['data_folder'], '../ontology_mapping.json')))
+  visual_ontology = json.load(open(os.path.join(config['data_folder'], '../ontology.json')))
+  visual_classes = visual_ontology['event']
   visual_feat_files = dict()
-  visual_labels = None # TODO
+  visual_label_files = dict()
   doc_to_visual_feat = dict()
   for split in config['splits']:
     for dataset in config['splits'][split]:
@@ -462,14 +537,17 @@ def load_data(config):
       text_feat_type = config.get('text_feature_type', 'token')
       if text_feat_type == 'token':
         text_feat_files[dataset] = os.path.join(config['data_folder'], f'{dataset}_events_labels.npz')
-      elif text_feature_type == 'cluster_probs':
+      elif text_feat_type == 'cluster_probs':
         text_feat_files[dataset] = os.path.join(config['data_folder'], f'{dataset}_events_cluster_probs.npz')
       else:
         raise ValueError
 
       visual_feat_type = config.get('visual_feature_type', 'frame')
       if visual_feat_type == 'event':
-        visual_feat_files[dataset] = os.path.join(config['data_folder'], f'{dataset}_mmaction_event_feat.npz') 
+        visual_feat_files[dataset] = os.path.join(config['data_folder'], f'{dataset}_mmaction_event_feat.npz') # XXX 
+        visual_label_file = os.path.join(config['data_folder'], f'{dataset}_mmaction_event_feat_labels.npz')
+        if os.path.exists(visual_label_file):
+          visual_label_files[dataset] = visual_label_file
       elif visual_feat_type == 'frame':
         visual_feat_files[dataset] = os.path.join(config['data_folder'], f'{dataset}_mmaction_feat.npz') 
       else:
@@ -477,6 +555,7 @@ def load_data(config):
 
       text_feats = np.load(text_feat_files[dataset])
       visual_feats = np.load(visual_feat_files[dataset])
+
       doc_to_text_feat[dataset] = {'_'.join(feat_id.split('/')[-1].split('_')[:-1]):feat_id for feat_id in text_feats}
       doc_to_visual_feat[dataset] = {'_'.join(feat_id.split('/')[-1].split('_')[:-1]):feat_id for feat_id in visual_feats}
 
@@ -507,6 +586,8 @@ def load_data(config):
 
   src_feats_train = []
   trg_feats_train = []
+  src_labels_train = []
+  trg_labels_train = []
   doc_ids_train = []
   spans_train = []
   cluster_ids_train = []
@@ -523,28 +604,75 @@ def load_data(config):
   for dataset in config['splits']['train']: 
     text_feats = np.load(text_feat_files[dataset])
     visual_feats = np.load(visual_feat_files[dataset])
+    visual_labels = None
+    cur_trg_feats_train = []
+    cur_trg_labels_train = []
+    cur_cluster_ids_train = []
+    cur_doc_ids_train = []
+    cur_spans_train = []
+    cur_tokens_train = []
+    cur_src_feats_train = []
+    cur_src_labels_train = []
+    if dataset in visual_label_files: 
+      visual_labels = np.load(visual_label_files[dataset])
+
     for feat_idx, doc_id in enumerate(sorted(label_dict[dataset])): # XXX
       visual_feat_id = doc_to_visual_feat[dataset][doc_id]
-      src_feats_train.append(visual_feats[visual_feat_id])
+      cur_src_feats_train.append(visual_feats[visual_feat_id])
+      if visual_labels is not None:
+        visual_labels_int = np.argmax(visual_labels[visual_feat_id], axis=-1)
+        cur_src_labels_train.append([visual_classes[k] for k in visual_labels_int])      
 
       spans = sorted(label_dict[dataset][doc_id])
       text_feat_id = doc_to_text_feat[dataset][doc_id]
       trg_sent = text_feats[text_feat_id] 
+      trg_labels = [label_dict[dataset][doc_id][span]['type'] for span in spans]
       cluster_ids = [label_dict[dataset][doc_id][span]['cluster_id'] for span in spans]
 
-      spans_train.append(spans)
-      trg_feats_train.append(to_one_hot(trg_sent, vocab_size))
-      doc_ids_train.append(doc_id)
-      cluster_ids_train.append(np.asarray(cluster_ids))
-      tokens_train.append([t[2] for t in documents[dataset][doc_id]])
+      cur_trg_feats_train.append(to_one_hot(trg_sent, vocab_size))
+      cur_trg_labels_train.append(trg_labels)
+      cur_doc_ids_train.append(doc_id)
+      cur_spans_train.append(spans)
+      cur_cluster_ids_train.append(np.asarray(cluster_ids))
+      cur_tokens_train.append([t[2] for t in documents[dataset][doc_id]])
+    
+    if visual_labels is not None:
+      cur_trg_feats_train,\
+      cur_src_feats_train,\
+      cur_cluster_ids_train,\
+      cur_spans_train,\
+      cur_doc_ids_train,\
+      cur_tokens_train,\
+      cur_trg_labels_train,\
+      cur_src_labels_train = filter_visual_event(cur_trg_feats_train, 
+                                                 cur_src_feats_train,
+                                                 cur_cluster_ids_train, 
+                                                 cur_spans_train,
+                                                 cur_doc_ids_train,
+                                                 cur_tokens_train,
+                                                 cur_trg_labels_train,
+                                                 cur_src_labels_train,
+                                                 ontology_map) 
+    trg_feats_train.extend(cur_trg_feats_train)
+    trg_labels_train.extend(cur_trg_labels_train)
+    doc_ids_train.extend(cur_doc_ids_train)
+    cluster_ids_train.extend(cur_cluster_ids_train)
+    spans_train.extend(cur_spans_train)
+    tokens_train.extend(cur_tokens_train)
+    src_feats_train.extend(cur_src_feats_train)
+    src_labels_train.extend(cur_src_labels_train)
 
   for dataset in config['splits']['test']:
     text_feats = np.load(text_feat_files[dataset])
     visual_feats = np.load(visual_feat_files[dataset])
+    visual_labels = None
+    if dataset in visual_label_files: 
+      visual_labels = np.load(visual_label_files[dataset])
+
     for feat_idx, doc_id in enumerate(sorted(label_dict[dataset])): # XXX
       visual_feat_id = doc_to_visual_feat[dataset][doc_id]
       src_feats_test.append(visual_feats[visual_feat_id])
-      if visual_labels is not None: # TODO Creat visual label for the whole video
+      if visual_labels is not None:
         visual_labels_int = np.argmax(visual_labels[visual_feat_id], axis=-1)
         src_labels_test.append([visual_classes[k] for k in visual_labels_int])
 
@@ -559,8 +687,26 @@ def load_data(config):
       doc_ids_test.append(doc_id)
       cluster_ids_test.append(np.asarray(cluster_ids))
       tokens_test.append([t[2] for t in documents[dataset][doc_id]])
-
+  
+    if visual_labels is not None:
+      trg_feats_test,\
+      src_feats_test,\
+      cluster_ids_test,\
+      spans_test,\
+      doc_ids_test,\
+      tokens_test,\
+      trg_labels_test,\
+      src_labels_test = filter_visual_event(trg_feats_test, 
+                                            src_feats_test,
+                                            cluster_ids_test, 
+                                            spans_test,
+                                            doc_ids_test,
+                                            tokens_test,
+                                            trg_labels_test,
+                                            src_labels_test,
+                                            ontology_map) 
   return src_feats_train, trg_feats_train,\
+         src_labels_train, trg_labels_train,\
          src_feats_test, trg_feats_test,\
          src_labels_test, trg_labels_test,\
          doc_ids_train, doc_ids_test,\
@@ -582,6 +728,7 @@ if __name__ == '__main__':
   logging.basicConfig(filename=os.path.join(config['model_path'], 'train.log'))
   
   src_feats_train, trg_feats_train,\
+  src_labels_train, trg_labels_train,\
   src_feats_test, trg_feats_test,\
   src_labels_test, trg_labels_test,\
   doc_ids_train, doc_ids_test,\
@@ -589,15 +736,22 @@ if __name__ == '__main__':
   cluster_ids_train, cluster_ids_test,\
   tokens_train, tokens_test,\
   src_vocab, trg_vocab = load_data(config)
-  Ks = config.get('Ks', 50)
-  Kt = config.get('Kt', trg_feats_train[0].shape[-1])
-    
+  
   ## Model training
+  config['vocab'] = sorted(trg_vocab, key=lambda x:trg_vocab[x])
   aligner = FullyContinuousMixtureAligner(src_feats_train+src_feats_test, 
-                                          trg_feats_train+trg_feats_test, 
-                                          configs={'n_trg_vocab':Kt, 
-                                                   'n_src_vocab':Ks})
-  aligner.trainEM(15, os.path.join(config['model_path'], 'mixture')) # XXX 
+                                          trg_feats_train+trg_feats_test,
+                                          configs=config)
+  aligner.trainEM(5, os.path.join(config['model_path'], 'mixture')) # XXX 
+ 
+  '''
+  example_idx = 0
+  for doc_id in doc_ids_test:
+    if doc_id == '7rI02PKM-Do':
+      break
+    example_idx += 1
+  print(doc_id, tokens_test[example_idx], src_labels_test[example_idx]) # XXX
+  '''
   P_a_norm = aligner.align(src_feats_test,
                            trg_feats_test,
                            src_labels_test,
@@ -605,6 +759,14 @@ if __name__ == '__main__':
                            out_prefix=os.path.join(config['model_path'], 
                                                    'alignment'),
                            alignment_type='text')  
+  _ = aligner.align(src_feats_test,
+                    trg_feats_test,
+                    src_labels_test,
+                    trg_labels_test,
+                    out_prefix=os.path.join(config['model_path'], 
+                                            'alignment'),
+                    alignment_type='image')  
+
   antecedents = [aligner.predict_antecedent(P_a) for P_a in P_a_norm]
   pred_labels, first, second = zip(*[aligner.predict_pairwise(P_a) for P_a in P_a_norm if P_a.shape[0] > 2])
   first = list(first)
@@ -637,10 +799,15 @@ if __name__ == '__main__':
   assert len(pred_labels) == len(gold_labels)
 
   # Compute pairwise scores
+  pred_labels_baseline = torch.ones(pred_labels.size(), dtype=torch.int)
+  pairwise_eval_baseline = Evaluation(pred_labels_baseline, gold_labels) 
+  print(f'BASELINE (Predict Dominant Class), Pairwise - Precision: {pairwise_eval_baseline.get_precision()}, Recall: {pairwise_eval_baseline.get_recall()}, F1: {pairwise_eval_baseline.get_f1()}')
+
   pairwise_eval = Evaluation(pred_labels, gold_labels)
   print(f'Pairwise - Precision: {pairwise_eval.get_precision()}, Recall: {pairwise_eval.get_recall()}, F1: {pairwise_eval.get_f1()}')
   logger.info(f'Pairwise precision: {pairwise_eval.get_precision()}, recall: {pairwise_eval.get_recall()}, F1: {pairwise_eval.get_f1()}')
   
+
   # Compute CoNLL scores and save readable predictions
   f_out = open(os.path.join(config['model_path'], 'prediction.readable'), 'w')
   for doc_id, token, span, antecedent, cluster_id in zip(doc_ids_test, tokens_test, spans_test, antecedents, cluster_ids_test):
