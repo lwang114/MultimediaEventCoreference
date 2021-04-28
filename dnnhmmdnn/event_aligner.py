@@ -21,7 +21,7 @@ from region_vgmm import *
 from negative_square import NegativeSquare
 from evaluator import Evaluation, CoNLLEvaluation
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 EPS = 1e-100
 np.random.seed(2)
 class FullyContinuousMixtureAligner(object):
@@ -34,7 +34,7 @@ class FullyContinuousMixtureAligner(object):
     self.pretrained_translateprob = configs.get('pretrained_translateprob', None)
     self.vocab = configs.get('vocab', None)
     var = configs.get('var', 30.) # XXX
-    logger.info('n_src_vocab={}, n_trg_vocab={}'.format(self.Ks, self.Kt))
+    logging.info('n_src_vocab={}, n_trg_vocab={}'.format(self.Ks, self.Kt))
     self.alpha = configs.get('alpha', 0.)
     if target_features_train[0].ndim <= 1:
       self.trg_embedding_dim = 1 
@@ -163,7 +163,7 @@ class FullyContinuousMixtureAligner(object):
       log_prob = self.update_counts()
       self.update_components()
       print('Iteration {}, log likelihood={}'.format(i_iter, log_prob))
-      logger.info('Iteration {}, log likelihood={}'.format(i_iter, log_prob))
+      logging.info('Iteration {}, log likelihood={}'.format(i_iter, log_prob))
       if (i_iter + 1) % 5 == 0:
         with open('{}_{}_means.json'.format(out_file, i_iter), 'w') as fm,\
              open('{}_{}_transprob.json'.format(out_file, i_iter), 'w') as ft:
@@ -377,8 +377,8 @@ class FullyContinuousMixtureAligner(object):
     print('Captioning Recall@1: ', P_recall_at_1)
     print('Captioning Recall@5: ', P_recall_at_5)
     print('Captioning Recall@10: ', P_recall_at_10)
-    logger.info('Image Search Recall@1, 5, 10: {}, {}, {}'.format(I_recall_at_1, I_recall_at_5, I_recall_at_10))
-    logger.info('Captioning Recall@1, 5, 10: {}, {}, {}'.format(P_recall_at_1, P_recall_at_5, P_recall_at_10))
+    logging.info('Image Search Recall@1, 5, 10: {}, {}, {}'.format(I_recall_at_1, I_recall_at_5, I_recall_at_10))
+    logging.info('Captioning Recall@1, 5, 10: {}, {}, {}'.format(P_recall_at_1, P_recall_at_5, P_recall_at_10))
 
     fp1 = open(out_file + '_image_search.txt', 'w')
     fp2 = open(out_file + '_image_search.txt.readable', 'w')
@@ -688,7 +688,7 @@ def load_data(config):
       cluster_ids_test.append(np.asarray(cluster_ids))
       tokens_test.append([t[2] for t in documents[dataset][doc_id]])
   
-    if visual_labels is not None:
+    if False: # visual_labels is not None:
       trg_feats_test,\
       src_feats_test,\
       cluster_ids_test,\
@@ -805,7 +805,7 @@ if __name__ == '__main__':
 
   pairwise_eval = Evaluation(pred_labels, gold_labels)
   print(f'Pairwise - Precision: {pairwise_eval.get_precision()}, Recall: {pairwise_eval.get_recall()}, F1: {pairwise_eval.get_f1()}')
-  logger.info(f'Pairwise precision: {pairwise_eval.get_precision()}, recall: {pairwise_eval.get_recall()}, F1: {pairwise_eval.get_f1()}')
+  logging.info(f'Pairwise precision: {pairwise_eval.get_precision()}, recall: {pairwise_eval.get_recall()}, F1: {pairwise_eval.get_f1()}')
   
 
   # Compute CoNLL scores and save readable predictions
@@ -828,7 +828,7 @@ if __name__ == '__main__':
         'Bcubed - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
         'CEAFe - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
         'CoNLL - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*conll_metrics)) 
-  logger.info('MUC - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
+  logging.info('MUC - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
               'Bcubed - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
               'CEAFe - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
               'CoNLL - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*conll_metrics))
