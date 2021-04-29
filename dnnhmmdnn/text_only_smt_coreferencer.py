@@ -4,13 +4,15 @@ import os
 import json
 import logging
 import torch
-from itertools import combinations
+import codecs
+from nltk.stem import WordNetLemmatizer
+import itertools
 import argparse
-from evaluator import Evaluation
-from conll import write_output_file
+import pyhocon
+from evaluator import Evaluation, CoNLLEvaluation
 
 NULL = '###NEW###'
-EPS = 1e-40
+EPS = 1e-100
 class SMTCoreferencer:
   def __init__(self, event_features):
     '''
@@ -27,18 +29,15 @@ class SMTCoreferencer:
              'cluster_id': '0',
              'tokens': str, tokens concatenated with space} 
     '''
-    self.is_one_indexed = config.get('is_one_indexed', False)
-    if not os.path.exists(self.out_path):
-      os.makedirs(self.out_path)
     self.e_feats_train = event_features
     self.ee_counts = dict()
     self.P_ee = dict()
-    
     self.vocab = self.get_vocab(event_features)
+    self.initialize()
     logging.info(f'Number of documents = {len(self.e_feats_train)}, vocab size = {len(self.vocab)}')
 
   def get_vocab(self, event_feats):
-    vocab = {'NULL':0}
+    vocab = {NULL:0}
     for e_feat in event_feats:
       for e_idx, e in enumerate(e_feat):
         if not e['head_lemma'] in vocab:
@@ -52,9 +51,9 @@ class SMTCoreferencer:
       if not v in self.P_ee:
         self.P_ee[v] = dict()
 
-        for v in self.vocab:
-          if v != NULL:
-            self.P_ee[v][v] = 1. / (len(self.vocab) - 1)   
+      for v2 in self.vocab:
+        if v2 != NULL:
+          self.P_ee[v][v2] = 1. / (len(self.vocab) - 1)   
 
   def is_match(self, e1, e2):
     v1 = e1['trigger_embedding']
@@ -71,9 +70,12 @@ class SMTCoreferencer:
 
         align_count[e_idx+1][0] = self.P_ee[NULL][token]
         for a_idx, antecedent in enumerate(e_feat[:e_idx]):
-          if is_match(e, antecedent):
+          if self.is_match(e, antecedent):
             a_token = antecedent['head_lemma']
             align_count[e_idx+1][a_idx+1] = self.P_ee[a_token][token]
+        
+        for a_idx in align_count[e_idx+1]: 
+          align_count[e_idx+1][a_idx] /= sum(align_count[e_idx+1].values())
       align_counts.append(align_count)
     return align_counts
 
@@ -110,17 +112,18 @@ class SMTCoreferencer:
 
   def log_likelihood(self):
     ll = 0.
-    for ex, e_feat in enumerate(self.event_features):
+    for ex, e_feat in enumerate(self.e_feats_train):
       for e_idx, e in enumerate(e_feat):
         probs = [self.P_ee[NULL][e['head_lemma']]]
         for a_idx, a in enumerate(e_feat[:e_idx]):
-          probs.append(self.P_ee[a['head_lemma']][e['head_lemma'])
+          if self.is_match(e, a):
+            probs.append(self.P_ee[a['head_lemma']][e['head_lemma']])
         ll += np.log(np.maximum(np.mean(probs), EPS))
     return ll
 
   def train(self, n_epochs=10):
     for epoch in range(n_epochs):
-      self.align_counts = self.compute_alignment_counts()
+      self.ee_counts = self.compute_alignment_counts()
       self.P_ee = self.update_translation_probs()
 
       logging.info('Epoch {}, log likelihood = {:.3f}'.format(epoch, self.log_likelihood()))
@@ -132,24 +135,27 @@ class SMTCoreferencer:
     n_cluster = 0
     for e_feat in event_features:
       antecedent = [-1]*len(e_feat)
-      cluster_id = [-1]*len(e_feat)
+      cluster_id = [0]*len(e_feat)
       for e_idx, e in enumerate(e_feat):
         scores = [self.P_ee[NULL][e['head_lemma']]]
         for a_idx, a in enumerate(e_feat[:e_idx]):
-          scores.append(self.P_ee[a['head_lemma']][a['head_lemma']])
+          if self.is_match(e, a):
+            scores.append(self.P_ee[a['head_lemma']][e['head_lemma']])
+          else:
+            scores.append(0)
         scores = np.asarray(scores)
         antecedent[e_idx] = np.argmax(scores) - 1
         if antecedent[e_idx] == -1:
-          cluster_id.append(n_cluster)
+          cluster_id[e_idx] = n_cluster
           n_cluster += 1
         else:
-          cluster_id.append(cluster_id[antecedent[e_idx]])
+          cluster_id[e_idx] = cluster_id[antecedent[e_idx]]
       antecedents.append(antecedent)
       cluster_ids.append(cluster_id)
     return antecedents, cluster_ids
 
 def cosine_similarity(v1, v2):
-  return v1 @ v2 / np.maximum(EPS, np.linalg.norm(v1) * np.linalg.norm(v2))
+  return abs(v1 @ v2) / np.maximum(EPS, np.linalg.norm(v1) * np.linalg.norm(v2))
 
 def to_pairwise(labels):
   n = labels.shape[0]
@@ -297,6 +303,7 @@ if __name__ == '__main__':
 
   ## Test and evaluation
   pred_cluster_ids = [np.asarray(cluster_ids) for cluster_ids in cluster_ids_all]
+  print(pred_cluster_ids[:10], cluster_ids_test[:10]) # XXX
   pred_labels = [torch.LongTensor(to_pairwise(a)) for a in pred_cluster_ids if a.shape[0] > 1]
   gold_labels = [torch.LongTensor(to_pairwise(c)) for c in cluster_ids_test if c.shape[0] > 1]
   pred_labels = torch.cat(pred_labels)
