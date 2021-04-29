@@ -460,7 +460,8 @@ def main():
                                          'reduce_dim',
                                          'concat_embeddings',
                                          'extract_mention_token_encodings',
-                                         'extract_mention_glove_embeddings_with_arguments'})
+                                         'extract_mention_glove_embeddings_with_arguments',
+                                         'extract_visual_cluster_probabilities'})
   args = parser.parse_args()  
   config = pyhocon.ConfigFactory.parse_file(args.config) 
   if not os.path.isdir(config['log_path']):
@@ -522,6 +523,11 @@ def main():
                   'out_prefix': f'{dataset}_{args.mention_type}_with_arguments_glove_embeddings',
                   'use_arguments': True}
         extract_mention_glove_embeddings(**kwargs)
+  elif args.task == 'extract_visual_cluster_probabilities':
+    kwargs = {'embed_files': [os.path.join(config['data_folder'], f'{split}_mmaction_event_feat_average.npz')
+                              for split in ['train', 'train_asr_sentence', 'test']],
+              'n_clusters': 60}
+    extract_mention_cluster_probabilities(**kwargs)
 
 if __name__ == '__main__':
   main()

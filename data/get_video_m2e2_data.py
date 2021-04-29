@@ -85,7 +85,7 @@ def get_mention_doc_oneie(data_dir, out_prefix, separate_sentence=False):
               entity = entities_info[role[1]]
               mention['arguments'].append({'start': entity[0] if separate_sentence else start_sent+entity[0],
                                            'end': entity[1]-1 if separate_sentence else start_sent+entity[1]-1,
-                                           'token': ' '.join(tokens[entity[0]:entity[1]]),
+                                           'tokens': ' '.join(tokens[entity[0]:entity[1]]),
                                            'role': role[2]})
           cur_mentions.append(mention)
         start_sent += len(tokens)
@@ -292,7 +292,9 @@ def extract_asr_sentence_features(visual_embed_file,
                                   event_file, 
                                   asr_file,
                                   duration_file,
-                                  out_prefix):
+                                  ontology_file,
+                                  out_prefix,
+                                  technique='concatenate'):
   """
   :param visual_embed_file: filename to an Npz object from [doc id with '_' delimiter]_[idx] to an array of shape (number of frames, embedding dim)
   :param event_file: filename to a list of dicts (doc id with '_' delimiter)
@@ -300,6 +302,12 @@ def extract_asr_sentence_features(visual_embed_file,
   :param duration_file: filename to a json file storing dict from doc_id to a dict with ' ' delimiter from 'duration_second' to duration of the video 
   """
   asr_dict = json.load(open(asr_file))
+  doc_dur = json.load(open(duration_file))
+  documents = json.load(open(doc_file)) 
+  event_mentions = json.load(open(event_file))
+  ontology = json.load(open(ontology_file))
+  event_stoi = {e:i for i, e in enumerate(ontology['event'])}
+
   # dict[str, dict[int, int]] 
   segment_to_sent = dict()
   for doc_id in asr_dict:
@@ -310,9 +318,6 @@ def extract_asr_sentence_features(visual_embed_file,
         if len(segment) > 0:
           segment_to_sent[doc_id].append(sent_idx)
   
-  doc_dur = json.load(open(duration_file))
-  documents = json.load(open(doc_file)) 
-  event_mentions = json.load(open(event_file))
   label_dict = dict()
   new_documents = dict()
   for segment_id in sorted(documents):
@@ -328,6 +333,7 @@ def extract_asr_sentence_features(visual_embed_file,
   json.dump(new_documents, open(out_prefix+'.json', 'w'), indent=2)
 
   new_event_mentions = []
+  event_label_dict = dict()
   for m in event_mentions:
     segment_id = m['doc_id']
     doc_id = '-'.join(segment_id.split('-')[:-1])
@@ -337,13 +343,21 @@ def extract_asr_sentence_features(visual_embed_file,
     sent_id = f'{doc_id}-{sent_idx}'    
     new_mention = deepcopy(m)
     new_mention['doc_id'] = sent_id 
-    new_event_mentions.append(new_mention)    
+    
+    if not sent_id in event_label_dict and new_mention['event_type'] in event_stoi: 
+      event_label_dict[sent_id] = []
+    else:
+      continue
+    event_label_dict[sent_id].append(event_stoi[new_mention['event_type']])
+    new_event_mentions.append(new_mention)
+  print(f'Number of event mentions: {len(new_event_mentions)}')
   json.dump(new_event_mentions, open(out_prefix+'_events.json', 'w'), indent=2)
 
   visual_embed_npz = np.load(visual_embed_file)
   doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in visual_embed_npz}
   visual_event_embeds = dict()
-  for idx, sent_id in enumerate(sorted(label_dict)):
+  visual_event_labels = dict()
+  for idx, sent_id in enumerate(sorted(event_label_dict)):
     doc_id = '-'.join(sent_id.split('-')[:-1])
     doc_id_spc = doc_id.replace('_', ' ')
 
@@ -356,16 +370,133 @@ def extract_asr_sentence_features(visual_embed_file,
     start_frame = int(start / dur * 100)
     end_frame = int(end / dur * 100)
     new_feat_id = f'{sent_id}_{idx}'
-    visual_event_embeds[new_feat_id] = visual_embed[start_frame:end_frame+1]  
+    
+    if technique == 'average':
+      visual_event_embeds[new_feat_id] = visual_embed.mean(axis=0, keepdims=True)
+    else:
+      visual_event_embeds[new_feat_id] = visual_embed[start_frame:end_frame+1]  
+    visual_event_labels[new_feat_id] = event_label_dict[sent_id][0]
 
-  np.savez(out_prefix+'_mmaction_feat.npz', **visual_event_embeds)
-  
+  visual_event_labels = {k:np.eye(len(event_stoi))[l][np.newaxis] for k, l in visual_event_labels.items()}
+  np.savez(out_prefix+'_mmaction_event_feat.npz', **visual_event_embeds)
+  np.savez(out_prefix+'_mmaction_event_feat_labels.npz', **visual_event_labels)
+
+def extract_oneie_embeddings(embedding_file,
+                             oneie_dir,
+                             mapping_file,
+                             mention_json,
+                             out_prefix):
+  ''' Extract OneIE embeddings
+  :param embedding_file: str, filename of embeddings of the format
+      IEDs\t[mention id]\t[embedding vals separated by commas]
+  :param oneie_dir: str, directory containing OneIE results
+  :param mapping_file: str, filename of the mapping from youtube id to description id (connected with _)
+  :param mention_json: str, filename containing event and coreference annotation 
+  '''
+  # Create a dict from description id to ground truth mention token idxs
+  lemmatizer = WordNetLemmatizer()
+  mapping_dict = json.load(open(mapping_file))
+  mentions = json.load(open(mention_json))
+  id2desc = {v['id'].split('v=')[-1]:k for k, v in mapping_dict.items()}
+  label_dict = dict()
+  for m in mentions:
+    desc_id = id2desc[m['doc_id']]
+    for punct in PUNCT:
+      desc_id = desc_id.replace(punct, '')
+    desc_id = desc_id.replace(' ', '_')
+
+    if not desc_id in label_dict:
+      label_dict[desc_id] = dict()
+    for token_id in m['tokens_ids']:
+      label_dict[desc_id][token_id] = deepcopy(m)
+
+  # Create a dict from description id to span to oneie token ids and groundtruth mention info 
+  label_dict_oneie = dict()
+  start_sent = 0
+  for fn in os.listdir(oneie_dir):
+    if len(label_dict_oneie) > 20: # XXX
+      break
+    desc_id = '.'.join(fn.split('.')[:-1])
+    if not desc_id in label_dict:
+      continue 
+    print(desc_id) # XXX
+
+    label_dict_oneie[desc_id] = dict()
+    for line in open(os.path.join(oneie_dir, fn), 'r'):
+      sent_dict = json.loads(line)
+        
+      graph = sent_dict['graph']
+      token_ids = sent_dict['token_ids']
+      triggers_info = graph['triggers']
+      entities_info = graph['entities']
+      tokens = [t.lower() for t in sent_dict['tokens']]
+      roles_info = graph['roles']
+
+      if not desc_id in label_dict_oneie:
+        label_dict_oneie[desc_id] = dict()
+      
+      for trigger_idx, trigger in enumerate(triggers_info):
+        trigger_tokens = tokens[trigger[0]:trigger[1]]
+        found = 0
+        for token_idx in range(trigger[0], trigger[1]):
+          if token_idx in label_dict[desc_id]:
+            found = 1
+            break
+        if not found:
+          continue
+        else:
+          span = (trigger[0], trigger[1]-1)
+          mention_info = label_dict[desc_id][token_idx]
+          mention_info['token_ids'] = token_ids[trigger[0]:trigger[1]]
+          mention_info['oneie_tokens'] = ' '.join(trigger_tokens)
+          mention_info['arguments'] = []
+          for role in roles_info:
+            if role[0] == trigger_idx:
+              entity = entities_info[role[1]]
+              head_lemma = lemmatizer.lemmatize(tokens[entity[1]-1].lower())
+              mention_info['arguments'].append({'start': start_sent+entity[0],
+                                                'end': start_sent+entity[1],
+                                                'tokens': ' '.join(tokens[entity[0]:entity[1]]),
+                                                'token_ids': token_ids[entity[0]:entity[1]],
+                                                'role': role[2],
+                                                'head_lemma': head_lemma})
+          label_dict_oneie[desc_id][span] = deepcopy(mention_info)
+      start_sent += len(tokens)
+  mentions = [label_dict_oneie[desc_id][span] for desc_id in label_dict_oneie for span in sorted(label_dict_oneie[desc_id])]
+  json.dump(mentions, open(f'{out_prefix}_events.json', 'w'), indent=2)
+
+  # Create a mapping from token id to ([desc id]_[desc idx], span_idx) 
+  token_id_to_emb = dict()
+  for desc_idx, desc_id in enumerate(sorted(label_dict_oneie)):
+    feat_id = f'{desc_id}_{desc_idx}'
+    for span_idx, span in enumerate(sorted(label_dict_oneie[desc_id])):
+      mention_info = label_dict_oneie[desc_id][span]
+      for token_id in mention_info['token_ids']:
+        token_id_to_emb[token_id] = (feat_id, span_idx) 
+
+  embs = dict()
+  with open(embedding_file, 'r') as f:
+    for line in f:
+      _, token_id, vec_str = line.strip().split('\t')
+      if not token_id in token_id_to_emb:
+        continue
+      feat_id, span_idx = token_id_to_emb[token_id]
+      if not feat_id in embs:
+        embs[feat_id] = []
+      while span_idx >= len(embs[feat_id]):
+        embs[feat_id].append([])
+
+      emb = [float(v) for v in vec_str.split(',')]
+      embs[feat_id][span_idx].append(emb)
+    embs = {feat_id:np.stack([np.asarray(e).mean(axis=0) for e in embs[feat_id]]) for feat_id in embs}
+  np.savez(f'{out_prefix}_oneie.npz', **embs)
 
 def extract_visual_event_embeddings(data_dir, 
                                     csv_dir, 
                                     mapping_file, 
                                     duration_file, 
-                                    annotation_file, 
+                                    annotation_file,
+                                    technique='average',
                                     out_prefix='mmaction_event_feats', 
                                     k=5):
   ''' Extract visual event embeddings
@@ -439,13 +570,17 @@ def extract_visual_event_embeddings(data_dir,
     dur = dur_dict[desc]['duration_second']
     for event_dict in ann_dict[desc+'.mp4']:
       event_type = event_dict['Event_Type']
-      event_label.append(event_type)
+      start_time, end_time = event_dict['Temporal_Boundary']
+      start, end = int(start_time / dur * nframes), int(end_time / dur * nframes)
+
+      if technique == 'concatenate':
+        event_label.extend([event_type]*(end-start+1))
+      else:
+        event_label.append(event_type)
       if not event_type in event_frequency:
         event_frequency[event_type] = 1
       else:
         event_frequency[event_type] += 1 
-      start_time, end_time = event_dict['Temporal_Boundary']
-      start, end = int(start_time / dur * nframes), int(end_time / dur * nframes)
       
       cur_arg_feat = []
       cur_arg_label = []
@@ -471,17 +606,28 @@ def extract_visual_event_embeddings(data_dir,
 
       # Subsample k vectors
       e_feat = frame_feats[start:end+1]
-      if end - start + 1 < k:
-        gap = k - (end - start + 1)
-        e_feat_pad = np.repeat(frame_feats[end][np.newaxis], gap, axis=0)
-        e_feat = np.concatenate([e_feat, e_feat_pad], axis=0)
-      nframes_in_multiple = int(np.floor(e_feat.shape[0] / k)) * k
-      e_feat_new = np.mean(
-          e_feat[:nframes_in_multiple].reshape(k, -1, e_feat.shape[-1]),
-          axis=1).flatten('C')
-      event_feat.append(e_feat_new)
-    
-    event_feat = np.stack(event_feat, axis=0)
+      
+      if technique == 'resample':
+        if end - start + 1 < k:
+          gap = k - (end - start + 1)
+          e_feat_pad = np.repeat(frame_feats[end][np.newaxis], gap, axis=0)
+          e_feat = np.concatenate([e_feat, e_feat_pad], axis=0)
+        nframes_in_multiple = int(np.floor(e_feat.shape[0] / k)) * k
+        e_feat_new = np.mean(
+            e_feat[:nframes_in_multiple].reshape(k, -1, e_feat.shape[-1]),
+            axis=1).flatten('C')
+        event_feat.append(e_feat_new)
+      elif technique == 'average':
+        event_feat.append(e_feat.mean(axis=0))
+      elif technique == 'concatenate':
+        event_feat.append(e_feat)
+      else:
+        raise ValueError
+
+    if technique == 'concatenate':
+      event_feat = np.concatenate(event_feat)
+    else:
+      event_feat = np.stack(event_feat, axis=0)
     argument_feat = np.stack(argument_feat, axis=0)
     argument_label = np.stack(argument_label, axis=0)
 
@@ -665,7 +811,7 @@ if __name__ == '__main__':
       train_dur_dict.update(test_dur_dict)
       json.dump(train_dur_dict, open(duration_file, 'w'), indent=2)
     out_prefix = os.path.join(data_dir, 'train_mmaction_event_feat')
-    extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_file, annotation_file, out_prefix=out_prefix)
+    extract_visual_event_embeddings(data_dir, csv_dir, mapping_file, duration_file, annotation_file, out_prefix=out_prefix, technique='concatenate')
   elif args.task == 6:
     out_prefix = os.path.join(data_dir, 'train_mmaction_event_feat')
     embed_file = f'{out_prefix}.npz'
@@ -701,6 +847,17 @@ if __name__ == '__main__':
                                  os.path.join(data_dir, 'train_asr_segment.json'),
                                  os.path.join(data_dir, 'train_asr_segment_events.json'),
                                  os.path.join(data_dir, '../AIDA_additional_video_data_master_filtered_for_invalid_videos_v1 (1).json'),
-                                 os.path.join(data_dir, '../anet_anno.json'),
+                                 os.path.join(data_dir, '../anet_anno_all.json'),
+                                 os.path.join(data_dir, '../ontology.json'),
                                  out_prefix)
-     
+  elif args.task == 12:
+    embedding_file = 'video_m2e2/m2e2_en.trigger.hidden.txt'
+    oneie_dir = 'video_m2e2/m2e2_json'
+    mapping_file = 'video_m2e2/video_m2e2.json'
+    for split in ['train', 'test']:
+      mention_json = f'video_m2e2/mentions/{split}_events.json'
+      extract_oneie_embeddings(embedding_file,
+                               oneie_dir,
+                               mapping_file,
+                               mention_json,
+                               out_prefix=os.path.join('video_m2e2/mentions/', f'{split}_oneie'))
