@@ -47,17 +47,13 @@ class VideoM2E2SupervisedCrossmediaDataset(Dataset):
     doc_json = os.path.join(config['data_folder'], f'{split}.json')
     mention_json = os.path.join(config['data_folder'], f'{split}_{config["mention_type"]}.json')    
     documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
-
-    self.documents = documents
-    print('Number of documents: ', len(self.doc_ids))
-
-    text_mentions = json.load(codecs.open(text_mention_json, 'r', 'utf-8'))
+    text_mentions = json.load(codecs.open(mention_json, 'r', 'utf-8'))
 
     id_mapping_json = os.path.join(config['data_folder'], '../video_m2e2.json')
     action_anno_json = os.path.join(config['data_folder'], '../master.json') # Contain event time stamps
     action_dur_json = os.path.join(config['data_folder'], '../anet_anno.json')
     ontology_json = os.path.join(config['data_folder'], '../ontology.json')
-    ontology_map_json = os.path.join(config['data_folder'], '../ontology_map.json')
+    ontology_map_json = os.path.join(config['data_folder'], '../ontology_mapping.json')
 
     id_mapping = json.load(codecs.open(id_mapping_json, 'r', 'utf-8'))
     action_anno_dict = json.load(codecs.open(action_anno_json, 'r', 'utf-8'))
@@ -67,35 +63,38 @@ class VideoM2E2SupervisedCrossmediaDataset(Dataset):
     if config['mention_type'] == 'event':
       ontology = ontology_dict['event']
     elif config['mention_type'] == 'entities':
-      ontology = ontology_dict['entities']:
+      ontology = ontology_dict['entities']
     else:
       ontology = ontology_dict['event'] + ontology_dict['entities']
 
     self.ontology_map = json.load(codecs.open(ontology_map_json))
 
     # Load action embeddings
-    self.action_embeddings = np.load(os.path.join(config['data_folder'], f'{split}_mmaction.npz'))
+    self.action_embeddings = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_feat.npz'))
     
     # Load document embeddings
     bert_embed_file = '{}_{}.npz'.format(doc_json.split('.')[0], config.bert_model)
     self.docs_embeddings = np.load(bert_embed_file)
     
-    self.doc_to_action_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in self.action_embeddings} # XXX
+    self.doc_to_action_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in self.action_embeddings}
     self.doc_to_text_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in self.docs_embeddings}
     
     # Load event info
     self.text_label_dict, self.event_stoi = self.create_text_dict_labels(text_mentions)
     self.action_label_dict, self.action_stoi = self.create_action_dict_labels(id_mapping,\
-                            action_anno_dict,\
+                                                                              action_anno_dict,\
                                                                               action_dur_dict,\
                                                                               ontology)
-    self.data_list = self.create_data_list(self.text_label_dict, self.action_label_dict)
-    print('Number of mention-action pairs: ', len(self.data_list))
+    documents = {doc_id:doc for doc_id, doc in documents.items() if doc_id in self.text_label_dict}
+    self.documents = documents
 
+    self.data_list = self.create_data_list(self.text_label_dict, self.action_label_dict) # XXX
+    print('Number of documents: ', len(documents))
+    print('Number of mention-action pairs: ', len(self.data_list))
  
     # Tokenize documents and extract token spans after bert tokenization
     self.tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
-    self.origin_tokens, self.bert_tokens, self.bert_start_ends, clean_start_end_dict = self.tokenize(documents)
+    self.origin_tokens, self.bert_tokens, self.bert_start_ends, self.clean_start_end_dict = self.tokenize(documents)
 
   def tokenize(self, documents):
     '''
@@ -156,7 +155,7 @@ class VideoM2E2SupervisedCrossmediaDataset(Dataset):
         text_label_dict[m['doc_id']][(start, end)] = m['event_type']        
     return text_label_dict, stoi
     
-  def create_image_dict_labels(self, 
+  def create_action_dict_labels(self, 
                                id_map,
                                anno_dict,
                                dur_dict, 
@@ -170,22 +169,22 @@ class VideoM2E2SupervisedCrossmediaDataset(Dataset):
     """
     label_dict = dict()
     stoi = {c:i for i, c in enumerate(ontology)}
-    for doc_id in id_map:
-      desc_id = id_map[doc_id]
+    for desc_id, desc in id_map.items():
+      doc_id = desc['id'].split('v=')[-1] 
       for punct in PUNCT:
         desc_id = desc_id.replace(punct, '')
-      if not desc_id in id_map:
+      if not desc_id in dur_dict:
         continue
 
       label_dict[doc_id] = dict()
       dur = dur_dict[desc_id]['duration_second']
-      for ann in anno_dict[desc_id]:
+      for ann in anno_dict[desc_id+'.mp4']:
         action_class = ontology[ann['Event_Type']] 
         start_sec, end_sec = ann['Temporal_Boundary']  
         start, end = int(start_sec / dur * 100), int(end_sec / dur * 100)
         label_dict[doc_id][(start, end)] = action_class
 
-    return label_dict
+    return label_dict, stoi
 
   def create_data_list(self, 
                        text_label_dict, 
@@ -198,11 +197,11 @@ class VideoM2E2SupervisedCrossmediaDataset(Dataset):
     data_list = []
     for doc_idx, doc_id in enumerate(sorted(text_label_dict)):
       for m_span in sorted(text_label_dict[doc_id]):
-        for a_span sorted(action_label_dict[doc_id]): 
+        for a_span in sorted(action_label_dict[doc_id]): 
           data_list.append([doc_idx, doc_id, [m_span, text_label_dict[doc_id][m_span]], [a_span, action_label_dict[doc_id][a_span]]])
     return data_list
 
-  def __item__(self, idx):
+  def __getitem__(self, idx):
     """ 
     Load mention span embeddings for the document
     
@@ -217,12 +216,14 @@ class VideoM2E2SupervisedCrossmediaDataset(Dataset):
     
     doc_embeddings = self.docs_embeddings[self.doc_to_text_feat[doc_id]]
     doc_embeddings = torch.FloatTensor(doc_embeddings)
-    bert_start_ends = self.bert_start_ends[idx]
-    m_bert_start = bert_start_ends[m_info[0][0], 0]
-    m_bert_end = bert_start_ends[m_info[0][1], 1]
+    bert_start_ends = self.bert_start_ends[doc_idx]
+    m_start = self.clean_start_end_dict[doc_id][m_info[0][0]]
+    m_end = self.clean_start_end_dict[doc_id][m_info[0][1]]
+    m_bert_start = bert_start_ends[m_start, 0]
+    m_bert_end = bert_start_ends[m_end, 1]
     mention_embedding = doc_embeddings[m_bert_start:m_bert_end+1].mean(dim=0)
     
-    action_embedding = self.action_embedding[self.doc_to_action_feat[doc_id]]
+    action_embedding = self.action_embeddings[self.doc_to_action_feat[doc_id]]
     action_embedding = torch.FloatTensor(action_embedding[a_info[0][0]:a_info[0][1]+1])
     action_mask = torch.zeros(self.max_frame_num)
     action_mask[:action_embedding.size(0)] = 1.

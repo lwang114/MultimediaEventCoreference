@@ -17,8 +17,6 @@ from text_models import NoOp, BiLSTM
 from corpus_crossmedia import VideoM2E2SupervisedCrossmediaDataset
 from evaluator import Evaluation
 
-
-logger = logging.getLogger(__name__)
 def fix_seed(config):
     torch.manual_seed(config.random_seed)
     random.seed(config.random_seed)
@@ -44,34 +42,25 @@ def train(text_model, visual_model, train_loader, test_loader, args):
   config = pyhocon.ConfigFactory.parse_file(args.config)
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
   torch.set_grad_enabled(True)
-  fix_seed(config)
   
   if not isinstance(text_model, torch.nn.DataParallel):
     text_model = nn.DataParallel(text_model)
 
-  if not isinstance(image_model, torch.nn.DataParallel):
-    image_model = nn.DataParallel(image_model)
-  if not isinstance(coref_model, torch.nn.DataParallel):
-    coref_model = nn.DataParallel(coref_model)
+  if not isinstance(visual_model, torch.nn.DataParallel):
+    visual_model = nn.DataParallel(visual_model)
 
   text_model.to(device)
-  image_model.to(device)
-  coref_model.to(device)
-
+  visual_model.to(device)
+  
   # Create/load exp
   if not os.path.isdir(args.exp_dir):
     os.path.mkdir(args.exp_dir)
-
-  if args.start_epoch != 0:
-    text_model.load_state_dict(torch.load('{}/text_model.{}.pth'.format(args.exp_dir, args.start_epoch)))
-    image_model.load_state_dict(torch.load('{}/image_model.{}.pth'.format(args.exp_dir, args.start_epoch)))
-    coref_model.load_state_dict(torch.load('{}/text_scorer.{}.pth'.format(args.exp_dir, args.start_epoch)))
 
   # Define the training criterion
   criterion = nn.BCEWithLogitsLoss()
 
   # Set up the optimizer  
-  optimizer = get_optimizer(config, [text_model, image_model])
+  optimizer = get_optimizer(config, [text_model, visual_model])
 
   # Start training
   total_loss = 0.
@@ -82,8 +71,8 @@ def train(text_model, visual_model, train_loader, test_loader, args):
 
   for epoch in range(config.epochs):
     text_model.train()
-    image_model.train()
-    coref_model.train()
+    visual_model.train()
+    
     for i, batch in enumerate(train_loader):
       mention_embeddings,\
       action_embeddings,\
@@ -99,9 +88,9 @@ def train(text_model, visual_model, train_loader, test_loader, args):
       optimizer.zero_grad()
 
       mention_output = text_model(mention_embeddings)
-      action_output = visual_model(action_embeddings)
+      action_output = visual_model(action_embeddings).sum(dim=1) / action_masks.sum(-1).unsqueeze(-1)
       scores = (mention_output * action_output).sum(dim=-1)
-      loss = criterion(scores, coref_labels)
+      loss = criterion(scores, coref_labels.float())
       loss.backward()
       optimizer.step()
 
@@ -110,11 +99,11 @@ def train(text_model, visual_model, train_loader, test_loader, args):
       if i % 100 == 0:
         info = 'Iter {} {:.4f}'.format(i, total_loss / total)
         print(info)
-        logger.info(info) 
+        logging.info(info) 
     
     info = 'Epoch: [{}][{}/{}]\tTime {:.3f}\tLoss total {:.4f} ({:.4f})'.format(epoch, i, len(train_loader), time.time()-begin_time, total_loss, total_loss / total)
     print(info)
-    logger.info(info)
+    logging.info(info)
 
     torch.save(text_model.module.state_dict(), '{}/text_model.{}.pth'.format(args.exp_dir, epoch))
     torch.save(visual_model.module.state_dict(), '{}/visual_model.{}.pth'.format(args.exp_dir, epoch))
@@ -127,6 +116,7 @@ def train(text_model, visual_model, train_loader, test_loader, args):
 
 
 def test(text_model, visual_model, test_loader, args):
+  device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
   config = pyhocon.ConfigFactory.parse_file(args.config)
   all_scores = []
   all_labels = []
@@ -143,21 +133,27 @@ def test(text_model, visual_model, test_loader, args):
       action_embedding,\
       action_mask,\
       coref_label = batch
+      
+      mention_embedding = mention_embedding.to(device)
+      action_embedding = action_embedding.to(device)
+      action_mask = action_mask.to(device)
+      coref_label = coref_label.to(device)
+
       mention_output = text_model(mention_embedding)
-      action_output = visual_model(action_embedding)
+      action_output = visual_model(action_embedding).sum(dim=1) / action_mask.sum(-1).unsqueeze(-1)
       score = (mention_output * action_output).sum(axis=-1)
       all_scores.append(score)
       all_labels.append(coref_label)
       for idx in range(mention_embedding.size(0)):
         global_idx = i * test_loader.batch_size + idx
         _, doc_id, m_info, a_info = test_loader.dataset.data_list[global_idx]    
-        f_out.write(f'{doc_id}: {m_info}, {a_info}, {score}, {coref_label}\n')
+        f_out.write(f'{doc_id}\t{m_info}\t{a_info}\t{score}\t{coref_label}\n')
 
     all_scores = torch.cat(all_scores)
     all_labels = torch.cat(all_labels)
 
     preds = (all_scores > 0).to(torch.int)
-    eval = Evaluation(preds, all_labels.to(device))
+    eval = Evaluation(preds, all_labels)
     print('Number of predictions: {}/{}'.format(preds.sum(), len(preds)))
     print('Number of positive pairs: {}/{}'.format(len((all_labels == 1).nonzero()), 
                                                    len(all_labels)))
@@ -174,7 +170,6 @@ if __name__ == '__main__':
   args = parser.parse_args()
 
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-  # Set up logger
   config = pyhocon.ConfigFactory.parse_file(args.config)
   if not args.exp_dir:
     args.exp_dir = config['model_path']
@@ -191,18 +186,18 @@ if __name__ == '__main__':
   # Initialize dataloaders
   train_set = VideoM2E2SupervisedCrossmediaDataset(config, split='train')
   test_set = VideoM2E2SupervisedCrossmediaDataset(config, split='test')
+
+  fix_seed(config)
   train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
   test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
 
   # Initialize models
-  embedding_dim = config.hidden_layer
-
   text_model = nn.Sequential(
                   nn.Linear(1024, 800),
                   nn.ReLU(),
                   nn.Linear(800, 800),
                   nn.ReLU(),
-                  nn.Linear(800, 400),
+                  nn.Linear(800, 800),
                )
   visual_model = BiLSTM(400, 400, num_layers=3)
 
