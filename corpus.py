@@ -66,37 +66,47 @@ class SupervisedGroundingFeatureDataset(Dataset):
     self.max_frame_num = config.get('max_frame_num', 100)
     self.max_mention_span = config.get('max_mention_span', 15)
     self.img_feat_type = config.get('video_feature', 'mmaction_feat')
-    test_id_file = config.get('test_id_file', '')
 
     documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
     self.documents = documents
     text_mentions = json.load(codecs.open(text_mention_json, 'r', 'utf-8'))
-    image_mentions = [] # XXX json.load(codecs.open(image_mention_json, 'r', 'utf-8'))
     
-    # Extract image embeddings
-    if 'image_feat_file' in config:
-        self.imgs_embeddings = np.load(config.image_feat_file)
-    else:
-        self.imgs_embeddings = np.load('{}_{}.npz'.format(doc_json.split('.')[0], self.img_feat_type))
+    # Load action embeddings
+    self.imgs_embeddings = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_feat.npz'))
        
-    # Extract word embeddings
+    # Load document embeddings
     bert_embed_file = '{}_{}.npz'.format(doc_json.split('.')[0], config.bert_model)
     self.docs_embeddings = np.load(bert_embed_file)
     
     # Extract coreference cluster labels
-    self.text_label_dict, self.image_label_dict, self.type_label_dict = self.create_dict_labels(text_mentions, image_mentions)
+    self.text_label_dict, self.mention_stoi = self.create_text_dict_labels(text_mentions)
+    
+    self.use_action_boundary = config['use_action_boundary'] # TODO Add to config
+    id_mapping_json = os.path.join(config['data_folder'], '../video_m2e2.json')
+    action_anno_json = os.path.join(config['data_folder'], '../master.json') # Contain event time stamps
+    action_dur_json = os.path.join(config['data_folder'], '../anet_anno.json')
+    ontology_json = os.path.join(config['data_folder'], '../ontology.json')
+    ontology_map_json = os.path.join(config['data_folder'], '../ontology_mapping.json')
+    id_mapping = json.load(codecs.open(id_mapping_json, 'r', 'utf-8'))
+    action_anno_dict = json.load(codecs.open(action_anno_json, 'r', 'utf-8'))
+    action_dur_dict = json.load(codecs.open(action_dur_json))
+
+    ontology_dict = json.load(codecs.open(ontology_json))
+    if config['mention_type'] == 'event':
+      ontology = ontology_dict['event']
+    elif config['mention_type'] == 'entities':
+      ontology = ontology_dict['entities']
+    else:
+      ontology = ontology_dict['event'] + ontology_dict['entities']
+      self.ontology_map = json.load(codecs.open(ontology_map_json))
+      self.action_label_dict, self.action_stoi = self.create_action_dict_labels(id_mapping,\
+                                                                                action_anno_dict,\
+                                                                                action_dur_dict,\
+                                                                                ontology)
 
     # Extract doc/image ids
     self.feat_keys = sorted(self.imgs_embeddings, key=lambda x:int(x.split('_')[-1])) # XXX
     self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in self.text_label_dict]
-    if test_id_file:
-      with open(test_id_file) as f:
-        test_ids = ['_'.join(k.split('_')[:-1]) for k in f.read().strip().split()]
-
-      if split == 'train':
-        self.feat_keys = [k for k in self.feat_keys if not '_'.join(k.split('_')[:-1]) in test_ids]
-      else:
-        self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in test_ids]
     self.doc_ids = ['_'.join(k.split('_')[:-1]) for k in self.feat_keys]
     documents = {doc_id:documents[doc_id] for doc_id in self.doc_ids}
     print('Number of documents: ', len(self.doc_ids))
@@ -113,7 +123,7 @@ class SupervisedGroundingFeatureDataset(Dataset):
           print(doc_id, start, end, len(clean_start_end_dict[doc_id])) 
     self.candidate_start_ends = [np.asarray([[clean_start_end_dict[doc_id][start], clean_start_end_dict[doc_id][end]] for start, end in start_ends])
                                  for doc_id, start_ends in zip(self.doc_ids, self.origin_candidate_start_ends)]
-    self.image_labels = [[-1]*self.imgs_embeddings[feat_id].shape[0] for feat_id in self.feat_keys] # XXX [[image_token_dict[doc_id][box_id] for box_id in sorted(self.image_label_dict[doc_id], key=lambda x:x[0])] for doc_id in self.doc_ids]
+    self.image_labels = [[-1]*self.imgs_embeddings[feat_id].shape[0] for feat_id in self.feat_keys]
 
   def tokenize(self, documents):
     '''
@@ -126,7 +136,7 @@ class SupervisedGroundingFeatureDataset(Dataset):
 
     for doc_id in sorted(documents):
         tokens = documents[doc_id]
-        bert_tokens_ids, end_bert_idx = [], []
+        bert_tokens_ids = []
         start_bert_idx, end_bert_idx = [], []
         original_tokens = []
         clean_start_end = -1 * np.ones(len(tokens), dtype=np.int)
@@ -153,7 +163,7 @@ class SupervisedGroundingFeatureDataset(Dataset):
 
     return docs_origin_tokens, docs_bert_tokens, docs_start_end_bert, clean_start_end_dict
 
-  def create_dict_labels(self, text_mentions, image_mentions, clean_start_end_dict=None):
+  def create_text_dict_labels(self, text_mentions, image_mentions, clean_start_end_dict=None):
     '''
     :return text_label_dict: a mapping from doc id to a dict of (start token, end token) -> cluster id 
     :return image_label_dict: a mapping from image id to a dict of (bbox id, x min, y min, x max, y max) -> cluster id 
@@ -194,6 +204,37 @@ class SupervisedGroundingFeatureDataset(Dataset):
             image_token_dict[m['doc_id']][(bbox_id, m['cluster_id'])] = m['tokens']
 
     return text_label_dict, image_label_dict
+  
+  def create_action_dict_labels(self, 
+                               id_map,
+                               anno_dict,
+                               dur_dict, 
+                               ontology):
+    """ 
+    :param id2desc: {[youtube id]: [description id with puncts]} 
+    :param anno_dict: {[description id]: list of {'Temporal_Boundary': [float, float], 'Event_Type': int}}  
+    :param dur_dict: {[description id]: {'duration_second': float}}
+    :param ontology: list of mention classes
+    :returns image_label_dict: {[doc_id]: {[action span]: [action class]}}
+    """
+    label_dict = dict()
+    stoi = {c:i for i, c in enumerate(ontology)}
+    for desc_id, desc in id_map.items():
+      doc_id = desc['id'].split('v=')[-1] 
+      for punct in PUNCT:
+        desc_id = desc_id.replace(punct, '')
+      if not desc_id in dur_dict:
+        continue
+
+      label_dict[doc_id] = dict()
+      dur = dur_dict[desc_id]['duration_second']
+      for ann in anno_dict[desc_id+'.mp4']:
+        action_class = ontology[ann['Event_Type']] 
+        start_sec, end_sec = ann['Temporal_Boundary']  
+        start, end = int(start_sec / dur * 100), int(end_sec / dur * 100)
+        label_dict[doc_id][(start, end)] = action_class
+
+    return label_dict, stoi
   
   def load_text(self, idx):
     '''Load mention span embeddings for the document
@@ -245,7 +286,7 @@ class SupervisedGroundingFeatureDataset(Dataset):
     span_mask = continuous_mappings.sum(dim=1)
 
     # Extract type labels
-    type_labels = [int(self.type_label_dict[self.doc_ids[idx]][(start, end)]) for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
+    type_labels = [int(self.event_stoi[self.doc_ids[idx]][(start, end)]) for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
     type_labels = torch.LongTensor(type_labels)
     type_labels = fix_embedding_length(type_labels.unsqueeze(1), self.max_span_num).squeeze(1)
     return doc_embeddings,\
@@ -261,26 +302,35 @@ class SupervisedGroundingFeatureDataset(Dataset):
     :param idx: int
     :return img_embeddings: FloatTensor of size (batch size, max num. of regions, image embed dim)
     :return mask: LongTensor of size (batch size, max num. of frames)
-    '''    
+    '''
     doc_id = self.doc_ids[idx]
-    img_embeddings = self.imgs_embeddings[self.feat_keys[idx]]
-    img_embeddings = torch.FloatTensor(img_embeddings)
-    if img_embeddings.size(-1) == 1:
-      img_embeddings = img_embeddings.squeeze(-1).squeeze(-1)
-    img_embeddings = fix_embedding_length(img_embeddings, self.max_frame_num)
-    
-    labels = [-1]*img_embeddings.size(0) # XXX [int(self.image_label_dict[doc_id][box_id]) for box_id in sorted(self.image_label_dict[doc_id], key=lambda x:int(x[0]))]
-    mask = torch.zeros(self.max_frame_num, dtype=torch.float)
-    region_num = len(labels)
-    mask[:region_num] = 1.
+    action_embeddings = self.action_embeddings[self.feat_keys[idx]]
+    action_embeddings = torch.FloatTensor(action_embeddings)
 
+    if self.use_action_boundary:
+      action_segment_embeddings = []
+      masks = [] 
+      for span_idx, span in enumerate(sorted(self.action_label_dict[doc_id])):
+        seg = action_embeddings[span[0]:span[1]+1]
+        action_segment_embeddings.append(fix_embedding_length(seg, 30))
+        mask = torch.zeros(30, dtype=torch.float)
+        mask[span_idx, span[0]:span[1]+1] = 1.
+        masks.append(mask)
+      masks = fix_embedding_length(torch.stack(masks), 20)
+      action_segment_embeddings = fix_embedding_length(torch.stack(action_segment_embeddings), 20) 
+    else:
+      action_segment_embeddings = action_embeddings
+      masks = torch.ones(100)
+
+    labels = [-1]*action_embeddings.size(0)
+    for span, label in sorted(self.action_label_dict[doc_id]):
+      labels[span[0]:span[1]+1] = self.action_stoi[label]
     labels = torch.LongTensor(labels)
-    labels = fix_embedding_length(labels.unsqueeze(1), self.max_frame_num).squeeze(1)
-    
-    return img_embeddings, labels, mask
+
+    return action_segment_embeddings, labels, masks
 
   def __getitem__(self, idx):
-    img_embeddings, img_labels, video_mask = self.load_video(idx)
+    action_embeddings, action_labels, action_mask = self.load_video(idx)
     doc_embeddings,\
     start_mappings,\
     end_mappings,\
@@ -288,7 +338,7 @@ class SupervisedGroundingFeatureDataset(Dataset):
     width, text_labels,\
     type_labels,\
     text_mask, span_mask = self.load_text(idx)
-    return doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, img_embeddings, text_labels, type_labels, img_labels, text_mask, span_mask, video_mask
+    return doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, action_embeddings, text_labels, type_labels, action_labels, text_mask, span_mask, action_mask
 
   def __len__(self):
     return len(self.doc_ids)
