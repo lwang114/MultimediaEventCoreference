@@ -126,6 +126,7 @@ def test(text_model, visual_model, test_loader, args):
 
   with torch.no_grad():
     pred_dicts = []
+    embs = dict()
     f_out = open(os.path.join(config['model_path'], 'prediction.readable'), 'w') 
     f_out.write('Document id\tmention info\taction info\tscore\tlabel\n')
     for i, batch in enumerate(test_loader):
@@ -147,8 +148,14 @@ def test(text_model, visual_model, test_loader, args):
       for idx in range(mention_embedding.size(0)):
         global_idx = i * test_loader.batch_size + idx
         _, doc_id, m_info, a_info = test_loader.dataset.data_list[global_idx]    
+        feat_id = f'{doc_id}_{global_idx}'
+        if not feat_id in embs:
+          embs[feat_id] = []
+        embs[feat_id].append(action_output[idx])
         f_out.write(f'{doc_id}\t{m_info}\t{a_info}\t{score[idx]}\t{coref_label[idx]}\n')
-
+    
+    embs = {feat_id:np.stack(embs[feat_id]) for feat_id, emb in embs.items()}
+    np.savez(os.path.join(config['model_path'], 'action_output.npz'), **embs)
     all_scores = torch.cat(all_scores)
     all_labels = torch.cat(all_labels)
 

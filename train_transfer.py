@@ -206,6 +206,7 @@ def test(text_model, visual_model, coref_model, test_loader, args):
     config = pyhocon.ConfigFactory.parse_file(args.config)
     documents = test_loader.dataset.documents
     all_scores = []
+    all_coref_type_labels = []
     all_labels = []
 
     text_model.eval()
@@ -265,6 +266,8 @@ def test(text_model, visual_model, coref_model, test_loader, args):
             global_idx = i * test_loader.batch_size + idx
             first_text_idx, second_text_idx, pairwise_text_labels = get_pairwise_text_labels(text_labels[idx, :span_num[idx]].unsqueeze(0), 
                                                                                              is_training=False, device=device)
+            coref_type_labels = type_labels[first_text_idx] 
+
             if first_text_idx is None:
                 continue
             first_text_idx = first_text_idx.squeeze(0)
@@ -288,15 +291,31 @@ def test(text_model, visual_model, coref_model, test_loader, args):
             f_out.write(f'Gold: {gold_clusters_str}\n\n')
 
             all_scores.append(text_scores.squeeze(1))
-            all_labels.append(pairwise_text_labels.to(torch.int).cpu())            
+            all_labels.append(pairwise_text_labels.to(torch.int).cpu())
+            all_coref_type_labels.append(coref_type_labels.to(torch.int).cpu())
+                        
         all_scores = torch.cat(all_scores)
         all_labels = torch.cat(all_labels)
+        all_coref_type_labels = torch.cat(all_coref_type_labels)
         # Compute mAP
         average_precision = average_precision_score(all_labels.cpu().detach().numpy(),
                                                     torch.sigmoid(all_scores).cpu().detach().numpy())
 
         strict_preds = (all_scores > 0).to(torch.int)
         eval = Evaluation(strict_preds, all_labels.to(device))
+        class_pred_idxs = dict()
+        # TODO Compute coref scores by mention type class
+        for c, c_idx in test_loader.dataset.event_stoi.items():
+          if not c in class_preds:
+            class_pred_idxs[c] = []
+          for idx in range(all_coref_type_labels):
+            if all_coref_type_labels[idx].cpu().numpy() == c_idx:
+              class_pred_idxs[c].append(idx)
+           
+          eval_class = Evaluation(strict_preds[class_pred_idxs[c]], all_labels[class_pred_idxs[c]])
+          logging.info('Class {}, number of predictions: {}/{}, number of positive pairs: {}/{}'.format(c, strict_preds[class_pred_idxs[c]].sum(), len(class_pred_idxs[c]), all_labels[class_pred_idxs[c]].sum(), len(class_pred_idxs[c])))
+          logging.info(f'Pairwise - Recall: {eval_class.get_recall()}, Precision: {eval_class.get_precision()}, F1: {eval_class.get_f1()}')
+           
 
         print('Number of predictions: {}/{}'.format(strict_preds.sum(), len(strict_preds)))
         print('Number of positive pairs: {}/{}'.format(len((all_labels == 1).nonzero()),
