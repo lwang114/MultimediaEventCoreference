@@ -11,6 +11,8 @@ import PIL.Image as Image
 from transformers import AutoTokenizer, AutoModel
 
 SINGLETON = '###SINGLETON###'
+PUNCT = [',', '.', '\'', '\"', ':', ';', '?', '!', '<', '>', '~', '%', '$', '|', '/', '@', '#', '^', '*']
+
 def get_all_token_mapping(start, end, max_token_num, max_mention_span):
     try:
       span_num = len(start)
@@ -72,16 +74,16 @@ class SupervisedGroundingFeatureDataset(Dataset):
     text_mentions = json.load(codecs.open(text_mention_json, 'r', 'utf-8'))
     
     # Load action embeddings
-    self.imgs_embeddings = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_feat.npz'))
+    self.action_embeddings = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_feat.npz'))
        
     # Load document embeddings
     bert_embed_file = '{}_{}.npz'.format(doc_json.split('.')[0], config.bert_model)
     self.docs_embeddings = np.load(bert_embed_file)
     
     # Extract coreference cluster labels
-    self.text_label_dict, self.mention_stoi = self.create_text_dict_labels(text_mentions)
+    self.text_label_dict, self.type_label_dict, self.mention_stoi = self.create_text_dict_labels(text_mentions)
     
-    self.use_action_boundary = config['use_action_boundary'] # TODO Add to config
+    self.use_action_boundary = config['use_action_boundary']
     id_mapping_json = os.path.join(config['data_folder'], '../video_m2e2.json')
     action_anno_json = os.path.join(config['data_folder'], '../master.json') # Contain event time stamps
     action_dur_json = os.path.join(config['data_folder'], '../anet_anno.json')
@@ -105,7 +107,7 @@ class SupervisedGroundingFeatureDataset(Dataset):
                                                                                 ontology)
 
     # Extract doc/image ids
-    self.feat_keys = sorted(self.imgs_embeddings, key=lambda x:int(x.split('_')[-1])) # XXX
+    self.feat_keys = sorted(self.action_embeddings, key=lambda x:int(x.split('_')[-1])) # XXX
     self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in self.text_label_dict]
     self.doc_ids = ['_'.join(k.split('_')[:-1]) for k in self.feat_keys]
     documents = {doc_id:documents[doc_id] for doc_id in self.doc_ids}
@@ -123,7 +125,7 @@ class SupervisedGroundingFeatureDataset(Dataset):
           print(doc_id, start, end, len(clean_start_end_dict[doc_id])) 
     self.candidate_start_ends = [np.asarray([[clean_start_end_dict[doc_id][start], clean_start_end_dict[doc_id][end]] for start, end in start_ends])
                                  for doc_id, start_ends in zip(self.doc_ids, self.origin_candidate_start_ends)]
-    self.image_labels = [[-1]*self.imgs_embeddings[feat_id].shape[0] for feat_id in self.feat_keys]
+    self.image_labels = [[-1]*self.action_embeddings[feat_id].shape[0] for feat_id in self.feat_keys]
 
   def tokenize(self, documents):
     '''
@@ -163,16 +165,14 @@ class SupervisedGroundingFeatureDataset(Dataset):
 
     return docs_origin_tokens, docs_bert_tokens, docs_start_end_bert, clean_start_end_dict
 
-  def create_text_dict_labels(self, text_mentions, image_mentions, clean_start_end_dict=None):
+  def create_text_dict_labels(self, text_mentions):
     '''
     :return text_label_dict: a mapping from doc id to a dict of (start token, end token) -> cluster id 
     :return image_label_dict: a mapping from image id to a dict of (bbox id, x min, y min, x max, y max) -> cluster id 
     '''
-    type_to_idx = {}
     text_label_dict = {}
-    image_label_dict = {}
-    image_token_dict = {}
-    type_label_dict = collections.defaultdict(dict)
+    type_label_dict = {}
+    stoi = {}
     for m in text_mentions:
       if len(m['tokens_ids']) == 0:
         text_label_dict[m['doc_id']][(-1, -1)] = 0
@@ -181,29 +181,14 @@ class SupervisedGroundingFeatureDataset(Dataset):
         end = max(m['tokens_ids'])
         if not m['doc_id'] in text_label_dict:
           text_label_dict[m['doc_id']] = {}
+          type_label_dict[m['doc_id']] = {}
+
+        if not m['event_type'] in stoi:
+          stoi[m['event_type']] = len(stoi)
         text_label_dict[m['doc_id']][(start, end)] = m['cluster_id']
+        type_label_dict[m['doc_id']][(start, end)] = m['event_type']
 
-      if 'event_type' in m:
-          type_label_dict[m['doc_id']][(start, end)] = self.type_to_idx[m['event_type']]
-      else:
-          type_label_dict[m['doc_id']][(start, end)] = self.type_to_idx[m['entity_type']]
-        
-    for i, m in enumerate(image_mentions):
-        if not m['doc_id'] in image_label_dict:
-          image_label_dict[m['doc_id']] = {}
-          image_token_dict[m['doc_id']] = {} 
-
-        if isinstance(m['bbox'], str):
-          bbox_id = int(m['bbox'].split('_')[-1])
-          image_label_dict[m['doc_id']][(bbox_id, m['bbox'])] = m['cluster_id']
-        else:
-          label_keys = [k[1] for k in sorted(image_label_dict[m['doc_id']], key=lambda x:x[0])]
-          if not m['cluster_id'] in label_keys:
-            bbox_id = len(image_label_dict[m['doc_id']])
-            image_label_dict[m['doc_id']][(bbox_id, m['cluster_id'])] = cluster_dict.get(m['cluster_id'], 0)
-            image_token_dict[m['doc_id']][(bbox_id, m['cluster_id'])] = m['tokens']
-
-    return text_label_dict, image_label_dict
+    return text_label_dict, type_label_dict, stoi
   
   def create_action_dict_labels(self, 
                                id_map,
@@ -286,7 +271,7 @@ class SupervisedGroundingFeatureDataset(Dataset):
     span_mask = continuous_mappings.sum(dim=1)
 
     # Extract type labels
-    type_labels = [int(self.event_stoi[self.doc_ids[idx]][(start, end)]) for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
+    type_labels = [self.mention_stoi[self.type_label_dict[self.doc_ids[idx]][(start, end)]] for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
     type_labels = torch.LongTensor(type_labels)
     type_labels = fix_embedding_length(type_labels.unsqueeze(1), self.max_span_num).squeeze(1)
     return doc_embeddings,\
@@ -314,7 +299,7 @@ class SupervisedGroundingFeatureDataset(Dataset):
         seg = action_embeddings[span[0]:span[1]+1]
         action_segment_embeddings.append(fix_embedding_length(seg, 30))
         mask = torch.zeros(30, dtype=torch.float)
-        mask[span_idx, span[0]:span[1]+1] = 1.
+        mask[:span[1]-span[0]+1] = 1.
         masks.append(mask)
       masks = fix_embedding_length(torch.stack(masks), 20)
       action_segment_embeddings = fix_embedding_length(torch.stack(action_segment_embeddings), 20) 
@@ -322,8 +307,8 @@ class SupervisedGroundingFeatureDataset(Dataset):
       action_segment_embeddings = action_embeddings
       masks = torch.ones(100)
 
-    labels = [-1]*action_embeddings.size(0)
-    for span, label in sorted(self.action_label_dict[doc_id]):
+    labels = -1 * np.ones(action_embeddings.size(0))
+    for span, label in self.action_label_dict[doc_id].items():
       labels[span[0]:span[1]+1] = self.action_stoi[label]
     labels = torch.LongTensor(labels)
 
