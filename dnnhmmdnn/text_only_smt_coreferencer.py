@@ -14,7 +14,7 @@ from evaluator import Evaluation, CoNLLEvaluation
 NULL = '###NEW###'
 EPS = 1e-100
 class SMTCoreferencer:
-  def __init__(self, event_features):
+  def __init__(self, event_features, config):
     '''
     Unsupervised coreference system based on
     ``Unsupervised Ranking Model for Entity Coreference Resolution``, 
@@ -29,6 +29,7 @@ class SMTCoreferencer:
              'cluster_id': '0',
              'tokens': str, tokens concatenated with space} 
     '''
+    self.config = config
     self.e_feats_train = event_features
     self.ee_counts = dict()
     self.P_ee = dict()
@@ -74,8 +75,9 @@ class SMTCoreferencer:
             a_token = antecedent['head_lemma']
             align_count[e_idx+1][a_idx+1] = self.P_ee[a_token][token]
         
+        norm_factor = sum(align_count[e_idx+1].values())
         for a_idx in align_count[e_idx+1]: 
-          align_count[e_idx+1][a_idx] /= sum(align_count[e_idx+1].values())
+          align_count[e_idx+1][a_idx] /= norm_factor
       align_counts.append(align_count)
     return align_counts
 
@@ -105,8 +107,9 @@ class SMTCoreferencer:
           
     # Normalize
     for a in P_ee:
+      norm_factor = sum(P_ee[a].values())
       for e in P_ee[a]:
-        P_ee[a][e] /= sum(P_ee[a].values())   
+        P_ee[a][e] /= norm_factor   
 
     return P_ee
 
@@ -125,8 +128,8 @@ class SMTCoreferencer:
     for epoch in range(n_epochs):
       self.ee_counts = self.compute_alignment_counts()
       self.P_ee = self.update_translation_probs()
-
-      logging.info('Epoch {}, log likelihood = {:.3f}'.format(epoch, self.log_likelihood()))
+      json.dump(self.P_ee, open(os.path.join(self.config['data_folder'], 'translation_probs.json'), 'w'), indent=2)
+      logging.info('Epoch {}, log likelihood = {:.3f}'.format(epoch, self.log_likelihood()))           
       print('Epoch {}, log likelihood = {:.3f}'.format(epoch, self.log_likelihood()))
  
   def predict_antecedents(self, event_features):
@@ -179,7 +182,7 @@ def to_antecedents(labels):
         break
   return antecedents
  
-def load_text_features(config, split):
+def load_text_features(config, vocab_feat, split):
   lemmatizer = WordNetLemmatizer()
   feature_types = config['feature_types']
   event_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events.json'), 'r', 'utf-8'))
@@ -200,7 +203,7 @@ def load_text_features(config, split):
       token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
       label_dicts[m['doc_id']][span] = {'token_id': token,
-                                        'cluster_id': m['cluster_id']}
+                                        'cluster_id': vocab_feat['event_type'][m['event_type']]} # XXX m['cluster_id']}
 
       for feat_type in feature_types:
         label_dicts[m['doc_id']][span][feat_type] = m[feat_type] 
@@ -251,14 +254,14 @@ def load_data(config):
   doc_ids_train,\
   spans_train,\
   cluster_ids_train,\
-  tokens_train = load_text_features(config, split='train')
+  tokens_train = load_text_features(config, vocab_feats_freq, split='train')
   print(f'Number of training examples: {len(event_feats_train)}')
   
   event_feats_test,\
   doc_ids_test,\
   spans_test,\
   cluster_ids_test,\
-  tokens_test = load_text_features(config, split='test')
+  tokens_test = load_text_features(config, vocab_feats_freq, split='test')
   print(f'Number of test examples: {len(event_feats_test)}')
   
   return event_feats_train,\
@@ -297,13 +300,12 @@ if __name__ == '__main__':
   vocab_feats = load_data(config)
 
   ## Model training
-  aligner = SMTCoreferencer(event_feats_train+event_feats_test)
+  aligner = SMTCoreferencer(event_feats_train+event_feats_test, config)
   aligner.train(10)
   _, cluster_ids_all = aligner.predict_antecedents(event_feats_test)
 
   ## Test and evaluation
   pred_cluster_ids = [np.asarray(cluster_ids) for cluster_ids in cluster_ids_all]
-  print(pred_cluster_ids[:10], cluster_ids_test[:10]) # XXX
   pred_labels = [torch.LongTensor(to_pairwise(a)) for a in pred_cluster_ids if a.shape[0] > 1]
   gold_labels = [torch.LongTensor(to_pairwise(c)) for c in cluster_ids_test if c.shape[0] > 1]
   pred_labels = torch.cat(pred_labels)
