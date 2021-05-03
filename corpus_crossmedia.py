@@ -44,8 +44,12 @@ class VideoM2E2SupervisedCrossmediaDataset(Dataset):
     self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     self.max_frame_num = config.get('max_frame_num', 30)
 
-    doc_json = os.path.join(config['data_folder'], f'{split}.json')
-    mention_json = os.path.join(config['data_folder'], f'{split}_{config["mention_type"]}.json')    
+    if config['bert_model'] == 'oneie':
+      doc_json = os.path.join(config['data_folder'], f'{split}_oneie.json')
+      mention_json = os.path.join(config['data_folder'], f'{split}_oneie_{config["mention_type"]}.json')
+    else:
+      doc_json = os.path.join(config['data_folder'], f'{split}.json')
+      mention_json = os.path.join(config['data_folder'], f'{split}_{config["mention_type"]}.json')    
     documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
     text_mentions = json.load(codecs.open(mention_json, 'r', 'utf-8'))
 
@@ -73,7 +77,10 @@ class VideoM2E2SupervisedCrossmediaDataset(Dataset):
     self.action_embeddings = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_feat.npz'))
     
     # Load document embeddings
-    bert_embed_file = '{}_{}.npz'.format(doc_json.split('.')[0], config.bert_model)
+    if config.bert_model == 'oneie':
+      bert_embed_file = f'{doc_json.split(".")[0]}_{config["mention_type"]}.npz'
+    else:
+      bert_embed_file = '{}_{}.npz'.format(doc_json.split('.')[0], config.bert_model)
     self.docs_embeddings = np.load(bert_embed_file)
     
     self.doc_to_action_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in self.action_embeddings}
@@ -93,13 +100,17 @@ class VideoM2E2SupervisedCrossmediaDataset(Dataset):
     print('Number of mention-action pairs: ', len(self.data_list))
  
     # Tokenize documents and extract token spans after bert tokenization
-    self.tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
-    self.origin_tokens, self.bert_tokens, self.bert_start_ends, self.clean_start_end_dict = self.tokenize(documents)
+    if config.bert_model == 'oneie':
+      self.origin_tokens = [documents[k] for k in sorted(documents)]
+      self.bert_tokens, self.bert_start_ends, self.clean_start_end_dict = None, None, None
+    else:
+      self.origin_tokens, self.bert_tokens, self.bert_start_ends, self.clean_start_end_dict = self.tokenize(documents)
 
   def tokenize(self, documents):
     '''
     Tokenize the sentences in BERT format. Adapted from https://github.com/ariecattan/coref
     '''
+    tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
     docs_bert_tokens = []
     docs_start_end_bert = []
     docs_origin_tokens = []
@@ -114,7 +125,7 @@ class VideoM2E2SupervisedCrossmediaDataset(Dataset):
         bert_cursor = -1
         for i, token in enumerate(tokens):
             sent_id, token_id, token_text, flag_sentence = token
-            bert_token = self.tokenizer.encode(token_text, add_special_tokens=True)[1:-1]   
+            bert_token = tokenizer.encode(token_text, add_special_tokens=True)[1:-1]   
             if bert_token:
                 bert_start_index = bert_cursor + 1
                 bert_tokens_ids.extend(bert_token)
@@ -152,7 +163,7 @@ class VideoM2E2SupervisedCrossmediaDataset(Dataset):
 
         if not m['event_type'] in stoi:
           stoi[m['event_type']] = len(stoi)
-        text_label_dict[m['doc_id']][(start, end)] = m['event_type']        
+        text_label_dict[m['doc_id']][(start, end)] = m['event_type'].split('.')[-1] 
     return text_label_dict, stoi
     
   def create_action_dict_labels(self, 
@@ -196,9 +207,9 @@ class VideoM2E2SupervisedCrossmediaDataset(Dataset):
     """
     data_list = []
     for doc_idx, doc_id in enumerate(sorted(text_label_dict)):
-      for m_span in sorted(text_label_dict[doc_id]):
-        for a_span in sorted(action_label_dict[doc_id]): 
-          data_list.append([doc_idx, doc_id, [m_span, text_label_dict[doc_id][m_span]], [a_span, action_label_dict[doc_id][a_span]]])
+      for m_idx, m_span in enumerate(sorted(text_label_dict[doc_id])):
+        for a_idx, a_span in enumerate(sorted(action_label_dict[doc_id])): 
+          data_list.append([doc_idx, doc_id, [m_span, text_label_dict[doc_id][m_span], m_idx], [a_span, action_label_dict[doc_id][a_span], a_idx]])
     return data_list
 
   def __getitem__(self, idx):
@@ -216,13 +227,17 @@ class VideoM2E2SupervisedCrossmediaDataset(Dataset):
     
     doc_embeddings = self.docs_embeddings[self.doc_to_text_feat[doc_id]]
     doc_embeddings = torch.FloatTensor(doc_embeddings)
-    bert_start_ends = self.bert_start_ends[doc_idx]
-    m_start = self.clean_start_end_dict[doc_id][m_info[0][0]]
-    m_end = self.clean_start_end_dict[doc_id][m_info[0][1]]
-    m_bert_start = bert_start_ends[m_start, 0]
-    m_bert_end = bert_start_ends[m_end, 1]
-    mention_embedding = doc_embeddings[m_bert_start:m_bert_end+1].mean(dim=0)
-    
+    if self.bert_start_ends is not None:
+      bert_start_ends = self.bert_start_ends[doc_idx]
+      m_start = self.clean_start_end_dict[doc_id][m_info[0][0]]
+      m_end = self.clean_start_end_dict[doc_id][m_info[0][1]]
+      m_bert_start = bert_start_ends[m_start, 0]
+      m_bert_end = bert_start_ends[m_end, 1]
+      mention_embedding = doc_embeddings[m_bert_start:m_bert_end+1].mean(dim=0)
+    else:
+      m_idx = m_info[-1]
+      mention_embedding = doc_embeddings[m_idx]
+
     action_embedding = self.action_embeddings[self.doc_to_action_feat[doc_id]]
     action_embedding = torch.FloatTensor(action_embedding[a_info[0][0]:a_info[0][1]+1])
     action_mask = torch.zeros(self.max_frame_num)

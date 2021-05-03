@@ -127,6 +127,7 @@ def test(text_model, visual_model, test_loader, args):
   with torch.no_grad():
     pred_dicts = []
     embs = dict()
+    action_class_labels = dict()
     f_out = open(os.path.join(config['model_path'], 'prediction.readable'), 'w') 
     f_out.write('Document id\tmention info\taction info\tscore\tlabel\n')
     for i, batch in enumerate(test_loader):
@@ -145,17 +146,23 @@ def test(text_model, visual_model, test_loader, args):
       score = (mention_output * action_output).sum(axis=-1)
       all_scores.append(score)
       all_labels.append(coref_label)
+      
       for idx in range(mention_embedding.size(0)):
         global_idx = i * test_loader.batch_size + idx
         _, doc_id, m_info, a_info = test_loader.dataset.data_list[global_idx]    
-        feat_id = f'{doc_id}_{global_idx}'
-        if not feat_id in embs:
-          embs[feat_id] = []
-        embs[feat_id].append(action_output[idx])
+        if not doc_id in embs:
+          embs[doc_id] = dict()
+          action_class_labels[doc_id] = []
+          
+        if not a_info[0] in embs[doc_id]:
+          embs[doc_id][tuple(a_info[0])] = action_output[idx].detach().cpu().numpy()
+          action_class_labels[doc_id].append(a_info[1])
+  
         f_out.write(f'{doc_id}\t{m_info}\t{a_info}\t{score[idx]}\t{coref_label[idx]}\n')
-    
-    embs = {feat_id:np.stack(embs[feat_id]) for feat_id, emb in embs.items()}
+        
+    embs = {f'{doc_id}_{doc_idx}':np.stack([embs[doc_id][span] for span in sorted(embs[doc_id])]) for doc_idx, doc_id in enumerate(sorted(embs))}
     np.savez(os.path.join(config['model_path'], 'action_output.npz'), **embs)
+    json.dump(action_class_labels, open(os.path.join(config['model_path'], 'action_class_labels.json'), 'w'), indent=2)
     all_scores = torch.cat(all_scores)
     all_labels = torch.cat(all_labels)
 
@@ -199,14 +206,24 @@ if __name__ == '__main__':
   test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
 
   # Initialize models
+  if config['bert_model'] == 'roberta-large':
+    bert_dim = 1024
+  elif config['bert_model'] == 'oneie':
+    bert_dim = 2048
+  else:
+    bert_dim = 768 
+
   text_model = nn.Sequential(
-                  nn.Linear(1024, 800),
+                  nn.Linear(bert_dim, 800),
                   nn.ReLU(),
                   nn.Linear(800, 800),
                   nn.ReLU(),
                   nn.Linear(800, 800),
                )
   visual_model = BiLSTM(400, 400, num_layers=3)
+  if config['training_method'] == 'continue':
+    text_model.load_state_dict(torch.load(config['text_model_path']))
+    visual_model.load_state_dict(torch.load(config['visual_model_path']))
 
   # Training
   train(text_model, visual_model, train_loader, test_loader, args)

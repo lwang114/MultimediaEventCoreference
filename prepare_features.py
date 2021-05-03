@@ -25,6 +25,118 @@ from coref.utils import create_corpus
 
 logger = logging.getLogger(__name__)
 NULL = '###NULL###'
+def extract_oneie_embeddings(embedding_file,
+                             oneie_dir,
+                             mention_json,
+                             out_prefix):
+  ''' Extract OneIE embeddings
+  :param embedding_file: str, filename of embeddings of the format
+      IEDs\t[mention id]\t[embedding vals separated by commas]
+  :param oneie_dir: str, directory containing OneIE results
+  :param mention_json: str, filename containing event and coreference annotation 
+  '''
+  lemmatizer = WordNetLemmatizer()
+
+  label_dict = dict()
+  mentions = json.load(open(mention_json))
+  for m in mentions:
+    if not m['doc_id'] in label_dict:
+      label_dict[m['doc_id']] = dict()
+    span = (min(m['tokens_ids']), max(m['tokens_ids']))
+    label_dict[m['doc_id']][span] = m['cluster_id']
+
+  # Create a dict from description id to span to oneie token ids and groundtruth mention info 
+  label_dict_oneie = dict()
+  documents = dict()
+  for fn in os.listdir(oneie_dir):
+    doc_id = '.'.join(fn.split('.')[:-1])
+    if not doc_id in label_dict:
+      continue
+    label_dict_oneie[doc_id] = dict()
+    documents[doc_id] = []
+    start_sent = 0
+    for line in open(os.path.join(oneie_dir, fn), 'r'):
+      sent_dict = json.loads(line)
+      sent_id = int(sent_dict['sent_id'].split('-')[-1])
+      graph = sent_dict['graph']
+      token_ids = sent_dict['token_ids']
+      triggers_info = graph['triggers']
+      entities_info = graph['entities']
+      tokens = [t.lower() for t in sent_dict['tokens']]
+      documents[doc_id].extend([[sent_id, start_sent+i, t, True] for i, t in enumerate(tokens)])
+      postags = [t[1] for t in nltk.pos_tag(tokens, tagset='universal')]
+      pos_abbrevs = [postag[0].lower() if postag in ['NOUN', 'VERB', 'ADJ'] else 'n' for postag in postags]
+      roles_info = graph['roles']
+
+      if not doc_id in label_dict_oneie:
+        label_dict_oneie[doc_id] = dict()
+      
+      for trigger_idx, trigger in enumerate(triggers_info):
+        trigger_tokens = tokens[trigger[0]:trigger[1]] 
+        trigger_head_lemma = [lemmatizer.lemmatize(tokens[i], pos=pos_abbrevs[i]) for i in range(trigger[0], trigger[1])]
+        
+        span = (start_sent+trigger[0], start_sent+trigger[1]-1)
+        mention_info = {'doc_id': doc_id,
+                        'sentence_id': sent_id,
+                        'tokens_ids': list(range(start_sent+trigger[0], start_sent+trigger[1])),
+                        'token_ids': token_ids[trigger[0]:trigger[1]],
+                        'tokens': trigger_tokens,
+                        'head_lemma': ' '.join(trigger_head_lemma), 
+                        'event_type': trigger[2],
+                        'arguments': []} # XXX label_dict[doc_id][token_idx]
+
+        for role in roles_info:
+          if role[0] == trigger_idx:
+            entity = entities_info[role[1]]
+            head_lemma = lemmatizer.lemmatize(tokens[entity[1]-1].lower(), pos=pos_abbrevs[entity[1]-1])
+            mention_info['arguments'].append({'start': start_sent+entity[0],
+                                              'end': start_sent+entity[1],
+                                              'tokens': ' '.join(tokens[entity[0]:entity[1]]),
+                                              'token_ids': token_ids[entity[0]:entity[1]],
+                                              'role': role[2],
+                                              'head_lemma': head_lemma})
+        label_dict_oneie[doc_id][span] = deepcopy(mention_info)
+      start_sent += len(tokens)
+  mentions = [label_dict_oneie[doc_id][span] for doc_id in sorted(label_dict_oneie) for span in sorted(label_dict_oneie[doc_id])]
+  json.dump(documents, open(f'{out_prefix}.json', 'w'), indent=2)
+  json.dump(mentions, open(f'{out_prefix}_events.json', 'w'), indent=2)
+
+  # Create a mapping from token id to ([desc id]_[desc idx], span_idx) 
+  token_id_to_emb = dict()
+  for doc_idx, doc_id in enumerate(sorted(label_dict_oneie)):
+    feat_id = f'{doc_id}_{doc_idx}'
+    for span_idx, span in enumerate(sorted(label_dict_oneie[doc_id])):
+      mention_info = label_dict_oneie[doc_id][span]
+      for token_id in mention_info['token_ids']:
+        token_id_to_emb[token_id] = (feat_id, span_idx, mention_info['tokens'], mention_info['event_type']) 
+
+  embs = dict()
+  event_labels = dict()
+  with open(embedding_file, 'r') as f:
+    for line in f:
+      token, token_id, vec_str = line.strip().split('\t')
+      doc_id = token_id.split(':')[0]
+      if not doc_id in label_dict:
+        continue
+      if not token_id in token_id_to_emb:
+        print(f'Token with id {token_id} is not a trigger')
+        continue
+
+      if doc_id == 'G0Cvgqj6CCI':
+        print(token_id)
+      feat_id, span_idx, token, event_type = token_id_to_emb[token_id]
+      if not feat_id in embs:
+        embs[feat_id] = []
+        event_labels[feat_id] = []
+      while span_idx >= len(embs[feat_id]):
+        embs[feat_id].append([])
+        event_labels[feat_id].append('')
+      emb = [float(v) for v in vec_str.split(',')]
+      embs[feat_id][span_idx].append(emb)
+      event_labels[feat_id][span_idx] = [token, event_type]
+    embs = {feat_id:np.stack([np.asarray(e).mean(axis=0) for e in embs[feat_id]]) for feat_id in embs}
+  np.savez(f'{out_prefix}_events.npz', **embs)
+  json.dump(event_labels, open(f'{out_prefix}_events_labels.json', 'w'), indent=2)
 
 def extract_glove_embeddings(config, split, glove_file, dimension=300, out_prefix='glove_embedding'):
     ''' Extract glove embeddings for a sentence
@@ -461,7 +573,8 @@ def main():
                                          'concat_embeddings',
                                          'extract_mention_token_encodings',
                                          'extract_mention_glove_embeddings_with_arguments',
-                                         'extract_visual_cluster_probabilities'})
+                                         'extract_visual_cluster_probabilities',
+                                         'extract_oneie_embeddings'})
   args = parser.parse_args()  
   config = pyhocon.ConfigFactory.parse_file(args.config) 
   if not os.path.isdir(config['log_path']):
@@ -528,6 +641,15 @@ def main():
                               for split in ['train', 'train_asr_sentence', 'test']],
               'n_clusters': 60}
     extract_mention_cluster_probabilities(**kwargs)
+  elif args.task == 'extract_oneie_embeddings':
+    embedding_file = os.path.join(config['data_folder'], '../m2e2_labeled_en.trigger.hidden.txt')
+    oneie_dir = os.path.join(config['data_folder'], '../m2e2_labeled_oneie_result')
+    for split in ['train', 'test']:
+      mention_json = os.path.join(config['data_folder'], f'{split}_events.json')
+      extract_oneie_embeddings(embedding_file,
+                               oneie_dir,
+                               mention_json,
+                               out_prefix=os.path.join(config['data_folder'], f'{split}_oneie'))
 
 if __name__ == '__main__':
   main()
