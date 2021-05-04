@@ -42,6 +42,8 @@ class VideoM2E2SupervisedCrossmediaDataset(Dataset):
     '''
     super(VideoM2E2SupervisedCrossmediaDataset, self).__init__()
     self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    self.config = config
+    self.split = split
     self.max_frame_num = config.get('max_frame_num', 30)
 
     if config['bert_model'] == 'oneie':
@@ -110,7 +112,7 @@ class VideoM2E2SupervisedCrossmediaDataset(Dataset):
     '''
     Tokenize the sentences in BERT format. Adapted from https://github.com/ariecattan/coref
     '''
-    tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
+    tokenizer = AutoTokenizer.from_pretrained(self.config['bert_model'])
     docs_bert_tokens = []
     docs_start_end_bert = []
     docs_origin_tokens = []

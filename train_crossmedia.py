@@ -112,6 +112,7 @@ def train(text_model, visual_model, train_loader, test_loader, args):
       test(text_model, visual_model, test_loader, args)
 
   if args.evaluate_only:
+    test(text_model, visual_model, train_loader, args)
     test(text_model, visual_model, test_loader, args)
 
 
@@ -161,8 +162,8 @@ def test(text_model, visual_model, test_loader, args):
         f_out.write(f'{doc_id}\t{m_info}\t{a_info}\t{score[idx]}\t{coref_label[idx]}\n')
         
     embs = {f'{doc_id}_{doc_idx}':np.stack([embs[doc_id][span] for span in sorted(embs[doc_id])]) for doc_idx, doc_id in enumerate(sorted(embs))}
-    np.savez(os.path.join(config['model_path'], 'action_output.npz'), **embs)
-    json.dump(action_class_labels, open(os.path.join(config['model_path'], 'action_class_labels.json'), 'w'), indent=2)
+    np.savez(os.path.join(config['model_path'], f'{test_loader.dataset.split}_mmaction_event_finetuned_crossmedia.npz'), **embs)
+    json.dump(action_class_labels, open(os.path.join(config['model_path'], f'{test_loader.dataset.split}_mmaction_event_finetuned_crossmedia_labels.json'), 'w'), indent=2)
     all_scores = torch.cat(all_scores)
     all_labels = torch.cat(all_labels)
 
@@ -179,7 +180,7 @@ if __name__ == '__main__':
   # Set up argument parser
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   parser.add_argument('--exp_dir', type=str, default='')
-  parser.add_argument('--config', type=str, default='configs/config_crossmedia_coref.json')
+  parser.add_argument('--config', type=str, default='config/config_crossmedia_coref_video_m2e2.json')
   parser.add_argument('--evaluate_only', action='store_true')
   args = parser.parse_args()
 
