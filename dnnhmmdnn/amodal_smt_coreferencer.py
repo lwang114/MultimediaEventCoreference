@@ -69,7 +69,7 @@ class AmodalSMTCoreferencer:
     y = kmeans.predict(X)
     self.vars = EPS * np.ones(self.Kv)
     for k in range(self.Kv):
-      self.vars[k] = np.var(X[(y == k).nonzero()[0]]) * X.shape[1] / 3
+      self.vars[k] = np.var(X[(y == k).nonzero()[0]]) # XXX * X.shape[1] / 3
 
   def is_match(self, e1, e2):
     v1 = e1['trigger_embedding']
@@ -82,24 +82,8 @@ class AmodalSMTCoreferencer:
     for e_feat, v_feat in zip(self.e_feats_train, self.v_feats_train):
       C_ee = dict()
       C_ev = dict()
-      F, S = self.compute_forward_prob(e_feat, v_feat)
-      B = self.compute_backward_prob(e_feat, v_feat, S)
       L = v_feat.shape[0]
       v_prob = self.compute_cluster_prob(v_feat)
-
-      '''
-      for e_idx in F: # XXX
-        ll = 0
-        norm_factor = 0
-        for a_idx in F[e_idx]:
-          if a_idx < L:
-            ll += (F[e_idx][a_idx] * B[e_idx][a_idx]).sum()
-            norm_factor += F[e_idx][a_idx].sum()
-          else:
-            ll += F[e_idx][a_idx] * B[e_idx][a_idx]
-            norm_factor += F[e_idx][a_idx]
-        print(f'{e_idx}, likelihood from forward backward, norm factor: {ll}, {norm_factor}')
-      '''
 
       for e_idx, e in enumerate(e_feat):
         C_ee[e_idx] = dict()
@@ -116,7 +100,7 @@ class AmodalSMTCoreferencer:
         # Compute event-action alignment counts
         e_prob = np.asarray([self.P_ve[k][token] for k in range(self.Kv)])
         for v_idx, v in enumerate(v_feat):
-          C_ev[e_idx][v_idx] = v_prob * e_prob 
+          C_ev[e_idx][v_idx] = v_prob[v_idx] * e_prob 
         
         norm_factor = sum(C_ee[e_idx].values())
         norm_factor += sum(C_ev[e_idx][v_idx].sum() for v_idx in C_ev[e_idx])
@@ -180,13 +164,12 @@ class AmodalSMTCoreferencer:
   def log_likelihood(self):
     ll = 0.
     for e_feat, v_feat in zip(self.e_feats_train, self.v_feats_train):
+      v_prob = self.compute_cluster_prob(v_feat)
       for e_idx, e in enumerate(e_feat):
         probs = [self.P_ee[NULL][e['head_lemma']]]
         for a_idx, a in enumerate(e_feat[:e_idx]):
           if self.is_match(e, a):
-            probs.append(self.P_ee[a['head_lemma']][e['head_lemma']])
-        
-        v_prob = self.compute_cluster_prob(v_feat)
+            probs.append(self.P_ee[a['head_lemma']][e['head_lemma']])  
         e_prob = np.asarray([self.P_ve[k][e['head_lemma']] for k in range(self.Kv)])
         probs.extend((v_prob @ e_prob).tolist())
         ll += np.log(np.maximum(np.mean(probs), EPS))
@@ -197,7 +180,6 @@ class AmodalSMTCoreferencer:
       self.ee_counts, self.ev_counts = self.compute_alignment_counts()
       self.P_ee, self.P_ve = self.update_translation_probs()
                  
-      json.dump([[c_ee, c_ev] for c_ee, c_ev in zip(self.ee_counts, self.ev_counts)], open(os.path.join(self.config['model_path'], 'counts.json'), 'w'), indent=2) # XXX
       json.dump(self.P_ee, open(os.path.join(self.config['model_path'], 'ee_translation_probs.json'), 'w'), indent=2)
       json.dump(self.P_ve, open(os.path.join(self.config['model_path'], 've_translation_probs.json'), 'w'), indent=2)
 
@@ -213,7 +195,7 @@ class AmodalSMTCoreferencer:
     log_prob = logit - logsumexp(logit, axis=1)[:, np.newaxis]
     return np.exp(log_prob)
 
-  def predict_antecedents(self, event_features, action_features): # TODO Deal with singletons
+  def predict_antecedents(self, event_features, action_features):
     antecedents = []
     text_antecedents = []
     cluster_ids = []
@@ -240,23 +222,21 @@ class AmodalSMTCoreferencer:
         # if antecedent idx >= mention idx, the mention belongs to a visual cluster, 
         # need to check all previous antecedents to decide its cluster id; 
         if antecedent[e_idx] == -1: 
-          n_cluster += 1
           cluster_id[e_idx] = n_cluster
+          n_cluster += 1
         elif antecedent[e_idx] >= e_idx:
           for a_idx in range(e_idx+1):
             if antecedent[a_idx] == antecedent[e_idx]:
               break
             if a_idx == e_idx:
-              n_cluster += 1
               cluster_id[e_idx] = n_cluster
+              n_cluster += 1
             else:
-              text_antecedent[e_idx] = antecedent[e_idx]
+              text_antecedent[e_idx] = a_idx
               cluster_id[e_idx] = cluster_id[a_idx]
-              print(cluster_id[a_idx]) # XXX
         else:
           text_antecedent[e_idx] = antecedent[e_idx] 
           cluster_id[e_idx] = cluster_id[antecedent[e_idx]]
-          
       antecedents.append(antecedent)
       text_antecedents.append(text_antecedent)
       cluster_ids.append(cluster_id)
@@ -359,8 +339,8 @@ def load_data(config):
   doc_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test.json')))
   feature_types = config['feature_types']
 
-  vocab_feats = {feat_type: {NULL: 0} for feat_type in feature_types}
-  vocab_feats_freq = {feat_type: {NULL: 0} for feat_type in feature_types}
+  vocab_feats = {feat_type:dict() for feat_type in feature_types}
+  vocab_feats_freq = {feat_type:dict() for feat_type in feature_types}
   for m in event_mentions_train + event_mentions_test:    
     for feat_type in feature_types: 
       if not m[feat_type] in vocab_feats[feat_type]:
