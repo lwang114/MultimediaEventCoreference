@@ -222,15 +222,15 @@ class AmodalSMTCoreferencer:
         # if antecedent idx >= mention idx, the mention belongs to a visual cluster, 
         # need to check all previous antecedents to decide its cluster id; 
         if antecedent[e_idx] == -1: 
-          cluster_id[e_idx] = n_cluster
           n_cluster += 1
+          cluster_id[e_idx] = n_cluster
         elif antecedent[e_idx] >= e_idx:
           for a_idx in range(e_idx+1):
             if antecedent[a_idx] == antecedent[e_idx]:
               break
             if a_idx == e_idx:
-              cluster_id[e_idx] = n_cluster
               n_cluster += 1
+              cluster_id[e_idx] = n_cluster
             else:
               text_antecedent[e_idx] = a_idx
               cluster_id[e_idx] = cluster_id[a_idx]
@@ -339,8 +339,8 @@ def load_data(config):
   doc_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test.json')))
   feature_types = config['feature_types']
 
-  vocab_feats = {feat_type:dict() for feat_type in feature_types}
-  vocab_feats_freq = {feat_type:dict() for feat_type in feature_types}
+  vocab_feats = {feat_type: {NULL: 0} for feat_type in feature_types}
+  vocab_feats_freq = {feat_type: {NULL: 0} for feat_type in feature_types}
   for m in event_mentions_train + event_mentions_test:    
     for feat_type in feature_types: 
       if not m[feat_type] in vocab_feats[feat_type]:
