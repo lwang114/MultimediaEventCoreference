@@ -9,10 +9,13 @@ from nltk.stem import WordNetLemmatizer
 import itertools
 import argparse
 import pyhocon
+import random
 from copy import deepcopy
 from scipy.special import logsumexp
 from sklearn.cluster import KMeans
 from evaluator import Evaluation, CoNLLEvaluation
+np.random.seed(2)
+random.seed(2)
 
 NULL = '###NEW###'
 EPS = 1e-100
@@ -69,7 +72,7 @@ class AmodalSMTCoreferencer:
     y = kmeans.predict(X)
     self.vars = EPS * np.ones(self.Kv)
     for k in range(self.Kv):
-      self.vars[k] = np.var(X[(y == k).nonzero()[0]]) # XXX * X.shape[1] / 3
+      self.vars[k] = 0.1 # XXX np.var(X[(y == k).nonzero()[0]]) * X.shape[1] / 3
 
   def is_match(self, e1, e2):
     v1 = e1['trigger_embedding']
@@ -101,7 +104,7 @@ class AmodalSMTCoreferencer:
         e_prob = np.asarray([self.P_ve[k][token] for k in range(self.Kv)])
         for v_idx, v in enumerate(v_feat):
           C_ev[e_idx][v_idx] = v_prob[v_idx] * e_prob 
-        
+
         norm_factor = sum(C_ee[e_idx].values())
         norm_factor += sum(C_ev[e_idx][v_idx].sum() for v_idx in C_ev[e_idx])
 
@@ -111,6 +114,7 @@ class AmodalSMTCoreferencer:
         for v_idx in C_ev[e_idx]:
           C_ev[e_idx][v_idx] /= norm_factor
           C_ev[e_idx][v_idx] = C_ev[e_idx][v_idx].tolist()
+        
       ee_counts.append(C_ee)
       ev_counts.append(C_ev)
 
@@ -140,7 +144,7 @@ class AmodalSMTCoreferencer:
               P_ee[a_token][token] = ee_count[e_idx][a_idx]
             else:
               P_ee[a_token][token] += ee_count[e_idx][a_idx]
-
+        
         for v_idx in ev_count[e_idx]:
           for k in range(self.Kv):
             if not token in P_ve[k]:
@@ -158,7 +162,6 @@ class AmodalSMTCoreferencer:
       norm_factor = sum(P_ve[v].values())
       for e in P_ve[v]:
         P_ve[v][e] /= norm_factor
-
     return P_ee, P_ve
 
   def log_likelihood(self):
@@ -172,6 +175,7 @@ class AmodalSMTCoreferencer:
             probs.append(self.P_ee[a['head_lemma']][e['head_lemma']])  
         e_prob = np.asarray([self.P_ve[k][e['head_lemma']] for k in range(self.Kv)])
         probs.extend((v_prob @ e_prob).tolist())
+        
         ll += np.log(np.maximum(np.mean(probs), EPS))
     return ll
            
@@ -199,48 +203,54 @@ class AmodalSMTCoreferencer:
     antecedents = []
     text_antecedents = []
     cluster_ids = []
+    scores_all = []
     n_cluster = 0
     for e_feat, v_feat in zip(event_features, action_features):
       antecedent = [-1]*len(e_feat)
       text_antecedent = [-1]*len(e_feat)
       cluster_id = [0]*len(e_feat)
+      scores_all.append([])
+      L = v_feat.shape[0]
       for e_idx, e in enumerate(e_feat):
-        scores = [self.P_ee[NULL][e['head_lemma']]]
+        v_prob = self.compute_cluster_prob(v_feat)
+        e_prob = np.asarray([self.P_ve[k][e['head_lemma']] for k in range(self.Kv)])
+        scores =(v_prob @ e_prob).tolist()
+        scores.append(self.P_ee[NULL][e['head_lemma']])
         for a_idx, a in enumerate(e_feat[:e_idx]):
           if self.is_match(e, a):
             scores.append(self.P_ee[a['head_lemma']][e['head_lemma']])
           else:
             scores.append(0)
-
-        v_prob = self.compute_cluster_prob(v_feat)
-        e_prob = np.asarray([self.P_ve[k][e['head_lemma']] for k in range(self.Kv)])
-        scores.extend((v_prob @ e_prob).tolist())
-        scores = np.asarray(scores)
-        antecedent[e_idx] = int(np.argmax(scores)) - 1
         
-        # If antecedent idx < 0, the mention belongs to a new cluster; 
-        # if antecedent idx >= mention idx, the mention belongs to a visual cluster, 
+        scores_all[-1].append(scores)
+        scores = np.asarray(scores)
+
+        antecedent[e_idx] = int(np.argmax(scores)) - L - 1
+        
+        # If antecedent idx == -1, the mention belongs to a new cluster; 
+        # if antecedent idx < -1, the mention belongs to a visual cluster, 
         # need to check all previous antecedents to decide its cluster id; 
         if antecedent[e_idx] == -1: 
           n_cluster += 1
           cluster_id[e_idx] = n_cluster
-        elif antecedent[e_idx] >= e_idx:
+        elif antecedent[e_idx] < -1:
           for a_idx in range(e_idx+1):
             if antecedent[a_idx] == antecedent[e_idx]:
               break
-            if a_idx == e_idx:
-              n_cluster += 1
-              cluster_id[e_idx] = n_cluster
-            else:
-              text_antecedent[e_idx] = a_idx
-              cluster_id[e_idx] = cluster_id[a_idx]
+          
+          if a_idx == e_idx:
+            n_cluster += 1
+            cluster_id[e_idx] = n_cluster
+          else:
+            text_antecedent[e_idx] = a_idx
+            cluster_id[e_idx] = cluster_id[a_idx]
         else:
           text_antecedent[e_idx] = antecedent[e_idx] 
           cluster_id[e_idx] = cluster_id[antecedent[e_idx]]
       antecedents.append(antecedent)
       text_antecedents.append(text_antecedent)
       cluster_ids.append(cluster_id)
-    return text_antecedents, antecedents, cluster_ids
+    return text_antecedents, antecedents, cluster_ids, scores_all
 
 def cosine_similarity(v1, v2):
   return abs(v1 @ v2) / np.maximum(EPS, np.linalg.norm(v1) * np.linalg.norm(v2))
@@ -325,7 +335,7 @@ def load_visual_features(config, split):
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
       label_dicts[m['doc_id']][span] = m['cluster_id']
 
-  action_npz = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_event_finetuned_crossmedia.npz'))
+  action_npz = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_event_finetuned_crossmedia.npz')) # XXX f'{split}_events_event_type_labels.npz' 
 
   doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in sorted(action_npz, key=lambda x:int(x.split('_')[-1]))}
   action_feats = [action_npz[doc_to_feat[doc_id]] for doc_id in sorted(label_dicts)] 
@@ -408,8 +418,16 @@ if __name__ == '__main__':
   ## Model training
   aligner = AmodalSMTCoreferencer(event_feats_train+event_feats_test, action_feats_train+action_feats_test, config)
   aligner.train(10)
-  _, _, cluster_ids_all = aligner.predict_antecedents(event_feats_test, action_feats_test)
-  
+  text_antecedents, antecedents, cluster_ids_all, scores_all = aligner.predict_antecedents(event_feats_test, action_feats_test)
+
+  predictions = [{'doc_id': doc_id,
+                  'text_antecedent': text_antecedent,
+                  'antecedent': antecedent,
+                  'score': score}  
+                  for doc_id, antecedent, text_antecedent, score in
+                       zip(doc_ids_test, antecedents, text_antecedents, scores_all)]
+  json.dump(predictions, open(os.path.join(config['model_path'], 'predictions.json'), 'w'), indent=2)
+
   ## Test and Evaluation
   pred_cluster_ids = [np.asarray(cluster_ids) for cluster_ids in cluster_ids_all]
   pred_labels = [torch.LongTensor(to_pairwise(a)) for a in pred_cluster_ids if a.shape[0] > 1]
@@ -425,8 +443,8 @@ if __name__ == '__main__':
   # Compute CoNLL scores and save readable predictions
   conll_eval = CoNLLEvaluation()
   f_out = open(os.path.join(config['model_path'], 'prediction.readable'), 'w')
-  for doc_id, token, span, pred_cluster_id, gold_cluster_id in zip(doc_ids_test, tokens_test, spans_test, pred_cluster_ids, cluster_ids_test):
-    antecedent = to_antecedents(pred_cluster_id)
+  for doc_id, token, span, antecedent, pred_cluster_id, gold_cluster_id in zip(doc_ids_test, tokens_test, spans_test, text_antecedents, pred_cluster_ids, cluster_ids_test):
+    # antecedent = to_antecedents(pred_cluster_id)
     pred_clusters, gold_clusters = conll_eval(torch.LongTensor(span),
                                               torch.LongTensor(antecedent),
                                               torch.LongTensor(span),
