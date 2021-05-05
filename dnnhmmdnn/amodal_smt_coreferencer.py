@@ -85,7 +85,9 @@ class AmodalSMTCoreferencer:
       F, S = self.compute_forward_prob(e_feat, v_feat)
       B = self.compute_backward_prob(e_feat, v_feat, S)
       L = v_feat.shape[0]
+      v_prob = self.compute_cluster_prob(v_feat)
 
+      '''
       for e_idx in F: # XXX
         ll = 0
         norm_factor = 0
@@ -97,6 +99,7 @@ class AmodalSMTCoreferencer:
             ll += F[e_idx][a_idx] * B[e_idx][a_idx]
             norm_factor += F[e_idx][a_idx]
         print(f'{e_idx}, likelihood from forward backward, norm factor: {ll}, {norm_factor}')
+      '''
 
       for e_idx, e in enumerate(e_feat):
         C_ee[e_idx] = dict()
@@ -104,14 +107,16 @@ class AmodalSMTCoreferencer:
         token = e['head_lemma']
 
         # Compute event-event alignment counts
-        C_ee[e_idx][0] = F[e_idx][L] * B[e_idx][L]
+        C_ee[e_idx][0] = self.P_ee[NULL][token] 
         for a_idx, a in enumerate(e_feat[:e_idx]):
           if self.is_match(e, a):
-            C_ee[e_idx][a_idx+1] = F[e_idx][L+a_idx+1] * B[e_idx][L+a_idx+1]
+            a_token = a['head_lemma']
+            C_ee[e_idx][a_idx+1] = self.P_ee[a_token][token]
         
         # Compute event-action alignment counts
+        e_prob = np.asarray([self.P_ve[k][token] for k in range(self.Kv)])
         for v_idx, v in enumerate(v_feat):
-          C_ev[e_idx][v_idx] = F[e_idx][v_idx] * B[e_idx][v_idx]
+          C_ev[e_idx][v_idx] = v_prob * e_prob 
         
         norm_factor = sum(C_ee[e_idx].values())
         norm_factor += sum(C_ev[e_idx][v_idx].sum() for v_idx in C_ev[e_idx])
@@ -199,85 +204,6 @@ class AmodalSMTCoreferencer:
       logging.info('Epoch {}, log likelihood = {:.3f}'.format(epoch, self.log_likelihood()))           
       print('Epoch {}, log likelihood = {:.3f}'.format(epoch, self.log_likelihood()))
  
-  def compute_forward_prob(self, e_feat, v_feat):
-    L = len(v_feat)
-    T = len(e_feat)
-    e_tokens = [e['head_lemma'] for e in e_feat]
-    v_prob = self.compute_cluster_prob(v_feat)
-    ve_prob = [np.asarray([self.P_ve[k][e] for k in range(self.Kv)]) for e in e_tokens]
-    ee_prob = [np.asarray([self.P_ee[NULL][e]]+[self.P_ee[a].get(e, 0) if a in self.P_ee else 0 for a in e_tokens[:e_idx]]) for e_idx, e in enumerate(e_tokens)]
-
-    F = {0: dict()}
-    S = dict()
-    for i in range(L):
-      F[0][i] = v_prob[i] * ve_prob[0]
-    F[0][L] = ee_prob[0][0]
-
-    S[0] = sum(sum(F[0][i]) for i in range(L))
-    S[0] += F[0][L]
-    for i in range(L+1):
-      F[0][i] /= S[0]
-
-    for t in range(1, T):
-      A = np.ones((L+t, L+t+1)) / max(L+t+1, 1)
-      F[t] = dict()
-      for i in range(L+t+1):
-        if i < L:
-          F[t][i] = np.zeros(self.Kv)
-          for j in range(L+t):
-            if j < L:
-              F[t][i] += F[t-1][j] * A[j, i] * v_prob[i]
-            else:
-              F[t][i] += F[t-1][j] * A[j, i]
-          F[t][i] *= ve_prob[t]
-        else:
-          F[t][i] = 0
-          for j in range(L+t):
-            if j < L: 
-              F[t][i] += np.sum(F[t-1][j]) * A[j, i]
-            else:
-              F[t][i] += F[t-1][j] * A[j, i]
-          F[t][i] *= ee_prob[t][i-L]
-      S[t] = sum(sum(F[t][i]) for i in range(L))
-      S[t] += sum(F[t][i] for i in range(L, L+t+1))
-
-      for i in range(L+t+1):
-        F[t][i] /= S[t]
-    return F, S
-
-  def compute_backward_prob(self, e_feat, v_feat, S):
-    L = len(v_feat)
-    T = len(e_feat)
-    e_tokens = [e['head_lemma'] for e in e_feat]
-    v_prob = self.compute_cluster_prob(v_feat)
-    ve_prob = [np.asarray([self.P_ve[k][e] for k in range(self.Kv)]) for e in e_tokens]
-    ee_prob = [np.asarray([self.P_ee[NULL][e]]+[self.P_ee[a].get(e, 0) if a in self.P_ee else 0 for a in e_tokens[:e_idx]]) for e_idx, e in enumerate(e_tokens)] 
-
-    B = {T-1: {i: np.ones(self.Kv) for i in range(L)}}
-    for i in range(L, L+T):
-      B[T-1][i] = 1.
-
-    for t in range(T-1, 0, -1):
-      A = np.ones((L+t, L+t+1)) / max(L+t+1, 1)
-      B[t-1] = dict()
-      for i in range(L+t):
-        if i < L: # Visual at t-1
-          B[t-1][i] = np.zeros(self.Kv)
-          for j in range(L+t+1):
-            if j < L: # Visual at t 
-              B[t-1][i] += A[i, j] * B[t][j] * v_prob[j] * ve_prob[t]
-            else: # Textual at t
-              B[t-1][i] += A[i, j] * B[t][j] * ee_prob[t][j-L]
-        else: # Textual at t-1
-          B[t-1][i] = 0
-          for j in range(L+t+1):
-            if j < L: # Visual at t
-              B[t-1][i] += A[i, j] * np.sum(B[t][j] * v_prob[j] * ve_prob[t])
-            else: # Textual at t
-              B[t-1][i] += A[i, j] * B[t][j] * ee_prob[t][j-L]
-        B[t-1][i] /= max(S[t], EPS)
-    return B
-
   def compute_cluster_prob(self, v_feat):
     # (num. of actions, num. of clusters)
     logit = - (v_feat**2 / 2.).sum(axis=-1, keepdims=True)\
