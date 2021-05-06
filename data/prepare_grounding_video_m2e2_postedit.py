@@ -354,4 +354,4 @@ if __name__ == '__main__':
   img_dir = '/ws/ifp-53_2/hasegawa/lwang114/fall2020/MultimediaEventCoreference/m2e2/data/video_m2e2/videos/'
   m2e2_caption = 'video_m2e2/video_m2e2.json' # '/ws/ifp-53_2/hasegawa/lwang114/fall2020/MultimediaEventCoreference/m2e2/data/video_m2e2/video_m2e2.json'
   m2e2_annotation_dir = '../brat/brat-v1.3_Crunchy_Frog/data/video_m2e2_oneie/train/'
-  main(grounding_dir, img_dir, m2e2_caption, m2e2_annotation_dir, out_prefix='train')
+  main(grounding_dir, img_dir, m2e2_caption, m2e2_annotation_dir, out_prefix='traintest')

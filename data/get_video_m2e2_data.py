@@ -753,14 +753,14 @@ if __name__ == '__main__':
     train_test_split('{}/{}.npz'.format(data_dir, csv_dir.split('/')[-1]), os.path.join(data_dir, 'test.json'), mapping_file, out_prefix)
   elif args.task == 4:
     # Xudong's split
-    out_dir = 'video_m2e2_old/mentions/'
+    out_dir = 'video_m2e2/mentions/'
     if not os.path.exists(out_dir):
       os.makedirs(out_dir)
 
-    documents = json.load(open(os.path.join(data_dir, 'train.json')))
-    entity_mentions = json.load(open(os.path.join(data_dir, 'train_entities.json')))
-    event_mentions = json.load(open(os.path.join(data_dir, 'train_events.json')))
-    mixed_mentions = json.load(open(os.path.join(data_dir, 'train_mixed.json')))
+    documents = json.load(open(os.path.join(data_dir, 'traintest.json')))
+    entity_mentions = json.load(open(os.path.join(data_dir, 'traintest_entities.json')))
+    event_mentions = json.load(open(os.path.join(data_dir, 'traintest_events.json')))
+    mixed_mentions = json.load(open(os.path.join(data_dir, 'traintest_mixed.json')))
     anno_train = json.load(open(os.path.join(data_dir, '../anet_anno_train.json')))
     mapping_dict = json.load(open(os.path.join(data_dir, '../video_m2e2.json')))
     id2desc = dict()
