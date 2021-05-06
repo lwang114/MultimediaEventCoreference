@@ -176,6 +176,73 @@ def test(text_model, visual_model, test_loader, args):
                                                                 eval.get_precision(),
                                                                 eval.get_f1()))
 
+def test_localization(text_model, visual_modal, test_loader, args): # TODO
+  """
+  Returns:
+    action_segment_dict: a dictionary of the format
+      {
+        [description id]: {
+          "duration_second": 100,
+          "annotations": [
+            "segment": [float, float],
+            "label": int,
+            ...
+          ]
+        }
+      }     
+  """ 
+  device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
+  config = pyhocon.ConfigFactory.parse_file(args.config)
+  all_scores = []
+  all_labels = []
+
+  text_model.eval()
+  visual_model.eval()
+
+  with torch.no_grad():
+    action_segment_dict = dict()
+    embs = dict()
+
+    for i, batch in enumerate(test_loader):
+      mention_embedding,\
+      action_embedding,\
+      action_mask,\
+      coref_label = batch
+
+      nums_frames = action_mask.sum(-1).detach().cpu().numpy()
+
+      candidate_list = []
+      for idx, n_frames in enumerate(nums_frames): 
+        global_idx = i * test_loader.batch_size + idx
+        _, doc_id, m_info, a_info = test_loader.dataset.data_list[global_idx]
+        event_label = m_info[1]
+        if not event_label in test_loader.dataset.ontology_map:
+          continue
+        action_label_str = test_loader.dataset.ontology_map[event_label][0]
+        action_label = test_loader.dataset.action_stoi[action_label_str]
+
+        if not doc_id in embs:
+          embs[doc_id] = []
+          action_segment_dict[doc_id] = {'duration_second': 100,
+                                         'annotations': []}
+          # Generate a list of candidate boundaries
+          candidate_list = [(start, start+dur-1) for start in range(n_frames) for dur in range(min(20, n_frames-start))]
+
+        # Compute the scores of the candidates and continue if the scores are less than 0
+        segment_output = []
+        for start, end in candidate_list:
+          segment_embedding = action_embedding[idx, start:end+1]
+          segment_output.append(visual_model(segment_embedding).mean(0))
+        segment_output = torch.stack(segment_output)
+        scores = torch.mm(mention_embedding[idx], segment_output)
+        if len((scores > 0).nonzero(as_tuple=False)) > 0:
+          # Find the maximum and save the segment and its embedding
+          best_idx = scores.max()[1]
+          best_start, best_end = candidate_list[best_idx]
+          embs[doc_id].append(segment_output[best_idx])
+          action_segment_dict[doc_id]['annotations'].append({'segment': [best_start, best_end],
+                                                             'label': action_label})
+
 if __name__ == '__main__':
   # Set up argument parser
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
