@@ -9,7 +9,10 @@ from nltk.stem import WordNetLemmatizer
 import itertools
 import argparse
 import pyhocon
+import random
 from evaluator import Evaluation, CoNLLEvaluation
+np.random.seed(2)
+random.seed(2)
 
 NULL = '###NEW###'
 EPS = 1e-100
@@ -149,8 +152,8 @@ class SMTCoreferencer:
         scores = np.asarray(scores)
         antecedent[e_idx] = np.argmax(scores) - 1
         if antecedent[e_idx] == -1:
-          cluster_id[e_idx] = n_cluster
           n_cluster += 1
+          cluster_id[e_idx] = n_cluster
         else:
           cluster_id[e_idx] = cluster_id[antecedent[e_idx]]
       antecedents.append(antecedent)
@@ -203,7 +206,7 @@ def load_text_features(config, vocab_feat, split):
       token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
       label_dicts[m['doc_id']][span] = {'token_id': token,
-                                        'cluster_id': vocab_feat['event_type'][m['event_type']]} # XXX m['cluster_id']}
+                                        'cluster_id': m['cluster_id']} # XXX vocab_feat['event_type'][m['event_type']]} 
 
       for feat_type in feature_types:
         label_dicts[m['doc_id']][span][feat_type] = m[feat_type] 
@@ -233,14 +236,21 @@ def load_text_features(config, vocab_feat, split):
 
 def load_data(config):
   lemmatizer = WordNetLemmatizer() 
-  event_mentions_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train_events.json'), 'r', 'utf-8'))
-  doc_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train.json')))
-  event_mentions_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test_events.json'), 'r', 'utf-8'))
-  doc_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test.json')))
-  feature_types = config['feature_types']
+  event_mentions_train = []
+  doc_train = dict()
+  for split in config['splits']['train']:
+    event_mentions_train.extend(json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events.json'), 'r', 'utf-8')))
+    doc_train.update(json.load(codecs.open(os.path.join(config['data_folder'], f'{split}.json'))))
 
-  vocab_feats = {feat_type:dict() for feat_type in feature_types}
-  vocab_feats_freq = {feat_type:dict() for feat_type in feature_types}
+  event_mentions_test = []
+  doc_test = dict()
+  for split in config['splits']['test']:
+    event_mentions_test.extend(json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events.json'), 'r', 'utf-8')))
+    doc_test.update(json.load(codecs.open(os.path.join(config['data_folder'], f'{split}.json'))))
+
+  feature_types = config['feature_types']
+  vocab_feats = {feat_type:{NULL: 0} for feat_type in feature_types}
+  vocab_feats_freq = {feat_type:{NULL: 0} for feat_type in feature_types}
   for m in event_mentions_train + event_mentions_test:    
     for feat_type in feature_types: 
       if not m[feat_type] in vocab_feats[feat_type]:
@@ -250,20 +260,44 @@ def load_data(config):
         vocab_feats_freq[feat_type][m[feat_type]] += 1
   json.dump(vocab_feats_freq, open('vocab_feats_freq.json', 'w'), indent=2)
 
-  event_feats_train,\
-  doc_ids_train,\
-  spans_train,\
-  cluster_ids_train,\
-  tokens_train = load_text_features(config, vocab_feats_freq, split='train')
+  event_feats_train = []
+  doc_ids_train = []
+  spans_train = []
+  cluster_ids_train = []
+  tokens_train = []
+  for split in config['splits']['train']:
+    cur_event_feats_train,\
+    cur_doc_ids_train,\
+    cur_spans_train,\
+    cur_cluster_ids_train,\
+    cur_tokens_train = load_text_features(config, vocab_feats_freq, split=split)
+    
+    event_feats_train.extend(cur_event_feats_train)
+    doc_ids_train.extend(cur_doc_ids_train)
+    spans_train.extend(cur_spans_train)
+    cluster_ids_train.extend(cur_cluster_ids_train)
+    tokens_train.extend(cur_tokens_train)
   print(f'Number of training examples: {len(event_feats_train)}')
   
-  event_feats_test,\
-  doc_ids_test,\
-  spans_test,\
-  cluster_ids_test,\
-  tokens_test = load_text_features(config, vocab_feats_freq, split='test')
+  event_feats_test = []
+  doc_ids_test = []
+  spans_test = []
+  cluster_ids_test = []
+  tokens_test = []
+  for split in config['splits']['test']:
+    cur_event_feats_test,\
+    cur_doc_ids_test,\
+    cur_spans_test,\
+    cur_cluster_ids_test,\
+    cur_tokens_test = load_text_features(config, vocab_feats_freq, split='test')
+    
+    event_feats_test.extend(cur_event_feats_test)
+    doc_ids_test.extend(cur_doc_ids_test)
+    spans_test.extend(cur_spans_test)
+    cluster_ids_test.extend(cur_cluster_ids_test)
+    tokens_test.extend(cur_tokens_test)
   print(f'Number of test examples: {len(event_feats_test)}')
-  
+
   return event_feats_train,\
          doc_ids_train,\
          spans_train,\

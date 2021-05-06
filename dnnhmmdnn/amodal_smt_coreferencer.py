@@ -72,7 +72,7 @@ class AmodalSMTCoreferencer:
     y = kmeans.predict(X)
     self.vars = EPS * np.ones(self.Kv)
     for k in range(self.Kv):
-      self.vars[k] = 0.1 # XXX np.var(X[(y == k).nonzero()[0]]) * X.shape[1] / 3
+      self.vars[k] = np.var(X[(y == k).nonzero()[0]]) * X.shape[1] / 3
 
   def is_match(self, e1, e2):
     v1 = e1['trigger_embedding']
@@ -298,7 +298,7 @@ def load_text_features(config, vocab_feat, split):
       token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
       label_dicts[m['doc_id']][span] = {'token_id': token,
-                                        'cluster_id': vocab_feat['event_type'][m['event_type']]} # XXX m['cluster_id']}
+                                        'cluster_id': m['cluster_id']} # XXX vocab_feat['event_type'][m['event_type']]}
 
       for feat_type in feature_types:
         label_dicts[m['doc_id']][span][feat_type] = m[feat_type] 

@@ -394,7 +394,8 @@ def extract_mention_cluster_probabilities(embed_files,
 
 def extract_mention_token_encodings(config,
                                     out_dir,
-                                    mention_type='events'):
+                                    mention_type='events',
+                                    feat_type = 'head_lemma'):
   def to_one_hot(sent):
     K = len(vocab)
     sent = np.asarray(sent)
@@ -413,10 +414,7 @@ def extract_mention_token_encodings(config,
       mention_json = os.path.join(config['data_folder'], f'{dataset}_{mention_type}.json')
       mentions = json.load(open(mention_json, 'r'))
       for m in mentions:
-        if 'head_lemma' in m:
-          token = m['head_lemma']
-        else:
-          token = m['tokens']
+        token = m[feat_type]
         span = (min(m['tokens_ids']), max(m['tokens_ids']))
         if not m['doc_id'] in label_dict[dataset]:
           label_dict[dataset][m['doc_id']] = dict()
@@ -427,7 +425,7 @@ def extract_mention_token_encodings(config,
 
   for split in config['splits']:
     for dataset in config['splits'][split]:
-      out_file = f'{out_dir}/{dataset}_{mention_type}_labels.npz' 
+      out_file = f'{out_dir}/{dataset}_{mention_type}_{feat_type}_labels.npz' 
       features = {}
       for feat_idx, doc_id in enumerate(sorted(label_dict[dataset])):
         features[f'{doc_id}_{feat_idx}'] = to_one_hot([vocab[label_dict[dataset][doc_id][span]] for span in sorted(label_dict[dataset][doc_id])])
@@ -625,7 +623,7 @@ def main():
               'n_clusters': 66}
     extract_mention_cluster_probabilities(**kwargs)
   elif args.task == 'extract_mention_token_encodings':
-    extract_mention_token_encodings(config, config['data_folder'])
+    extract_mention_token_encodings(config, config['data_folder'], feat_type='event_type')
   elif args.task == 'extract_mention_glove_embeddings_with_arguments':
     for split in config['splits']:
       for dataset in config['splits'][split]:
