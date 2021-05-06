@@ -94,6 +94,7 @@ class Article:
     '''Extract a list of mapping from event mention id to event mentions'''
     # Extract triggers
     triggers = []
+    self.entity_triggers = dict()
     for sent_idx in range(len(self.sentences)):
       triggers.append({})
       for line in self.annotation:
@@ -115,8 +116,19 @@ class Article:
             name = [t.text for t in self.tokens[sent_idx][t_start:t_end+1]]
             triggers[sent_idx][parts[0]] = {'start': t_start, 
                                             'end': t_end,
+                                            'start_char': start,
+                                            'end_char': end,
                                             'event-type': event_type,
-                                            'text': ' '.join(name)} 
+                                            'text': ' '.join(name)}
+    
+      for line in self.annotation:
+        parts = line.split() 
+        if parts[0][0] == 'T' and parts[1] == 'Event': # Deal triggers annotated as entities    
+          m_id, start, end = parts[0], int(parts[2]), int(parts[3])-1 
+          for e_id, e in triggers[sent_idx].items():
+            if e['start_char'] == start and e['end_char'] == end: 
+              self.entity_triggers[m_id] = e_id
+              print(f'Trigger {e_id} and entity {m_id} are the same') # XXX
             
     for sent_idx in range(len(self.sentences)):
       self.events.append({})
@@ -125,8 +137,13 @@ class Article:
         if parts[0][0] == 'E': # Check if the annotation is an event
           event_id = parts[0]
           event_type, trigger_id = parts[1].split(':')
+
           if not trigger_id in triggers[sent_idx]: # Skip if the trigger is not in the current sentence
             continue
+          
+          for m_id, e_id in self.entity_triggers.items(): # Update entity trigger mapping to event ids
+            if e_id == trigger_id:
+              self.entity_triggers[m_id] = event_id
 
           event = {'trigger': triggers[sent_idx][trigger_id],
                    'event-type': event_type,
@@ -144,13 +161,25 @@ class Article:
         
   def get_clusters(self):
     ''' Extract a list of mapping from entity id/event id to coreferent mentions for each sentence '''
+    entity_trigger_ids = list(self.entity_triggers.keys())
+    has_entity_event = False
+
     entity_clusters = {}
     event_clusters = {}
     for line in self.annotation:
       parts = line.split()
 
       if parts[1] == 'EntityCoref':
-        entity_clusters[parts[2]] = parts[2:]
+        is_event = True
+        for mention_id in parts[2:]:
+          if not mention_id in entity_trigger_ids:
+            is_event = False
+            break
+        
+        if is_event:
+          event_clusters[self.entity_triggers[parts[2]]] = [self.entity_triggers[e_id] for e_id in parts[2:]]
+        else:
+          entity_clusters[parts[2]] = parts[2:]
       elif parts[1] == 'EventCoref':
         event_clusters[parts[2]] = parts[2:]
     self.event_clusters = event_clusters
@@ -238,7 +267,11 @@ def generate_json(img_id, ann, events, entities, cluster2idx, documents):
       # Extract event mentions
       for event_id in sorted(article.events[sent_idx], key=lambda x:int(x[1:])):
         event = article.events[sent_idx][event_id]['trigger']
-        arguments = article.events[sent_idx][event_id]['arguments']
+        arguments = [{'start': sen_start+a['start'],
+                      'end': sen_start+a['end'],
+                      'role': a['role'],
+                      'text': a['text']} for a in article.events[sent_idx][event_id]['arguments']] 
+
         cluster_idx = mention2cluster.get(event_id, 0)
 
         events.append({'doc_id': img_id,
@@ -263,7 +296,6 @@ def generate_json(img_id, ann, events, entities, cluster2idx, documents):
 
     return events, entities, cluster2idx, documents
 
-
 def generate_json_all(pair_list, out_prefix):
     events = []
     entities = []
@@ -273,6 +305,12 @@ def generate_json_all(pair_list, out_prefix):
     for image_id, ann_file in pair_list:
       print(image_id, ann_file)
       events, entities, cluster2idx, documents = generate_json(image_id, ann_file, events, entities, cluster2idx, documents)
+    
+    n_event_clusters = len(set([e['cluster_id'] for e in events if e['cluster_id']]))
+    n_entity_clusters = len(set([e['cluster_id'] for e in entities if e['cluster_id']]))
+    n_clusters = len(cluster2idx)
+    print(f'Number of event mentions: {len(events)}, number of entity mentions: {len(entities)}')
+    print(f'Number of event clusters: {n_event_clusters}, number of entity clusters: {n_entity_clusters}, total number of clusters: {n_clusters}')
     json.dump(documents, codecs.open(out_prefix+'.json', 'w', 'utf-8'), indent=2)
     json.dump(entities, codecs.open(out_prefix+'_entities.json', 'w', 'utf-8'), indent=2)
     json.dump(events, codecs.open(out_prefix+'_events.json', 'w', 'utf-8'), indent=2)
