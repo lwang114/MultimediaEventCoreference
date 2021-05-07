@@ -156,7 +156,8 @@ def train(text_model, visual_model, crossmedia_model, coref_model, train_loader,
       mention_output = (mention_start_output + mention_end_output) / 2.  
       crossmedia_output = crossmedia_model(mention_output)
       align_output = align(crossmedia_output, action_output)
-      mention_output = torch.cat([mention_output, align_output], dim=-1)
+      if not config.get('text_only', False):
+        mention_output = torch.cat([mention_output, align_output], dim=-1)
 
       scores = []
       for idx in range(B):
@@ -259,14 +260,15 @@ def test(text_model, visual_model, coref_model, test_loader, args):
           mention_output = (mention_start_output + mention_end_output) / 2.
           crossmedia_output = crossmedia_model(mention_output)
           align_output = align(crossmedia_output, action_output)
-          mention_output = torch.cat([mention_output, align_output], dim=-1)
+          if not config.get('text_only', False):
+            mention_output = torch.cat([mention_output, align_output], dim=-1)
          
           B = doc_embeddings.size(0) 
           for idx in range(B):
             global_idx = i * test_loader.batch_size + idx
             first_text_idx, second_text_idx, pairwise_text_labels = get_pairwise_text_labels(text_labels[idx, :span_num[idx]].unsqueeze(0), 
                                                                                              is_training=False, device=device)
-            coref_type_labels = type_labels[first_text_idx] 
+            coref_type_labels = type_labels[idx, first_text_idx].squeeze(0)
 
             if first_text_idx is None:
                 continue
@@ -305,14 +307,15 @@ def test(text_model, visual_model, coref_model, test_loader, args):
         eval = Evaluation(strict_preds, all_labels.to(device))
         class_pred_idxs = dict()
         # TODO Compute coref scores by mention type class
-        for c, c_idx in test_loader.dataset.event_stoi.items():
-          if not c in class_preds:
+        for c, c_idx in test_loader.dataset.mention_stoi.items():
+          if not c in class_pred_idxs:
             class_pred_idxs[c] = []
-          for idx in range(all_coref_type_labels):
+          for idx in range(all_coref_type_labels.size(0)):
             if all_coref_type_labels[idx].cpu().numpy() == c_idx:
               class_pred_idxs[c].append(idx)
-           
-          eval_class = Evaluation(strict_preds[class_pred_idxs[c]], all_labels[class_pred_idxs[c]])
+          
+          if len(class_pred_idxs[c]) > 0: 
+            eval_class = Evaluation(strict_preds[class_pred_idxs[c]].cpu(), all_labels[class_pred_idxs[c]])
           logging.info('Class {}, number of predictions: {}/{}, number of positive pairs: {}/{}'.format(c, strict_preds[class_pred_idxs[c]].sum(), len(class_pred_idxs[c]), all_labels[class_pred_idxs[c]].sum(), len(class_pred_idxs[c])))
           logging.info(f'Pairwise - Recall: {eval_class.get_recall()}, Precision: {eval_class.get_precision()}, F1: {eval_class.get_f1()}')
            
@@ -423,8 +426,6 @@ if __name__ == '__main__':
       
       if config['training_method'] in ('pipeline', 'continue'):
           coref_model.load_state_dict(torch.load(config['coref_model_path'], map_location=device))
-          for p in coref_model.parameters():
-              p.requires_grad = False
 
       # Training
       n_params = 0

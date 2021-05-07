@@ -14,7 +14,7 @@ import numpy as np
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
 from text_models import NoOp, BiLSTM
-from corpus_crossmedia import VideoM2E2SupervisedCrossmediaDataset
+from corpus_crossmedia import VideoM2E2SupervisedCrossmediaDataset, fix_embedding_length
 from evaluator import Evaluation
 
 def fix_seed(config):
@@ -112,9 +112,11 @@ def train(text_model, visual_model, train_loader, test_loader, args):
       test(text_model, visual_model, test_loader, args)
 
   if args.evaluate_only:
-    test(text_model, visual_model, train_loader, args)
-    test(text_model, visual_model, test_loader, args)
-
+    if config['use_action_boundary']:
+      test(text_model, visual_model, train_loader, args)
+      test(text_model, visual_model, test_loader, args)
+    else:
+      test_localization(text_model, visual_model, test_loader, args)
 
 def test(text_model, visual_model, test_loader, args):
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -176,7 +178,7 @@ def test(text_model, visual_model, test_loader, args):
                                                                 eval.get_precision(),
                                                                 eval.get_f1()))
 
-def test_localization(text_model, visual_modal, test_loader, args): # TODO
+def test_localization(text_model, visual_modal, test_loader, args):
   """
   Returns:
     action_segment_dict: a dictionary of the format
@@ -208,8 +210,14 @@ def test_localization(text_model, visual_modal, test_loader, args): # TODO
       action_embedding,\
       action_mask,\
       coref_label = batch
+      
+      mention_embedding = mention_embedding.to(device)
+      action_embedding = action_embedding.to(device)
+      action_mask = action_mask.to(device)
+      coref_label = coref_label.to(device)
 
-      nums_frames = action_mask.sum(-1).detach().cpu().numpy()
+      mention_output = text_model(mention_embedding) 
+      nums_frames = action_mask.sum(-1).long().detach().cpu().numpy()
 
       candidate_list = []
       for idx, n_frames in enumerate(nums_frames): 
@@ -226,15 +234,18 @@ def test_localization(text_model, visual_modal, test_loader, args): # TODO
           action_segment_dict[doc_id] = {'duration_second': 100,
                                          'annotations': []}
           # Generate a list of candidate boundaries
-          candidate_list = [(start, start+dur-1) for start in range(n_frames) for dur in range(min(20, n_frames-start))]
+          candidate_list = [(start, start+dur-1) for start in range(n_frames) for dur in range(1, min(21, n_frames-start))]
+          segment_lens = torch.FloatTensor([dur for start in range(n_frames) for dur in range(1, min(21, n_frames-start))])
 
         # Compute the scores of the candidates and continue if the scores are less than 0
         segment_output = []
+        segment_embedding = [] 
         for start, end in candidate_list:
-          segment_embedding = action_embedding[idx, start:end+1]
-          segment_output.append(visual_model(segment_embedding).mean(0))
-        segment_output = torch.stack(segment_output)
-        scores = torch.mm(mention_embedding[idx], segment_output)
+          segment_embedding.append(fix_embedding_length(action_embedding[idx, start:end+1], 20))
+        segment_embedding = torch.stack(segment_embedding)
+        segment_output = visual_model(segment_embedding).sum(dim=1) / segment_lens
+        
+        scores = torch.mm(mention_output[idx], segment_output)
         if len((scores > 0).nonzero(as_tuple=False)) > 0:
           # Find the maximum and save the segment and its embedding
           best_idx = scores.max()[1]
@@ -242,6 +253,11 @@ def test_localization(text_model, visual_modal, test_loader, args): # TODO
           embs[doc_id].append(segment_output[best_idx])
           action_segment_dict[doc_id]['annotations'].append({'segment': [best_start, best_end],
                                                              'label': action_label})
+        
+        # TODO Compute action localization IoP (intersection-over-prediction)
+
+  json.dump(action_segment_dict, open(os.path.join(config['model_path'], f'anet_anno_{test_loader.dataset.split}.json'), 'w'), indent=2)
+  np.savez(os.path.join(config['model_path'], f'{test_loader.dataset.split}_mmaction_event_feat_average.npz'))
 
 if __name__ == '__main__':
   # Set up argument parser

@@ -16,7 +16,7 @@ PUNCT = [',', '.', '\'', '\"', ':', ';', '?', '!', '<', '>', '~', '%', '$', '|',
 def fix_embedding_length(emb, L):
   size = emb.size()[1:]
   if emb.size(0) < L:
-    pad = [torch.zeros(size, dtype=emb.dtype).unsqueeze(0) for _ in range(L-emb.size(0))]
+    pad = [torch.zeros(size, dtype=emb.dtype, device=emb.device).unsqueeze(0) for _ in range(L-emb.size(0))]
     emb = torch.cat([emb]+pad, dim=0)
   else:
     emb = emb[:L]
@@ -45,6 +45,7 @@ class VideoM2E2SupervisedCrossmediaDataset(Dataset):
     self.config = config
     self.split = split
     self.max_frame_num = config.get('max_frame_num', 30)
+    self.use_action_boundary = config.get('use_action_boundary', True)
 
     if config['bert_model'] == 'oneie':
       doc_json = os.path.join(config['data_folder'], f'{split}_oneie.json')
@@ -97,7 +98,7 @@ class VideoM2E2SupervisedCrossmediaDataset(Dataset):
     documents = {doc_id:doc for doc_id, doc in documents.items() if doc_id in self.text_label_dict}
     self.documents = documents
 
-    self.data_list = self.create_data_list(self.text_label_dict, self.action_label_dict) # XXX
+    self.data_list = self.create_data_list(self.text_label_dict, self.action_label_dict)[:20] # XXX
     print('Number of documents: ', len(documents))
     print('Number of mention-action pairs: ', len(self.data_list))
  
@@ -241,10 +242,14 @@ class VideoM2E2SupervisedCrossmediaDataset(Dataset):
       mention_embedding = doc_embeddings[m_idx]
 
     action_embedding = self.action_embeddings[self.doc_to_action_feat[doc_id]]
-    action_embedding = torch.FloatTensor(action_embedding[a_info[0][0]:a_info[0][1]+1])
-    action_mask = torch.zeros(self.max_frame_num)
-    action_mask[:action_embedding.size(0)] = 1.
-    action_embedding = fix_embedding_length(action_embedding, self.max_frame_num)
+    if self.use_action_boundary:
+      action_embedding = torch.FloatTensor(action_embedding[a_info[0][0]:a_info[0][1]+1])
+      action_mask = torch.zeros(self.max_frame_num)
+      action_mask[:action_embedding.size(0)] = 1.
+      action_embedding = fix_embedding_length(action_embedding, self.max_frame_num)
+    else:
+      nframes = action_embedding.shape[0]
+      action_mask = torch.ones(nframes)
     
     if not m_info[1] in self.ontology_map:
       coref_label = 0
