@@ -14,6 +14,9 @@ from copy import deepcopy
 from scipy.special import logsumexp
 from sklearn.cluster import KMeans
 from evaluator import Evaluation, CoNLLEvaluation
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 np.random.seed(2)
 random.seed(2)
 
@@ -413,17 +416,50 @@ def load_data(config):
   
   return event_feats_train,\
          action_feats_train,\
+         action_labels_train,\
          doc_ids_train,\
          spans_train,\
          cluster_ids_train,\
          tokens_train,\
          event_feats_test,\
          action_feats_test,\
+         action_labels_test,\
          doc_ids_test,\
          spans_test,\
          cluster_ids_test,\
          tokens_test,\
          vocab_feats
+
+def plot_attention(prediction, e_feats, v_labels, out_prefix):
+  fig, ax = plt.subplots(figsize=(7, 10))
+  scores = prediction['score']
+  num_events = len(e_feats)
+  num_actions = len(v_labels)
+  e_tokens = [e['head_lemma'] for e in e_feats]
+  score_mat = []
+  for score in scores:
+    if len(score) < num_events + num_actions + 1:
+      gap = num_events + num_actions + 1 - len(score)
+      score.extend([0]*gap)
+      score_mat.append(score)
+
+  score_mat = np.asarray(score_mat).T
+  score_mat /= np.maximum(score_mat.sum(0), EPS) 
+  si = np.arange(num_events+1)
+  ti = np.arange(num_events+num_actions+2)
+  S, T = np.meshgrid(si, ti)
+  plt.pcolormesh(S, T, score_mat)
+  for i in range(num_events):
+    for j in range(num_events+num_actions+1):
+      plt.text(i, j, round(score_mat[j, i], 2), color='orange')
+  ax.set_xticks(si[1:]-0.5)
+  ax.set_yticks(ti[1:]-0.5)
+  ax.set_xticklabels(e_tokens)
+  ax.set_yticklabels(v_labels+[NULL]+e_tokens) 
+  plt.xticks(rotation=45)
+  plt.colorbar()
+  plt.savefig(out_prefix+'.png')
+  plt.close()
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -438,12 +474,14 @@ if __name__ == '__main__':
 
   event_feats_train,\
   action_feats_train,\
+  action_labels_train,\
   doc_ids_train,\
   spans_train,\
   cluster_ids_train,\
   tokens_train,\
   event_feats_test,\
   action_feats_test,\
+  action_labels_test,\
   doc_ids_test,\
   spans_test,\
   cluster_ids_test,\
@@ -478,12 +516,18 @@ if __name__ == '__main__':
   # Compute CoNLL scores and save readable predictions
   conll_eval = CoNLLEvaluation()
   f_out = open(os.path.join(config['model_path'], 'prediction.readable'), 'w')
-  for doc_id, token, span, antecedent, pred_cluster_id, gold_cluster_id in zip(doc_ids_test, tokens_test, spans_test, text_antecedents, pred_cluster_ids, cluster_ids_test):
-    # antecedent = to_antecedents(pred_cluster_id)
+  select_ids = ['92PLcoWtn0Q', '9tx72NIbwh8', 'AohILHV6i8Q', 'GLOGR0UsBtk', 
+                'LHIbc7koTUE', 'PaVqCYxGzp0', 'SvrpxITQ3Pk', 'dY_hkbVQA20', 
+                'eaW-mv9IKOs', 'f3plTR1Dcew', 'fDm7S-pjpOo', 'fsYMznJdCok']
+  for doc_idx, (doc_id, token, span, antecedent, pred_cluster_id, gold_cluster_id) in enumerate(zip(doc_ids_test, tokens_test, spans_test, text_antecedents, pred_cluster_ids, cluster_ids_test)):
     pred_clusters, gold_clusters = conll_eval(torch.LongTensor(span),
                                               torch.LongTensor(antecedent),
                                               torch.LongTensor(span),
-                                              torch.LongTensor(gold_cluster_id)) 
+                                              torch.LongTensor(gold_cluster_id))
+    # Plot attention maps for selected ids
+    if doc_id in select_ids:
+      plot_attention(predictions[doc_idx], event_feats_test[doc_idx], action_labels_test[doc_idx], out_prefix=os.path.join(config['model_path'], doc_id))
+     
     pred_clusters_str, gold_clusters_str = conll_eval.make_output_readable(pred_clusters, gold_clusters, token) 
     token_str = ' '.join(token)
     f_out.write(f'{doc_id}: {token_str}\n')
