@@ -174,8 +174,9 @@ class AmodalSMTCoreferencer:
         for a_idx, a in enumerate(e_feat[:e_idx]):
           if self.is_match(e, a):
             probs.append(self.P_ee[a['head_lemma']][e['head_lemma']])  
-
-        if e.get('is_visual', True): # TODO
+        
+        print(e['event_type'], e['is_visual']) # XXX
+        if e.get('is_visual', True):
           e_prob = np.asarray([self.P_ve[k][e['head_lemma']] for k in range(self.Kv)])
           probs.extend((v_prob @ e_prob).tolist())
         
@@ -216,8 +217,8 @@ class AmodalSMTCoreferencer:
       L = v_feat.shape[0]
       for e_idx, e in enumerate(e_feat):
         v_prob = self.compute_cluster_prob(v_feat)
-        e_prob = np.asarray([self.P_ve[k][e['head_lemma']] for k in range(self.Kv)])
         if e.get('is_visual', True):
+          e_prob = np.asarray([self.P_ve[k][e['head_lemma']] for k in range(self.Kv)])
           scores = (v_prob @ e_prob).tolist()
         else:
           scores = [0]*v_feat.shape[0]
@@ -284,7 +285,6 @@ def to_antecedents(labels):
         break
   return antecedents
 
-
  
 def load_text_features(config, vocab_feat, split):
   lemmatizer = WordNetLemmatizer()
@@ -323,7 +323,7 @@ def load_text_features(config, vocab_feat, split):
       event['trigger_embedding'] = doc_embs[span_idx, :300]
       event['argument_embedding'] = doc_embs[span_idx, 300:]
       if 'event_type' in event:
-        if not event['event_type'] in ontology_map:
+        if len(ontology_map[event['event_type']]) == 0:
           event['is_visual'] = False
         else:
           event['is_visual'] = True
@@ -349,7 +349,6 @@ def load_visual_features(config, split):
       label_dicts[m['doc_id']] = dict()
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
       label_dicts[m['doc_id']][span] = m['cluster_id']
-
   action_npz = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_event_finetuned_crossmedia.npz')) # XXX f'{split}_events_event_type_labels.npz' 
 
   doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in sorted(action_npz, key=lambda x:int(x.split('_')[-1]))}
