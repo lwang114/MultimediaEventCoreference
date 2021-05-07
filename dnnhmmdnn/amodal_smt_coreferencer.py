@@ -286,7 +286,7 @@ def to_antecedents(labels):
   return antecedents
 
  
-def load_text_features(config, vocab_feat, split):
+def load_text_features(config, vocab_feat, action_labels, split):
   lemmatizer = WordNetLemmatizer()
   feature_types = config['feature_types']
   event_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events.json'), 'r', 'utf-8'))
@@ -314,6 +314,7 @@ def load_text_features(config, vocab_feat, split):
         label_dicts[m['doc_id']][span][feat_type] = m[feat_type] 
         
   for feat_idx, doc_id in enumerate(sorted(label_dicts)): # XXX
+    action_label = action_labels[feat_idx]
     doc_embs = docs_embs[doc_to_feat[doc_id]]
     label_dict = label_dicts[doc_id]
     spans = sorted(label_dict)
@@ -323,10 +324,12 @@ def load_text_features(config, vocab_feat, split):
       event['trigger_embedding'] = doc_embs[span_idx, :300]
       event['argument_embedding'] = doc_embs[span_idx, 300:]
       if 'event_type' in event:
-        if len(ontology_map[event['event_type']]) == 0:
-          event['is_visual'] = False
-        else:
+        match_action_types = ontology_map[event['event_type']]
+        print(match_action_types, action_label) # XXX
+        for len(set(match_action_types).intersection(set(action_label))) > 0:
           event['is_visual'] = True
+        else:
+          event['is_visual'] = False
       events.append(event)  
     cluster_ids = [label_dict[span]['cluster_id'] for span in spans]
     
@@ -342,6 +345,8 @@ def load_text_features(config, vocab_feat, split):
          tokens_all
 
 def load_visual_features(config, split):
+  ontology = json.load(open(os.path.join(config['data_folder'], '../ontology.json')))
+  action_classes = ontology['event'] 
   event_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events.json'), 'r', 'utf-8'))
   label_dicts = dict()
   for m in event_mentions:
@@ -350,10 +355,13 @@ def load_visual_features(config, split):
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
       label_dicts[m['doc_id']][span] = m['cluster_id']
   action_npz = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_event_finetuned_crossmedia.npz')) # XXX f'{split}_events_event_type_labels.npz' 
+  action_label_npz = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_event_feat_labels.npz'))
 
   doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in sorted(action_npz, key=lambda x:int(x.split('_')[-1]))}
   action_feats = [action_npz[doc_to_feat[doc_id]] for doc_id in sorted(label_dicts)] 
-  return action_feats
+  action_labels_onehot = [action_label_npz[doc_to_feat[doc_id]] for doc_id in sorted(label_dicts)]
+  action_labels = [[action_classes[y] for y in np.argmax(action_label, axis=-1)] for action_label in action_labels_onehot]
+  return action_feats, action_labels
 
 def load_data(config):
   lemmatizer = WordNetLemmatizer()
@@ -374,20 +382,21 @@ def load_data(config):
         vocab_feats_freq[feat_type][m[feat_type]] += 1
   json.dump(vocab_feats_freq, open('vocab_feats_freq.json', 'w'), indent=2)
 
+  action_feats_train, action_labels_train = load_visual_features(config, split='train')
   event_feats_train,\
   doc_ids_train,\
   spans_train,\
   cluster_ids_train,\
-  tokens_train = load_text_features(config, vocab_feats_freq, split='train')
-  action_feats_train = load_visual_features(config, split='train')
+  tokens_train = load_text_features(config, vocab_feats_freq, action_labels_train, split='train')
   print(f'Number of training examples: {len(event_feats_train)}')
   
+  action_feats_test, action_labels_test = load_visual_features(config, split='test')
   event_feats_test,\
   doc_ids_test,\
   spans_test,\
   cluster_ids_test,\
-  tokens_test = load_text_features(config, vocab_feats_freq, split='test')
-  action_feats_test = load_visual_features(config, split='test')
+  tokens_test = load_text_features(config, vocab_feats_freq, action_labels_test, split='test')
+
   print(f'Number of test examples: {len(event_feats_test)}')
   
   return event_feats_train,\
