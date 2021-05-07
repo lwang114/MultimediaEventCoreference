@@ -62,7 +62,20 @@ class SMTCoreferencer:
   def is_match(self, e1, e2):
     v1 = e1['trigger_embedding']
     v2 = e2['trigger_embedding']
-    return True if cosine_similarity(v1, v2) > 0.5 else False
+    if cosine_similarity(v1, v2) <= 0.5:
+      return False
+
+    if e1.get('word_class', 'VERB') == 'NOUN' and e2.get('word_class', 'VERB') == 'NOUN':
+      if (e1['pos_tag'][-1] == 'S' and e2['pos_tag'][-1] != 'S') or (e2['pos_tag'][-1] == 'S' and e1['pos_tag'][-1] != 'S'):
+        return False 
+    elif e1.get('word_class', 'VERB') == 'NOUN' and e2.get('word_class', 'VERB') == 'VERB':
+      if e1['pos_tag'][-1] == 'S':
+        return False
+    elif e2.get('word_class', 'VERB') == 'NOUN' and e1.get('word_class', 'VERB') == 'VERB':
+      if e2['pos_tag'][-1] == 'S':
+        return False
+
+    return True
    
   def compute_alignment_counts(self):
     align_counts = []
@@ -206,7 +219,7 @@ def load_text_features(config, vocab_feat, split):
       token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
       label_dicts[m['doc_id']][span] = {'token_id': token,
-                                        'cluster_id': m['cluster_id']} # XXX vocab_feat['event_type'][m['event_type']]} 
+                                        'cluster_id': m['cluster_id']} # vocab_feat['event_type'][m['event_type']]} # XXX  
 
       for feat_type in feature_types:
         label_dicts[m['doc_id']][span][feat_type] = m[feat_type] 

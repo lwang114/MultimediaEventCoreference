@@ -77,7 +77,20 @@ class AmodalSMTCoreferencer:
   def is_match(self, e1, e2):
     v1 = e1['trigger_embedding']
     v2 = e2['trigger_embedding']
-    return True if cosine_similarity(v1, v2) > 0.5 else False 
+    if cosine_similarity(v1, v2) <= 0.5:
+      return False
+    
+    if e1.get('word_class', 'VERB') == 'NOUN' and e2.get('word_class', 'VERB') == 'NOUN':
+      if (e1['pos_tag'][-1] == 'S' and e2['pos_tag'][-1] != 'S') or (e2['pos_tag'][-1] == 'S' and e1['pos_tag'][-1] != 'S'):
+        return False 
+    elif e1.get('word_class', 'VERB') == 'NOUN' and e2.get('word_class', 'VERB') == 'VERB':
+      if e1['pos_tag'][-1] == 'S':
+        return False
+    elif e2.get('word_class', 'VERB') == 'NOUN' and e1.get('word_class', 'VERB') == 'VERB':
+      if e2['pos_tag'][-1] == 'S':
+        return False
+
+    return True 
   
   def compute_alignment_counts(self):
     ev_counts = []
@@ -175,7 +188,6 @@ class AmodalSMTCoreferencer:
           if self.is_match(e, a):
             probs.append(self.P_ee[a['head_lemma']][e['head_lemma']])  
         
-        print(e['event_type'], e['is_visual']) # XXX
         if e.get('is_visual', True):
           e_prob = np.asarray([self.P_ve[k][e['head_lemma']] for k in range(self.Kv)])
           probs.extend((v_prob @ e_prob).tolist())
@@ -308,7 +320,7 @@ def load_text_features(config, vocab_feat, action_labels, split):
       token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
       label_dicts[m['doc_id']][span] = {'token_id': token,
-                                        'cluster_id': m['cluster_id']} # XXX vocab_feat['event_type'][m['event_type']]}
+                                        'cluster_id': m['cluster_id']} # XXX vocab_feat['event_type'][m['event_type']]
 
       for feat_type in feature_types:
         label_dicts[m['doc_id']][span][feat_type] = m[feat_type] 
@@ -325,8 +337,7 @@ def load_text_features(config, vocab_feat, action_labels, split):
       event['argument_embedding'] = doc_embs[span_idx, 300:]
       if 'event_type' in event:
         match_action_types = ontology_map[event['event_type']]
-        print(match_action_types, action_label) # XXX
-        for len(set(match_action_types).intersection(set(action_label))) > 0:
+        if len(set(match_action_types).intersection(set(action_label))) > 0:
           event['is_visual'] = True
         else:
           event['is_visual'] = False
@@ -354,12 +365,13 @@ def load_visual_features(config, split):
       label_dicts[m['doc_id']] = dict()
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
       label_dicts[m['doc_id']][span] = m['cluster_id']
-  action_npz = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_event_finetuned_crossmedia.npz')) # XXX f'{split}_events_event_type_labels.npz' 
-  action_label_npz = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_event_feat_labels.npz'))
+  action_npz = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_event_finetuned_crossmedia.npz')) # XXX f'{split}_events_event_type_labels.npz'
+  action_label_npz = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_event_feat_labels_average.npz'))
 
   doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in sorted(action_npz, key=lambda x:int(x.split('_')[-1]))}
+  doc_to_label = {'_'.join(label_id.split('_')[:-1]):label_id for label_id in sorted(action_label_npz, key=lambda x:int(x.split('_')[-1]))}
   action_feats = [action_npz[doc_to_feat[doc_id]] for doc_id in sorted(label_dicts)] 
-  action_labels_onehot = [action_label_npz[doc_to_feat[doc_id]] for doc_id in sorted(label_dicts)]
+  action_labels_onehot = [action_label_npz[doc_to_label[doc_id]] for doc_id in sorted(label_dicts)]
   action_labels = [[action_classes[y] for y in np.argmax(action_label, axis=-1)] for action_label in action_labels_onehot]
   return action_feats, action_labels
 
