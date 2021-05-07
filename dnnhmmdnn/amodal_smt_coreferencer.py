@@ -101,9 +101,10 @@ class AmodalSMTCoreferencer:
             C_ee[e_idx][a_idx+1] = self.P_ee[a_token][token]
         
         # Compute event-action alignment counts
-        e_prob = np.asarray([self.P_ve[k][token] for k in range(self.Kv)])
-        for v_idx, v in enumerate(v_feat):
-          C_ev[e_idx][v_idx] = v_prob[v_idx] * e_prob 
+        if e.get('is_visual', True):
+          e_prob = np.asarray([self.P_ve[k][token] for k in range(self.Kv)])
+          for v_idx, v in enumerate(v_feat):
+            C_ev[e_idx][v_idx] = v_prob[v_idx] * e_prob 
 
         norm_factor = sum(C_ee[e_idx].values())
         norm_factor += sum(C_ev[e_idx][v_idx].sum() for v_idx in C_ev[e_idx])
@@ -173,8 +174,10 @@ class AmodalSMTCoreferencer:
         for a_idx, a in enumerate(e_feat[:e_idx]):
           if self.is_match(e, a):
             probs.append(self.P_ee[a['head_lemma']][e['head_lemma']])  
-        e_prob = np.asarray([self.P_ve[k][e['head_lemma']] for k in range(self.Kv)])
-        probs.extend((v_prob @ e_prob).tolist())
+
+        if e.get('is_visual', True): # TODO
+          e_prob = np.asarray([self.P_ve[k][e['head_lemma']] for k in range(self.Kv)])
+          probs.extend((v_prob @ e_prob).tolist())
         
         ll += np.log(np.maximum(np.mean(probs), EPS))
     return ll
@@ -214,7 +217,11 @@ class AmodalSMTCoreferencer:
       for e_idx, e in enumerate(e_feat):
         v_prob = self.compute_cluster_prob(v_feat)
         e_prob = np.asarray([self.P_ve[k][e['head_lemma']] for k in range(self.Kv)])
-        scores =(v_prob @ e_prob).tolist()
+        if e.get('is_visual', True):
+          scores = (v_prob @ e_prob).tolist()
+        else:
+          scores = [0]*v_feat.shape[0]
+
         scores.append(self.P_ee[NULL][e['head_lemma']])
         for a_idx, a in enumerate(e_feat[:e_idx]):
           if self.is_match(e, a):
@@ -276,11 +283,14 @@ def to_antecedents(labels):
         antecedents[idx] = a_idx
         break
   return antecedents
+
+
  
 def load_text_features(config, vocab_feat, split):
   lemmatizer = WordNetLemmatizer()
   feature_types = config['feature_types']
   event_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events.json'), 'r', 'utf-8'))
+  ontology_map = json.load(open(os.path.join(config['data_folder'], '../ontology_mapping.json')))
   doc_train = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}.json')))
   docs_embs = np.load(os.path.join(config['data_folder'], f'{split}_events_with_arguments_glove_embeddings.npz')) 
   doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in docs_embs}
@@ -312,6 +322,11 @@ def load_text_features(config, vocab_feat, split):
       event = {feat_type: label_dict[span][feat_type] for feat_type in feature_types}
       event['trigger_embedding'] = doc_embs[span_idx, :300]
       event['argument_embedding'] = doc_embs[span_idx, 300:]
+      if 'event_type' in event:
+        if not event['event_type'] in ontology_map:
+          event['is_visual'] = False
+        else:
+          event['is_visual'] = True
       events.append(event)  
     cluster_ids = [label_dict[span]['cluster_id'] for span in spans]
     
