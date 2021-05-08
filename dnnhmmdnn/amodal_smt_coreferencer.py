@@ -83,6 +83,7 @@ class AmodalSMTCoreferencer:
     if cosine_similarity(v1, v2) <= 0.5:
       return False
     
+    # Check plurality
     if e1.get('word_class', 'VERB') == 'NOUN' and e2.get('word_class', 'VERB') == 'NOUN':
       if (e1['pos_tag'][-1] == 'S' and e2['pos_tag'][-1] != 'S') or (e2['pos_tag'][-1] == 'S' and e1['pos_tag'][-1] != 'S'):
         return False 
@@ -93,6 +94,40 @@ class AmodalSMTCoreferencer:
       if e2['pos_tag'][-1] == 'S':
         return False
 
+    # Check argument compatibility
+    a1_by_types = dict()
+    for i, a in e1['arguments']:
+      if not a['entity_type'] in a1_by_types:
+        a1_by_types[a['entity_type']] = [i]
+      else:
+        a1_by_types[a['entity_type']].append(i)
+
+    a2_by_types = dict() 
+    for a in e2['arguments']:
+      if not a['entity_type'] in a2_by_types:
+        a2_by_types[a['entity_type']] = [i]
+      else:
+        a2_by_types[a['entity_type']].append(i)
+    a1_embs = e1['argument_embedding']
+    a2_embs = e2['argument_embedding']
+    
+    S_avg = 0
+    n_shared = 0
+    for a_type in a1_by_types:
+      if not a_type in a2_by_types:
+        continue
+      else:
+        va1 = [a1_embs[i] for i in a1_by_types[a_type]]
+        va2 = [a2_embs[i] for i in a2_by_types[a_type]]
+        S = np.asarray([[cosine_similarity(va1[i], va2[j]) for j in range(len(va2))] for j in range(len(va1))])
+        if S.shape[0] > S_shape[1]:
+          S = S.T
+        S_avg += S.max(-1).mean() <= 0.5:
+        n_shared += 1
+
+    S_avg /= max(n_shared, EPS)
+    if 0 < S_avg <= 0.5:
+      return False
     return True 
   
   def compute_alignment_counts(self):
@@ -337,7 +372,7 @@ def load_text_features(config, vocab_feat, action_labels, split):
     for span_idx, span in enumerate(spans):
       event = {feat_type: label_dict[span][feat_type] for feat_type in feature_types}
       event['trigger_embedding'] = doc_embs[span_idx, :300]
-      event['argument_embedding'] = doc_embs[span_idx, 300:]
+      event['argument_embedding'] = doc_embs[span_idx, 300:].reshape(-1, 300)
       if 'event_type' in event:
         match_action_types = ontology_map[event['event_type']]
         if len(set(match_action_types).intersection(set(action_label))) > 0:

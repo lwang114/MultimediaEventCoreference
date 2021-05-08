@@ -244,7 +244,7 @@ def extract_mention_glove_embeddings(config, split, glove_file, dimension=300, m
         event_type = label_dicts[doc_id][span]['type']
         event_emb = embed_matrix[vocab_emb.get(token, 0)]
         if use_arguments:
-          arg_emb = np.asarray(embed_matrix[0])
+          arg_emb = []
           n_args = len(label_dicts[doc_id][span]['arguments'])
           for a in label_dicts[doc_id][span]['arguments']:
             if 'head_lemma' in a:
@@ -253,8 +253,13 @@ def extract_mention_glove_embeddings(config, split, glove_file, dimension=300, m
               a_token = a['tokens']
             else:
               a_token = a['token']
-            arg_emb += np.asarray(embed_matrix[vocab_emb.get(a_token, 0)]) / n_args
-          event_emb = np.concatenate([event_emb, arg_emb])
+            arg_emb.append(np.asarray(embed_matrix[vocab_emb.get(a_token, 0)]) / n_args)
+          # TODO Pad the arg emb to fix length and save its entity type
+          if len(arg_emb) > 10:
+            arg_emb = arg_emb[:10]
+          else:
+            arg_emb.extend(np.zeros(300*(10-len(arg_emb)))) 
+          event_emb = np.concatenate([event_emb]+arg_emb)
         event_embs[embed_id].append(event_emb)
         labels[embed_id].append((token, event_type)) 
       event_embs[embed_id] = np.stack(event_embs[embed_id])
