@@ -77,13 +77,7 @@ class AmodalSMTCoreferencer:
     for k in range(self.Kv):
       self.vars[k] = np.var(X[(y == k).nonzero()[0]]) * X.shape[1] / 3
 
-  def is_match(self, e1, e2):
-    v1 = e1['trigger_embedding']
-    v2 = e2['trigger_embedding']
-    if cosine_similarity(v1, v2) <= 0.5:
-      return False
-    
-    # Check plurality
+  def has_same_plurality(self, e1, e2):
     if e1.get('word_class', 'VERB') == 'NOUN' and e2.get('word_class', 'VERB') == 'NOUN':
       if (e1['pos_tag'][-1] == 'S' and e2['pos_tag'][-1] != 'S') or (e2['pos_tag'][-1] == 'S' and e1['pos_tag'][-1] != 'S'):
         return False 
@@ -93,17 +87,18 @@ class AmodalSMTCoreferencer:
     elif e2.get('word_class', 'VERB') == 'NOUN' and e1.get('word_class', 'VERB') == 'VERB':
       if e2['pos_tag'][-1] == 'S':
         return False
-
-    # Check argument compatibility
+    return True
+  
+  def has_compatible_arguments(self, e1, e2, print_score=False): # XXX
     a1_by_types = dict()
-    for i, a in e1['arguments']:
+    for i, a in enumerate(e1.get('arguments', [])):
       if not a['entity_type'] in a1_by_types:
         a1_by_types[a['entity_type']] = [i]
       else:
         a1_by_types[a['entity_type']].append(i)
 
     a2_by_types = dict() 
-    for a in e2['arguments']:
+    for i, a in enumerate(e2.get('arguments', [])):
       if not a['entity_type'] in a2_by_types:
         a2_by_types[a['entity_type']] = [i]
       else:
@@ -119,15 +114,26 @@ class AmodalSMTCoreferencer:
       else:
         va1 = [a1_embs[i] for i in a1_by_types[a_type]]
         va2 = [a2_embs[i] for i in a2_by_types[a_type]]
-        S = np.asarray([[cosine_similarity(va1[i], va2[j]) for j in range(len(va2))] for j in range(len(va1))])
-        if S.shape[0] > S_shape[1]:
+        S = np.asarray([[cosine_similarity(va1[i], va2[j]) for j in range(len(va2))] for i in range(len(va1))])
+        if S.shape[0] > S.shape[1]:
           S = S.T
-        S_avg += S.max(-1).mean() <= 0.5:
+        S_avg += S.max(-1).mean()
         n_shared += 1
 
     S_avg /= max(n_shared, EPS)
-    if 0 < S_avg <= 0.5:
+    if print_score:
+      print([[e1['arguments'][k]['head_lemma'] for k in a1_by_type[1]] for a1_by_type in a1_by_types.items()], [[e2['arguments'][k]['head_lemma'] for k in a2_by_type[1]] for a2_by_type in a2_by_types.items()], S_avg) # XXX
+    if n_shared > 0 and S_avg <= 0.3:
       return False
+    return True
+
+  def is_match(self, e1, e2, print_score=False): # XXX
+    v1 = e1['trigger_embedding']
+    v2 = e2['trigger_embedding']
+    if cosine_similarity(v1, v2) <= 0.5:
+      return False 
+    if not self.has_same_plurality(e1, e2) or not self.has_compatible_arguments(e1, e2, print_score=print_score): # XXX
+      return False 
     return True 
   
   def compute_alignment_counts(self):
@@ -275,7 +281,7 @@ class AmodalSMTCoreferencer:
 
         scores.append(self.P_ee[NULL][e['head_lemma']])
         for a_idx, a in enumerate(e_feat[:e_idx]):
-          if self.is_match(e, a):
+          if self.is_match(e, a, print_score=True): # XXX
             scores.append(self.P_ee[a['head_lemma']][e['head_lemma']])
           else:
             scores.append(0)
@@ -296,7 +302,7 @@ class AmodalSMTCoreferencer:
             if antecedent[a_idx] == antecedent[e_idx]:
               break
           
-          if a_idx == e_idx:
+          if a_idx == e_idx: # or not self.has_same_plurality(e, e_feat[a_idx]) and self.has_compatible_arguments(e, e_feat[a_idx])):
             n_cluster += 1
             cluster_id[e_idx] = n_cluster
           else:
@@ -425,11 +431,19 @@ def load_data(config):
   vocab_feats_freq = {feat_type: {NULL: 0} for feat_type in feature_types}
   for m in event_mentions_train + event_mentions_test:    
     for feat_type in feature_types: 
-      if not m[feat_type] in vocab_feats[feat_type]:
-        vocab_feats[feat_type][m[feat_type]] = len(vocab_feats[feat_type])
-        vocab_feats_freq[feat_type][m[feat_type]] = 1
+      if feat_type == 'arguments':
+        for a in m['arguments']:
+          if not a['head_lemma'] in vocab_feats[feat_type]:
+            vocab_feats['arguments'][a['head_lemma']] = 1
+            vocab_feats_freq['arguments'][a['head_lemma']] = 1 
+          else:
+            vocab_feats_freq['arguments'][a['head_lemma']] += 1
       else:
-        vocab_feats_freq[feat_type][m[feat_type]] += 1
+        if not m[feat_type] in vocab_feats[feat_type]:
+          vocab_feats[feat_type][m[feat_type]] = len(vocab_feats[feat_type])
+          vocab_feats_freq[feat_type][m[feat_type]] = 1
+        else:
+          vocab_feats_freq[feat_type][m[feat_type]] += 1
   json.dump(vocab_feats_freq, open('vocab_feats_freq.json', 'w'), indent=2)
 
   action_feats_train, action_labels_train = load_visual_features(config, split='train')
