@@ -105,6 +105,8 @@ class AmodalSMTCoreferencer:
         a2_by_types[a['entity_type']].append(i)
     a1_embs = e1['argument_embedding']
     a2_embs = e2['argument_embedding']
+    cluster_ids1 = [a['cluster_id'] for a in e1['arguments']]
+    cluster_ids2 = [a['cluster_id'] for a in e2['arguments']]
     
     S_avg = 0
     n_shared = 0
@@ -112,9 +114,10 @@ class AmodalSMTCoreferencer:
       if not a_type in a2_by_types:
         continue
       else:
-        va1 = [a1_embs[i] for i in a1_by_types[a_type]]
-        va2 = [a2_embs[i] for i in a2_by_types[a_type]]
-        S = np.asarray([[cosine_similarity(va1[i], va2[j]) for j in range(len(va2))] for i in range(len(va1))])
+        # XXX va1 = [a1_embs[i] for i in a1_by_types[a_type]]
+        # va2 = [a2_embs[i] for i in a2_by_types[a_type]]
+        # S = np.asarray([[cosine_similarity(va1[i], va2[j]) for j in range(len(va2))] for i in range(len(va1))])
+        S = [[(cluster_ids1[i] == cluster_ids2[j]) & cluster_ids1[i] != 0 & cluster_ids2[i] != 0 for j in a2_by_types[a_type]] for i in a1_by_types[a_type]]
         if S.shape[0] > S.shape[1]:
           S = S.T
         S_avg += S.max(-1).mean()
@@ -123,7 +126,7 @@ class AmodalSMTCoreferencer:
     S_avg /= max(n_shared, EPS)
     if print_score:
       print([[e1['arguments'][k]['head_lemma'] for k in a1_by_type[1]] for a1_by_type in a1_by_types.items()], [[e2['arguments'][k]['head_lemma'] for k in a2_by_type[1]] for a2_by_type in a2_by_types.items()], S_avg) # XXX
-    if n_shared > 0 and S_avg <= 0.3:
+    if n_shared > 0 and S_avg <= 0.5:
       return False
     return True
 
@@ -346,28 +349,40 @@ def load_text_features(config, vocab_feat, action_labels, split):
   lemmatizer = WordNetLemmatizer()
   feature_types = config['feature_types']
   event_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events.json'), 'r', 'utf-8'))
+  entity_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_entities.json'), 'r', 'utf-8'))
   ontology_map = json.load(open(os.path.join(config['data_folder'], '../ontology_mapping.json')))
   doc_train = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}.json')))
   docs_embs = np.load(os.path.join(config['data_folder'], f'{split}_events_with_arguments_glove_embeddings.npz')) 
   doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in docs_embs}
 
-  label_dicts = {}
+  label_dicts = dict()
   event_feats = []
   doc_ids = []
   spans_all = []
   cluster_ids_all = []
   tokens_all = [] 
+  entity_label_dicts = dict()
+  for m in entity_mentions:
+    if not m['doc_id'] in entity_label_dicts:
+      entity_label_dicts[m['doc_id']] = dict()
+    span = (min(m['tokens_ids']), max(m['tokens_ids']))
+    entity_label_dicts[m['doc_id']][span] = m['cluster_id']
 
   for m in event_mentions:
       if not m['doc_id'] in label_dicts:
-        label_dicts[m['doc_id']] = {}
+        label_dicts[m['doc_id']] = dict()
       token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
       label_dicts[m['doc_id']][span] = {'token_id': token,
                                         'cluster_id': m['cluster_id']} # XXX vocab_feat['event_type'][m['event_type']]
 
       for feat_type in feature_types:
-        label_dicts[m['doc_id']][span][feat_type] = m[feat_type] 
+        label_dicts[m['doc_id']][span][feat_type] = m[feat_type]
+        if feat_type == 'arguments':
+          for a_idx, a in enumerate(label_dicts[m['doc_id']][span]['arguments']):
+            a_span = (a['start'], a['end'])
+            a_cluster_id = entity_label_dicts[m['doc_id']][a_span]
+            label_dicts[m['doc_id']][span]['arguments'][a_idx]['cluster_id'] = a_cluster_id  
         
   for feat_idx, doc_id in enumerate(sorted(label_dicts)): # XXX
     action_label = action_labels[feat_idx]
