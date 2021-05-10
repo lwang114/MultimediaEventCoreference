@@ -203,18 +203,27 @@ def extract_mention_glove_embeddings(config, split, glove_file, dimension=300, m
     vocab = {'$$$UNK$$$': 0}
     label_dicts = dict()
     for m in mentions:
-      if 'head_lemma' in m:
-        token = m['head_lemma']
-      else:
-        token = m['tokens']
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
       if not m['doc_id'] in label_dicts:
         label_dicts[m['doc_id']] = dict()
-      label_dicts[m['doc_id']][span] = {'token': token,
+      label_dicts[m['doc_id']][span] = {'tokens': m['tokens'].split(),
+                                        'head_lemma': m['head_lemma'],
                                         'arguments': m['arguments'] if 'arguments' in m else [], 
                                         'type': m['event_type'] if mention_type == 'events' else m['entity_type']}
-      if not token in vocab:
-        vocab[token] = len(vocab)
+      
+      for token in m['tokens'].split():
+        if not token in vocab:
+          vocab[token] = len(vocab)
+    
+      if not m['head_lemma'] in vocab:
+        vocab[m['head_lemma']] = len(vocab)
+     
+      if mention_type == 'events': 
+        for a in m['arguments']:
+          if not a['head_lemma'] in vocab:
+            vocab[a['head_lemma']] = len(vocab)
+          if not a['text'] in vocab:
+            vocab[a['text']] = len(vocab)
     print(f'Vocabulary size: {len(vocab)}')
     
     embed_matrix = [[0.0] * dimension]
@@ -232,38 +241,47 @@ def extract_mention_glove_embeddings(config, split, glove_file, dimension=300, m
     print(f'Vocabulary size with embeddings: {len(vocab_emb)}')
     json.dump(vocab_emb, open(out_prefix+'_vocab_glove_emb.json', 'w'), indent=4, sort_keys=True)
 
-    event_embs = dict()
+    mention_embs = dict()
     labels = dict()
     for idx, doc_id in enumerate(sorted(label_dicts)):
       embed_id = f'{doc_id}_{idx}' 
-      event_embs[embed_id] = []
-      labels[embed_id] = [] 
-      
+      mention_embs[embed_id] = []
+      labels[embed_id] = []  
+
       for span in sorted(label_dicts[doc_id]):
-        token = label_dicts[doc_id][span]['token']   
-        event_type = label_dicts[doc_id][span]['type']
-        event_emb = embed_matrix[vocab_emb.get(token, 0)]
+        head_lemma = label_dicts[doc_id][span]['head_lemma']  
+        tokens = label_dicts[doc_id][span]['tokens']
+        if head_lemma in vocab_emb:
+          mention_emb = embed_matrix[vocab_emb.get(token, 0)]
+        else: 
+          mention_emb = np.asarray([embed_matrix[vocab_emb.get(token, 0)]\
+                                    for token in tokens]).mean(0)   
+        mention_type = label_dicts[doc_id][span]['type']
+
         if use_arguments:
           arg_emb = []
           n_args = len(label_dicts[doc_id][span]['arguments'])
           for a in label_dicts[doc_id][span]['arguments']:
-            if 'head_lemma' in a:
+            if a.get('head_lemma', '') in vocab_emb:
               a_token = a['head_lemma']
-            elif 'tokens' in a:
-              a_token = a['tokens']
+              arg_emb.append(np.asarray(embed_matrix[vocab_emb[a_token]]))
             else:
-              a_token = a['token']
-            arg_emb.append(np.asarray(embed_matrix[vocab_emb.get(a_token, 0)]) / n_args)
-          # TODO Pad the arg emb to fix length and save its entity type
+              a_tokens = a.get('text', '$$$UNK$$$').split()
+              emb = []
+              for a_token in a_tokens:
+                emb.append(embed_matrix[vocab_emb.get(a_token, 0)])
+              emb = np.asarray(emb).mean(0)
+              arg_emb.append(emb)
+
           if len(arg_emb) > 10:
             arg_emb = arg_emb[:10]
-          else:
-            arg_emb.extend(np.zeros(300*(10-len(arg_emb)))) 
-          event_emb = np.concatenate([event_emb]+arg_emb)
-        event_embs[embed_id].append(event_emb)
-        labels[embed_id].append((token, event_type)) 
-      event_embs[embed_id] = np.stack(event_embs[embed_id])
-    np.savez(out_prefix+'.npz', **event_embs)
+          elif len(arg_emb) < 10:
+            arg_emb.append(np.zeros(300*(10-len(arg_emb)))) 
+          mention_emb = np.concatenate([mention_emb]+arg_emb)
+        mention_embs[embed_id].append(mention_emb)
+        labels[embed_id].append((token, mention_type)) 
+      mention_embs[embed_id] = np.stack(mention_embs[embed_id])
+    np.savez(out_prefix+'.npz', **mention_embs)
     json.dump(labels, open(out_prefix+'_labels.json', 'w'), indent=2)
 
 def extract_bert_embeddings(config, split, out_prefix='bert_embedding'):
@@ -530,6 +548,74 @@ def extract_event_linguistic_features(config, split, out_prefix):
       new_event_mentions.append(new_mention)
   json.dump(new_event_mentions, open(out_prefix+'_events_with_linguistic_features.json', 'w'), indent=2)
 
+def extract_entity_linguistic_features(config, split, out_prefix):
+  def _head_word(phrase):
+    postags = [t[1] for t in nltk.pos_tag(phrase, tagset='universal')]
+    instance = dep_parser._dataset_reader.text_to_instance(phrase, postags)
+    parsed_text = dep_parser.predict_batch_instance([instance])[0]
+    head_idx = np.where(np.asarray(parsed_text['predicted_heads']) <= 0)[0][0]
+    return phrase[head_idx], head_idx
+
+  dep_parser = Predictor.from_path("https://storage.googleapis.com/allennlp-public-models/biaffine-dependency-parser-ptb-2020.04.06.tar.gz")
+  # dep_parser._model = dep_parser._model.cuda()
+  lemmatizer = WordNetLemmatizer() 
+
+  doc_json = os.path.join(config['data_folder'], split+'.json')
+  documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
+  entity_mentions = json.load(codecs.open(os.path.join(config['data_folder'], split+'_entities.json'), 'r', 'utf-8'))
+  new_entity_mentions = []
+
+  label_dict = dict()
+  for m in entity_mentions:
+    span = (min(m['tokens_ids']), max(m['tokens_ids']))
+    if not m['doc_id'] in label_dict:
+      label_dict[m['doc_id']] = {}
+    label_dict[m['doc_id']][span] = deepcopy(m) 
+
+  for doc_id in sorted(documents): # XXX
+    if not doc_id in label_dict:
+      continue
+    print(doc_id)
+    tokens = [t[2] for t in documents[doc_id]]
+    # Extract POS tags and word class
+    wordclasses = [t[1] for t in nltk.pos_tag(tokens, tagset='universal')]
+    postags = [t[1] for t in nltk.pos_tag(tokens)]
+
+    for span_idx, span in enumerate(sorted(label_dict[doc_id])):
+      new_mention = deepcopy(label_dict[doc_id][span])
+      span_tokens = label_dict[doc_id][span]['tokens'].split()
+      span_tags = postags[span[0]:span[1]+1]
+    
+      # Extract lemmatized head (HL)
+      head, head_idx = _head_word(span_tokens) 
+      head_class = wordclasses[span[0]+head_idx]
+      pos_abbrev = head_class[0].lower() if head_class in ['NOUN', 'VERB', 'ADJ'] else 'n'
+      new_mention['head_lemma'] = lemmatizer.lemmatize(head.lower(), pos=pos_abbrev)
+      new_mention['pos_tag'] = postags[span[0]+head_idx]
+      new_mention['word_class'] = head_class if head_class in ['NOUN', 'VERB', 'ADJ'] else 'OTHER' 
+
+      # Extract the left and right lemmatized words of the head (LHL, RHL)
+      if span[0] > 0:
+        left_idx = span[0]-1 if wordclasses[span[0]-1] != '.' else span[0]-2
+        left_class = wordclasses[left_idx] 
+        pos_abbrev = left_class[0].lower() if left_class in ['NOUN', 'VERB', 'ADJ'] else 'n'
+        left_word = lemmatizer.lemmatize(tokens[left_idx].lower(), pos=pos_abbrev)
+      else:
+        left_word = NULL
+      
+      if span[1] < len(tokens)-1:
+        right_class = wordclasses[span[1]+1]
+        pos_abbrev = right_class[0].lower() if right_class in ['NOUN', 'VERB', 'ADJ'] else 'n'
+        right_word = lemmatizer.lemmatize(tokens[span[1]+1].lower(), pos=pos_abbrev)
+      else:
+        right_word = NULL
+
+      new_mention['left_lemma'] = left_word
+      new_mention['right_lemma'] = right_word
+
+  json.dump(new_entity_mentions, open(out_prefix+'_entities_with_linguistic_features.json', 'w'), indent=2)
+
+
 def gaussian_softmax(X, centroids, var):
   T = X.shape[0]
   precision = 1. / var 
@@ -568,6 +654,7 @@ def main():
   parser.add_argument('--mention_type', choices={'events', 'entities'}, default='events')
   parser.add_argument('--task', choices={'extract_glove_embeddings',
                                          'extract_bert_embeddings',
+                                         'extract_entity_linguistic_features',
                                          'extract_event_linguistic_features',
                                          'extract_mention_glove_embeddings',
                                          'extract_mention_bert_embeddings',
@@ -597,17 +684,28 @@ def main():
               'out_prefix': args.split}
     extract_bert_embeddings(**kwargs)
   elif args.task == 'extract_event_linguistic_features':
-    kwargs = {'config': config, 
-              'split': args.split, 
-              'out_prefix': args.split}
-    extract_event_linguistic_features(**kwargs)
+    for split in config['splits']:
+      for dataset in config['splits'][split]:
+        kwargs = {'config': config, 
+                  'split': split, 
+                  'out_prefix': split}
+        extract_event_linguistic_features(**kwargs)
+  elif args.task == 'extract_entity_linguistic_features':
+    for split in config['splits']:
+      for dataset in config['splits'][split]:
+        kwargs = {'config': config, 
+                  'split': split, 
+                  'out_prefix': split}
+        extract_entity_linguistic_features(**kwargs)
   elif args.task == 'extract_mention_glove_embeddings':
-    kwargs = {'config': config, 
-              'split': args.split, 
-              'glove_file': glove_file, 
-              'mention_type': args.mention_type, 
-              'out_prefix': f'{args.split}_{args.mention_type}_glove_embeddings'}
-    extract_mention_glove_embeddings(**kwargs)
+    for split in config['splits']:
+      for dataset in config['splits'][split]:
+        kwargs = {'config': config, 
+                  'split': args.split, 
+                  'glove_file': glove_file, 
+                  'mention_type': args.mention_type, 
+                  'out_prefix': f'{args.split}_{args.mention_type}_glove_embeddings'}
+        extract_mention_glove_embeddings(**kwargs)
   elif args.task == 'extract_mention_bert_embeddings':
     kwargs = {'config': config,
               'split': args.split, 

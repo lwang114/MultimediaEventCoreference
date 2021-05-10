@@ -60,8 +60,8 @@ class SMTEntityCoreferencer:
           self.P_ee[v][v2] = 1. / (len(self.vocab) - 1)   
 
   def is_match(self, e1, e2):
-    v1 = e1['trigger_embedding']
-    v2 = e2['trigger_embedding']
+    v1 = e1['entity_embedding']
+    v2 = e2['entity_embedding']
     if cosine_similarity(v1, v2) <= 0.5:
       return False
 
@@ -203,7 +203,7 @@ def load_text_features(config, vocab_feat, split):
   feature_types = config['feature_types']
   entity_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_entities.json'), 'r', 'utf-8'))
   doc_train = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}.json')))
-  docs_embs = np.load(os.path.join(config['data_folder'], f'{split}_entities_with_arguments_glove_embeddings.npz')) 
+  docs_embs = np.load(os.path.join(config['data_folder'], f'{split}_entities_glove_embeddings.npz')) 
   doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in docs_embs}
 
   label_dicts = {}
@@ -231,8 +231,7 @@ def load_text_features(config, vocab_feat, split):
     entities = []
     for span_idx, span in enumerate(spans):
       entity = {feat_type: label_dict[span][feat_type] for feat_type in feature_types}
-      entity['trigger_embedding'] = doc_embs[span_idx, :300]
-      entity['argument_embedding'] = doc_embs[span_idx, 300:]
+      entity['entity_embedding'] = doc_embs[span_idx, :300]
       entities.append(entity)  
     cluster_ids = [label_dict[span]['cluster_id'] for span in spans]
     
