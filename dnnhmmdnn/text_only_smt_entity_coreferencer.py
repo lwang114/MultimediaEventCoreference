@@ -10,11 +10,21 @@ import itertools
 import argparse
 import pyhocon
 import random
+from copy import deepcopy
 from evaluator import Evaluation, CoNLLEvaluation
 np.random.seed(2)
 random.seed(2)
 
 NULL = '###NEW###'
+PLURAL_PRON = ['they', 'them', 'those', 'these', 'we', 'us', 'their', 'our']
+SINGULAR = 'singular'
+PLURAL = 'plural'
+PROPER = 'proper'
+NOMINAL = 'nominal'
+PRON = 'pronoun'
+MODE_S = 'semantic'
+MODE_D = 'discourse'
+
 EPS = 1e-100
 class SMTEntityCoreferencer:
   def __init__(self, entity_features, config):
@@ -35,108 +45,184 @@ class SMTEntityCoreferencer:
     self.config = config
     self.e_feats_train = entity_features
     self.ee_counts = dict()
-    self.P_ee = dict()
-    self.vocab = self.get_vocab(entity_features)
+    self.modes = [MODE_S, MODE_D]
+    self.P_ee = {mode: dict() for mode in self.modes}
+    self.P_ij = {mode: dict() for mode in self.modes}
+    self.vocab = self.get_vocab(entity_features) 
+    self.modes_sents = self.get_modes(entity_features)
+
     self.initialize()
     logging.info(f'Number of documents = {len(self.e_feats_train)}, vocab size = {len(self.vocab)}')
 
+  def get_modes(self, entity_feats):
+    modes_sents = []
+    for e_feat in entity_feats:
+      modes_sent = []
+      for e_idx, e in enumerate(e_feat):
+        matched = False
+        for a_idx, a in enumerate(e_feat[:e_idx]):
+          if self.is_match(e, a, mode=MODE_S):
+            mode = MODE_S
+            matched = True
+            break
+        if not matched:  
+          mode = MODE_D
+        modes_sent.append(mode)
+      modes_sents.append(modes_sent)
+    return modes_sents
+
+  def get_mode_feature(self, e, mode): 
+    if mode == MODE_S:
+      return e['head_lemma']
+    if mode == MODE_D:
+      return e['head_lemma'] 
+
   def get_vocab(self, entity_feats):
-    vocab = {NULL:0}
+    vocab = {mode: {NULL: 0} for mode in self.modes}
     for e_feat in entity_feats:
       for e_idx, e in enumerate(e_feat):
-        if not e['head_lemma'] in vocab:
-          vocab[e['head_lemma']] = 1 
-        else:
-          vocab[e['head_lemma']] += 1 
+        for mode in self.modes:
+          token = self.get_mode_feature(e, mode)
+          if not token in vocab[mode]:
+            vocab[mode][token] = 1 
+          else:
+            vocab[mode][token] += 1        
     return vocab
 
   def initialize(self):
-    for v in self.vocab:
-      if not v in self.P_ee:
-        self.P_ee[v] = dict()
+    for mode in self.modes:
+      for v in self.vocab[mode]:
+        if not v in self.P_ee[mode]:
+          self.P_ee[mode][v] = dict()
 
-      for v2 in self.vocab:
-        if v2 != NULL:
-          self.P_ee[v][v2] = 1. / (len(self.vocab) - 1)   
+        for v2 in self.vocab[mode]:
+          if v2 != NULL:
+            self.P_ee[mode][v][v2] = 1. / (len(self.vocab[mode]) - 1)          
+    
+    for mode in self.modes:
+      self.P_ij[mode] = dict()
+      for e_feat in self.e_feats_train:
+        for i in range(len(e_feat)):
+          self.P_ij[mode][i + 1] = {j: 1. / (i + 1) for j in range(i + 1)}
 
-  def is_match(self, e1, e2):
-    v1 = e1['entity_embedding']
-    v2 = e2['entity_embedding']
-    if cosine_similarity(v1, v2) <= 0.5:
-      return False
-
-    if e1.get('word_class', 'VERB') == 'NOUN' and e2.get('word_class', 'VERB') == 'NOUN':
-      if (e1['pos_tag'][-1] == 'S' and e2['pos_tag'][-1] != 'S') or (e2['pos_tag'][-1] == 'S' and e1['pos_tag'][-1] != 'S'):
-        return False 
-    elif e1.get('word_class', 'VERB') == 'NOUN' and e2.get('word_class', 'VERB') == 'VERB':
-      if e1['pos_tag'][-1] == 'S':
+  def is_match(self, e1, e2, mode):
+    if mode == MODE_S:
+      if e1['head_lemma'] == NULL:
+        return True
+      v1 = e1['entity_embedding']
+      v2 = e2['entity_embedding']
+      if cosine_similarity(v1, v2) <= 0.5 or (e1['entity_type'] != e2['entity_type']):
         return False
-    elif e2.get('word_class', 'VERB') == 'NOUN' and e1.get('word_class', 'VERB') == 'VERB':
-      if e2['pos_tag'][-1] == 'S':
+      if (e1['number'] == SINGULAR or e2['number'] == SINGULAR) and (e1['number'] != e2['number']):
+        return False
+      if (e1['number'] != PLURAL and e2['number'] != PLURAL) and (e1['number'] != e2['number']):
         return False
 
+    if mode == MODE_D:
+      if e1['head_lemma'] == NULL:
+        if e2['pos_tag'] in ['PRP', 'PRP$']:
+          return False
+        else:
+          return True
+      if e1['entity_type'] != e2['entity_type']:
+        return False
+      if (e1['number'] == SINGULAR or e2['number'] == SINGULAR) and (e1['number'] != e2['number']):
+        return False
+      if (e1['number'] != PLURAL and e2['number'] != PLURAL) and (e1['number'] != e2['number']):
+        return False
+      if e1['pos_tag'] == 'PRP$' and (e2['idx']-e1['idx'] == 1):
+        return False
     return True
    
   def compute_alignment_counts(self):
     align_counts = []
-    for e_feat in self.e_feats_train:
-      align_count = {0: dict()}
-      for e_idx, e in enumerate(e_feat):
-        align_count[e_idx+1] = dict()
-        token = e['head_lemma']
+    for e_feat, modes_sent in zip(self.e_feats_train, self.modes_sents):
+      align_count = {mode: dict() for mode in self.modes}
+      for e_idx, (e, mode) in enumerate(zip(e_feat, modes_sent)):
+        align_count[mode][e_idx+1] = dict()
+        token = self.get_mode_feature(e, mode)
 
-        align_count[e_idx+1][0] = self.P_ee[NULL][token]
+        align_count[mode][e_idx+1][0] = self.P_ij[mode][e_idx+1][0] * self.P_ee[mode][NULL][token]
+        if not self.is_match({'head_lemma': NULL}, e, mode):
+          align_count[mode][e_idx+1][0] = 0
+          
         for a_idx, antecedent in enumerate(e_feat[:e_idx]):
-          if self.is_match(e, antecedent):
-            a_token = antecedent['head_lemma']
-            align_count[e_idx+1][a_idx+1] = self.P_ee[a_token][token]
+          if self.is_match(e, antecedent, mode):
+            a_token = self.get_mode_feature(antecedent, mode)
+            align_count[mode][e_idx+1][a_idx+1] = self.P_ij[mode][e_idx+1][a_idx+1] * self.P_ee[mode][a_token][token]
         
-        norm_factor = sum(align_count[e_idx+1].values())
-        for a_idx in align_count[e_idx+1]: 
-          align_count[e_idx+1][a_idx] /= norm_factor
+        norm_factor = sum(align_count[mode][e_idx+1].values())
+        for a_idx in align_count[mode][e_idx+1]: 
+          align_count[mode][e_idx+1][a_idx] /= max(norm_factor, EPS)
       align_counts.append(align_count)
     return align_counts
 
   def update_translation_probs(self):
-    P_ee = dict()
-    for e_feat, count in zip(self.e_feats_train, self.ee_counts):
-      for e_idx in count:
-        token = e_feat[e_idx-1]['head_lemma']
-        for a_idx in count[e_idx]:
-          if a_idx == 0:
-            if not NULL in P_ee:
-              P_ee[NULL] = dict()
-            
-            if not token in P_ee[NULL]:
-              P_ee[NULL][token] = count[e_idx][a_idx]  
+    P_ee = {mode: dict() for mode in self.modes}
+    for e_feat, count, modes_sent in zip(self.e_feats_train, self.ee_counts, self.modes_sents):
+      for mode in count:
+        for e_idx in count[mode]:
+          token = self.get_mode_feature(e_feat[e_idx-1], mode)
+          for a_idx in count[mode][e_idx]:
+            if a_idx == 0:
+              if not NULL in P_ee[mode]:
+                P_ee[mode][NULL] = dict()
+              
+              if not token in P_ee[mode][NULL]:
+                P_ee[mode][NULL][token] = count[mode][e_idx][a_idx]  
+              else:
+                P_ee[mode][NULL][token] += count[mode][e_idx][a_idx]
             else:
-              P_ee[NULL][token] += count[e_idx][a_idx]  
-          else:
-            a_token = e_feat[a_idx-1]['head_lemma']
-            if not a_token in P_ee:
-              P_ee[a_token] = dict()
-            
-            if not token in P_ee[a_token]:
-              P_ee[a_token][token] = count[e_idx][a_idx]
-            else:
-              P_ee[a_token][token] += count[e_idx][a_idx] 
+              a_token = self.get_mode_feature(e_feat[a_idx-1], mode)
+              if not a_token in P_ee[mode]:
+                P_ee[mode][a_token] = dict()
+              
+              if not token in P_ee[mode][a_token]:
+                P_ee[mode][a_token][token] = count[mode][e_idx][a_idx]
+              else:
+                P_ee[mode][a_token][token] += count[mode][e_idx][a_idx] 
           
     # Normalize
-    for a in P_ee:
-      norm_factor = sum(P_ee[a].values())
-      for e in P_ee[a]:
-        P_ee[a][e] /= norm_factor   
+    for mode in self.modes:
+      for a in P_ee[mode]:
+        norm_factor = sum(P_ee[mode][a].values())
+        for e in P_ee[mode][a]:
+          P_ee[mode][a][e] /= max(norm_factor, EPS) 
 
     return P_ee
 
+  def update_position_probs(self):
+    P_ij = dict()
+    for e_feat, count, modes_sent in zip(self.e_feats_train, self.ee_counts, self.modes_sents):
+      for mode in count:
+        if mode == MODE_D:
+          for e_idx in count[mode]:
+            if not e_idx in P_ij:
+              P_ij[e_idx] = dict()
+
+            for a_idx in count[mode][e_idx]:
+              if not a_idx in P_ij[e_idx]:
+                P_ij[e_idx][a_idx] = count[mode][e_idx][a_idx]
+              else: 
+                P_ij[e_idx][a_idx] += count[mode][e_idx][a_idx]
+      
+    for e_idx in P_ij:
+      norm_factor = sum(P_ij[e_idx].values())
+      for a_idx in P_ij[e_idx]:
+        P_ij[e_idx][a_idx] /= max(norm_factor, EPS) 
+    
+    return P_ij
+
   def log_likelihood(self):
     ll = 0.
-    for ex, e_feat in enumerate(self.e_feats_train):
-      for e_idx, e in enumerate(e_feat):
-        probs = [self.P_ee[NULL][e['head_lemma']]]
+    for ex, (e_feat, modes_sent) in enumerate(zip(self.e_feats_train, self.modes_sents)):
+      for e_idx, (e, mode) in enumerate(zip(e_feat, modes_sent)):
+        token = self.get_mode_feature(e, mode)
+        probs = [self.P_ij[mode][e_idx+1][0] * self.P_ee[mode][NULL][token]]
         for a_idx, a in enumerate(e_feat[:e_idx]):
-          if self.is_match(e, a):
-            probs.append(self.P_ee[a['head_lemma']][e['head_lemma']])
+          if self.is_match(e, a, mode):
+            a_token = self.get_mode_feature(a, mode)
+            probs.append(self.P_ij[mode][e_idx+1][a_idx+1] * self.P_ee[mode][a_token][token])
         ll += np.log(np.maximum(np.mean(probs), EPS))
     return ll
 
@@ -144,7 +230,9 @@ class SMTEntityCoreferencer:
     for epoch in range(n_epochs):
       self.ee_counts = self.compute_alignment_counts()
       self.P_ee = self.update_translation_probs()
-      json.dump(self.P_ee, open(os.path.join(self.config['data_folder'], 'translation_probs.json'), 'w'), indent=2)
+      self.P_ij[MODE_D] = self.update_position_probs()
+      json.dump(self.P_ij, open(os.path.join(self.config['model_path'], 'position_probs.json'), 'w'), indent=2)
+      json.dump(self.P_ee, open(os.path.join(self.config['model_path'], 'translation_probs.json'), 'w'), indent=2)
       logging.info('Epoch {}, log likelihood = {:.3f}'.format(epoch, self.log_likelihood()))           
       print('Epoch {}, log likelihood = {:.3f}'.format(epoch, self.log_likelihood()))
  
@@ -152,14 +240,17 @@ class SMTEntityCoreferencer:
     antecedents = []
     cluster_ids = []
     n_cluster = 0
-    for e_feat in entity_features:
+    modes_sents = self.get_modes(entity_features)
+    for e_feat, modes_sent in zip(entity_features, modes_sents):
       antecedent = [-1]*len(e_feat)
       cluster_id = [0]*len(e_feat)
-      for e_idx, e in enumerate(e_feat):
-        scores = [self.P_ee[NULL][e['head_lemma']]]
+      for e_idx, (e, mode) in enumerate(zip(e_feat, modes_sent)):
+        token = self.get_mode_feature(e, mode)
+        scores = [self.P_ij[mode][e_idx+1][0] * self.P_ee[mode][NULL][token]]
         for a_idx, a in enumerate(e_feat[:e_idx]):
-          if self.is_match(e, a):
-            scores.append(self.P_ee[a['head_lemma']][e['head_lemma']])
+          if self.is_match(e, a, mode):
+            a_token = self.get_mode_feature(a, mode)
+            scores.append(self.P_ij[mode][e_idx+1][a_idx+1] * self.P_ee[mode][a_token][token])
           else:
             scores.append(0)
         scores = np.asarray(scores)
@@ -198,11 +289,10 @@ def to_antecedents(labels):
         break
   return antecedents
  
-def load_text_features(config, vocab_feat, split):
+def load_text_features(config, split):
   lemmatizer = WordNetLemmatizer()
-  feature_types = config['feature_types']
   entity_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_entities.json'), 'r', 'utf-8'))
-  doc_train = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}.json')))
+  doc = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}.json')))
   docs_embs = np.load(os.path.join(config['data_folder'], f'{split}_entities_glove_embeddings.npz')) 
   doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in docs_embs}
 
@@ -214,15 +304,10 @@ def load_text_features(config, vocab_feat, split):
   tokens_all = [] 
 
   for m in entity_mentions:
-      if not m['doc_id'] in label_dicts:
-        label_dicts[m['doc_id']] = {}
-      token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
-      span = (min(m['tokens_ids']), max(m['tokens_ids']))
-      label_dicts[m['doc_id']][span] = {'token_id': token,
-                                        'cluster_id': m['cluster_id']} # vocab_feat['entity_type'][m['entity_type']]} # XXX  
-
-      for feat_type in feature_types:
-        label_dicts[m['doc_id']][span][feat_type] = m[feat_type] 
+    if not m['doc_id'] in label_dicts:
+      label_dicts[m['doc_id']] = dict()
+    span = (min(m['tokens_ids']), max(m['tokens_ids']))
+    label_dicts[m['doc_id']][span] = deepcopy(m)
         
   for feat_idx, doc_id in enumerate(sorted(label_dicts)): # XXX
     doc_embs = docs_embs[doc_to_feat[doc_id]]
@@ -230,8 +315,36 @@ def load_text_features(config, vocab_feat, split):
     spans = sorted(label_dict)
     entities = []
     for span_idx, span in enumerate(spans):
-      entity = {feat_type: label_dict[span][feat_type] for feat_type in feature_types}
+      entity = deepcopy(label_dict[span])
       entity['entity_embedding'] = doc_embs[span_idx, :300]
+      entity['idx'] = span_idx 
+      token = entity['head_lemma']
+      pos_tag = entity['pos_tag']
+      if pos_tag in ['PRP', 'PRP$']:
+        entity['mention_type'] = PRON
+        if token in PLURAL_PRON:
+          entity['number'] = PLURAL
+        else:
+          entity['number'] = SINGULAR
+      elif pos_tag in ['NNP', 'NNPS']:
+        entity['mention_type'] = PROPER
+        if pos_tag[-1] == 'S':
+          entity['number'] = PLURAL
+        else:
+          entity['number'] = SINGULAR
+      elif pos_tag in ['NN', 'NNS']:
+        entity['mention_type'] = NOMINAL
+        if pos_tag[-1] == 'S':
+          entity['number'] = PLURAL
+        else:
+          entity['number'] = SINGULAR
+      elif pos_tag == 'CD':
+        entity['mention_type'] = NOMINAL
+        entity['number'] = token
+      else:
+        entity['mention_type'] = NOMINAL
+        entity['number'] = SINGULAR
+      
       entities.append(entity)  
     cluster_ids = [label_dict[span]['cluster_id'] for span in spans]
     
@@ -239,7 +352,7 @@ def load_text_features(config, vocab_feat, split):
     doc_ids.append(doc_id)
     spans_all.append(spans)
     cluster_ids_all.append(np.asarray(cluster_ids))
-    tokens_all.append([t[2] for t in doc_train[doc_id]])
+    tokens_all.append([t[2] for t in doc[doc_id]])
   return entity_feats,\
          doc_ids,\
          spans_all,\
@@ -260,18 +373,6 @@ def load_data(config):
     entity_mentions_test.extend(json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_entities.json'), 'r', 'utf-8')))
     doc_test.update(json.load(codecs.open(os.path.join(config['data_folder'], f'{split}.json'))))
 
-  feature_types = config['feature_types']
-  vocab_feats = {feat_type:{NULL: 0} for feat_type in feature_types}
-  vocab_feats_freq = {feat_type:{NULL: 0} for feat_type in feature_types}
-  for m in entity_mentions_train + entity_mentions_test:    
-    for feat_type in feature_types: 
-      if not m[feat_type] in vocab_feats[feat_type]:
-        vocab_feats[feat_type][m[feat_type]] = len(vocab_feats[feat_type])
-        vocab_feats_freq[feat_type][m[feat_type]] = 1
-      else:
-        vocab_feats_freq[feat_type][m[feat_type]] += 1
-  json.dump(vocab_feats_freq, open('vocab_feats_freq.json', 'w'), indent=2)
-
   entity_feats_train = []
   doc_ids_train = []
   spans_train = []
@@ -282,7 +383,7 @@ def load_data(config):
     cur_doc_ids_train,\
     cur_spans_train,\
     cur_cluster_ids_train,\
-    cur_tokens_train = load_text_features(config, vocab_feats_freq, split=split)
+    cur_tokens_train = load_text_features(config, split=split)
     
     entity_feats_train.extend(cur_entity_feats_train)
     doc_ids_train.extend(cur_doc_ids_train)
@@ -301,7 +402,7 @@ def load_data(config):
     cur_doc_ids_test,\
     cur_spans_test,\
     cur_cluster_ids_test,\
-    cur_tokens_test = load_text_features(config, vocab_feats_freq, split='test')
+    cur_tokens_test = load_text_features(config, split='test')
     
     entity_feats_test.extend(cur_entity_feats_test)
     doc_ids_test.extend(cur_doc_ids_test)
@@ -320,7 +421,6 @@ def load_data(config):
          spans_test,\
          cluster_ids_test,\
          tokens_test,\
-         vocab_feats
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -342,8 +442,7 @@ if __name__ == '__main__':
   doc_ids_test,\
   spans_test,\
   cluster_ids_test,\
-  tokens_test,\
-  vocab_feats = load_data(config)
+  tokens_test = load_data(config)
 
   ## Model training
   aligner = SMTEntityCoreferencer(entity_feats_train+entity_feats_test, config)
