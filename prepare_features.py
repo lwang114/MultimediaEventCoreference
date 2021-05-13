@@ -252,7 +252,7 @@ def extract_mention_glove_embeddings(config, split, glove_file, dimension=300, m
         head_lemma = label_dicts[doc_id][span]['head_lemma']  
         tokens = label_dicts[doc_id][span]['tokens']
         if head_lemma in vocab_emb:
-          mention_emb = embed_matrix[vocab_emb.get(token, 0)]
+          mention_emb = embed_matrix[vocab_emb[head_lemma]]
         else: 
           mention_emb = np.asarray([embed_matrix[vocab_emb.get(token, 0)]\
                                     for token in tokens]).mean(0)   
@@ -612,7 +612,7 @@ def extract_entity_linguistic_features(config, split, out_prefix):
 
       new_mention['left_lemma'] = left_word
       new_mention['right_lemma'] = right_word
-
+      new_entity_mentions.append(new_mention)
   json.dump(new_entity_mentions, open(out_prefix+'_entities_with_linguistic_features.json', 'w'), indent=2)
 
 
@@ -687,24 +687,24 @@ def main():
     for split in config['splits']:
       for dataset in config['splits'][split]:
         kwargs = {'config': config, 
-                  'split': split, 
-                  'out_prefix': split}
+                  'split': dataset, 
+                  'out_prefix': dataset}
         extract_event_linguistic_features(**kwargs)
   elif args.task == 'extract_entity_linguistic_features':
     for split in config['splits']:
       for dataset in config['splits'][split]:
         kwargs = {'config': config, 
-                  'split': split, 
-                  'out_prefix': split}
+                  'split': dataset, 
+                  'out_prefix': dataset}
         extract_entity_linguistic_features(**kwargs)
   elif args.task == 'extract_mention_glove_embeddings':
     for split in config['splits']:
       for dataset in config['splits'][split]:
         kwargs = {'config': config, 
-                  'split': args.split, 
+                  'split': dataset, 
                   'glove_file': glove_file, 
                   'mention_type': args.mention_type, 
-                  'out_prefix': f'{args.split}_{args.mention_type}_glove_embeddings'}
+                  'out_prefix': f'{dataset}_{args.mention_type}_glove_embeddings'}
         extract_mention_glove_embeddings(**kwargs)
   elif args.task == 'extract_mention_bert_embeddings':
     kwargs = {'config': config,
