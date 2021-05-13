@@ -18,7 +18,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from amodal_smt_event_coreferencer import AmodalSMTEventCoreferencer
-from amodal_smt_entity_coreferencer import AmodalSMTEntityCoreferencer 
+from text_only_smt_entity_coreferencer import SMTEntityCoreferencer 
 np.random.seed(2)
 random.seed(2)
 
@@ -39,8 +39,12 @@ class AmodalSMTJointCoreferencer:
     self.e_feats_train = event_features
     self.a_feats_train = entity_features
     self.v_feats_train = action_features
-    self.event_coref_model = AmodalSMTEventCoreferencer(event_features, action_features, config)
-    self.entity_coref_model = AmodalSMTEntityCoreferencer(entity_features, action_features, config)
+    event_config = deepcopy(config)
+    entity_config['model_path'] = deepcopy(config)
+    event_config['model_path'] = config['event_model_path']
+    entity_config['model_path'] = config['entity_model_path']
+    self.event_coref_model = AmodalSMTEventCoreferencer(event_features, action_features, event_config)
+    self.entity_coref_model = AmodalSMTEntityCoreferencer(entity_features, action_features, entity_config)
 
     self.P_ea = dict()    
     self.Kv = config.get('Kv', 4)
@@ -60,21 +64,7 @@ class AmodalSMTJointCoreferencer:
     return vocab 
   
   def get_modes(self, event_feats):
-    modes_sents = []
-    for e_feat in event_feats:
-      modes_sent = []
-      for e_idx, e in enumerate(e_feat):
-        matched = False
-        for a_idx, a in enumerate(e_feat[:e_idx]):
-          if self.is_match(e, a, 'textual'):
-            mode = 'textual'
-            matched = True
-            break
-        if not matched:
-          mode = 'visual'
-        modes_sent.append(mode)
-      modes_sents.append(modes_sent)
-    return modes_sents
+    return self.event_coref_model.get_modes(event_feats)
 
   def initialize(self):
     self.event_coref_model.initialize()
@@ -93,7 +83,7 @@ class AmodalSMTJointCoreferencer:
             self.P_ea[a_type][e_token] = dict()
             self.P_ea[a_type][e_token][UNK] = 1
           
-          if not a_token if self.P_ea[a_type][e_token]:
+          if not a_token in self.P_ea[a_type][e_token]:
             self.P_ea[a_type][e_token][a_token] = 1
           else:
             self.P_ea[a_type][e_token][a_token] += 1
@@ -121,7 +111,7 @@ class AmodalSMTJointCoreferencer:
               
   def train(self, n_epochs=10):
     self.event_coref_model.train(n_epochs=n_epochs)
-    self.entity_coref_model.train(n_epochs=n_epochs)
+    # XXX self.entity_coref_model.train(n_epochs=n_epochs)
   
   def action_event_prob(self, e):
     P_ve = self.event_coref_model.P_ve
@@ -191,7 +181,7 @@ class AmodalSMTJointCoreferencer:
     antecedents = []
     cluster_ids = []
     scores_all = []
-    modes_sents = get_modes(event_features) # TODO
+    modes_sents = get_modes(event_features)
 
     n_cluster = 0
     for e_feat, v_feat, modes_sent in zip(event_features, action_features, modes_sents):
@@ -215,7 +205,7 @@ class AmodalSMTJointCoreferencer:
             if mode == 'textual':
               score += self.event_event_prob(a, e)  
             # If the current mention is in visual mode
-            elif mode='visual':
+            elif mode == 'visual':
               e_prob = self.action_event_prob(e) 
               a_prob = self.action_event_prob(a)
               ve_prob = v_prob @ e_prob
