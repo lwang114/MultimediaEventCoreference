@@ -44,6 +44,7 @@ class AmodalSMTEventCoreferencer:
     self.P_ee = dict()
     self.Kv = config.get('Kv', 4)
     self.vocab = self.get_vocab(event_features)
+    self.modes_sents = self.get_modes(event_features)
 
     self.initialize()
     logging.info(f'Number of documents = {len(self.e_feats_train)}, vocab.size = {len(self.vocab)}')
@@ -58,6 +59,23 @@ class AmodalSMTEventCoreferencer:
           vocab[e['head_lemma']] += 1
     return vocab 
   
+  def get_modes(self, event_feats):
+    modes_sents = []
+    for e_feat in event_feats:
+      modes_sent = []
+      for e_idx, e in enumerate(e_feat):
+        matched = False
+        for a_idx, a in enumerate(e_feat[:e_idx]):
+          if self.is_match(e, a, 'textual'):
+            mode = 'textual'
+            matched = True
+            break
+        if not matched:
+          mode = 'visual'
+        modes_sent.append(mode)
+      modes_sents.append(modes_sent)
+    return modes_sents
+
   def initialize(self):
     # Initialize event-event translation probs
     for v in self.vocab:
@@ -89,25 +107,31 @@ class AmodalSMTEventCoreferencer:
         return False
     return True
   
-  def is_match(self, e1, e2, print_score=False): # XXX
-    v1 = e1['trigger_embedding']
-    v2 = e2['trigger_embedding']
-    if cosine_similarity(v1, v2) <= 0.5:
-      return False 
-    if not self.has_same_plurality(e1, e2):
-      return False 
+  def is_match(self, e1, e2, mode):
+    if mode == 'textual':
+      v1 = e1['trigger_embedding']
+      v2 = e2['trigger_embedding']
+      if cosine_similarity(v1, v2) <= 0.5:
+        return False 
+      if not self.has_same_plurality(e1, e2):
+        return False 
+    elif mode == 'visual':
+      if not e1['is_visual'] or not e2['is_visual']:
+        return False
+      if not self.has_same_plurality(e1, e2):
+        return False
     return True 
   
   def compute_alignment_counts(self):
     ev_counts = []
     ee_counts = []
-    for e_feat, v_feat in zip(self.e_feats_train, self.v_feats_train):
+    for e_feat, v_feat, modes_sent in zip(self.e_feats_train, self.v_feats_train, self.modes_sents):
       C_ee = dict()
       C_ev = dict()
       L = v_feat.shape[0]
       v_prob = self.compute_cluster_prob(v_feat)
 
-      for e_idx, e in enumerate(e_feat):
+      for e_idx, (e, mode) in enumerate(zip(e_feat, modes_sent)):
         C_ee[e_idx] = dict()
         C_ev[e_idx] = dict()
         token = e['head_lemma']
@@ -115,13 +139,13 @@ class AmodalSMTEventCoreferencer:
         # Compute event-event alignment counts
         C_ee[e_idx][0] = self.P_ee[NULL][token] 
         for a_idx, a in enumerate(e_feat[:e_idx]):
-          if self.is_match(e, a):
-            a_token = a['head_lemma']
+          if mode == 'textual' and self.is_match(e, a, mode):
+            a_token = a['head_lemma']  
             C_ee[e_idx][a_idx+1] = self.P_ee[a_token][token]
         
         # Compute event-action alignment counts
-        if e.get('is_visual', True):
-          e_prob = np.asarray([self.P_ve[k][token] for k in range(self.Kv)])
+        if mode == 'visual':
+          e_prob = self.action_event_prob(e)
           for v_idx, v in enumerate(v_feat):
             C_ev[e_idx][v_idx] = v_prob[v_idx] * e_prob 
 
@@ -129,10 +153,10 @@ class AmodalSMTEventCoreferencer:
         norm_factor += sum(C_ev[e_idx][v_idx].sum() for v_idx in C_ev[e_idx])
 
         for a_idx in C_ee[e_idx]:
-          C_ee[e_idx][a_idx] /= norm_factor
+          C_ee[e_idx][a_idx] /= max(norm_factor, EPS)
         
         for v_idx in C_ev[e_idx]:
-          C_ev[e_idx][v_idx] /= norm_factor
+          C_ev[e_idx][v_idx] /= max(norm_factor, EPS)
           C_ev[e_idx][v_idx] = C_ev[e_idx][v_idx].tolist()
         
       ee_counts.append(C_ee)
@@ -143,7 +167,7 @@ class AmodalSMTEventCoreferencer:
   def update_translation_probs(self):
     P_ee = dict()
     P_ve = {k:dict() for k in range(self.Kv)}
-    for e_feat, v_feat, ee_count, ev_count in zip(self.e_feats_train, self.v_feats_train, self.ee_counts, self.ev_counts):
+    for e_feat, v_feat, ee_count, ev_count, modes_sent in zip(self.e_feats_train, self.v_feats_train, self.ee_counts, self.ev_counts, self.modes_sents):
       for e_idx in ee_count:
         token = e_feat[e_idx]['head_lemma']
         for a_idx in ee_count[e_idx]:
@@ -176,26 +200,28 @@ class AmodalSMTEventCoreferencer:
     for a in P_ee:
       norm_factor = sum(P_ee[a].values())
       for e in P_ee[a]:
-        P_ee[a][e] /= norm_factor
+        P_ee[a][e] /= max(norm_factor, EPS)
     
     for v in P_ve:
       norm_factor = sum(P_ve[v].values())
       for e in P_ve[v]:
-        P_ve[v][e] /= norm_factor
+        P_ve[v][e] /= max(norm_factor, EPS)
     return P_ee, P_ve
 
   def log_likelihood(self):
     ll = 0.
-    for e_feat, v_feat in zip(self.e_feats_train, self.v_feats_train):
+    for e_feat, v_feat, modes_sent in zip(self.e_feats_train, self.v_feats_train, self.modes_sents):
       v_prob = self.compute_cluster_prob(v_feat)
-      for e_idx, e in enumerate(e_feat):
-        probs = [self.P_ee[NULL][e['head_lemma']]]
+      for e_idx, (e, mode) in enumerate(zip(e_feat, modes_sent)):
+        e_token = e['head_lemma']
+        probs = [self.P_ee[NULL][e_token]]
         for a_idx, a in enumerate(e_feat[:e_idx]):
-          if self.is_match(e, a):
-            probs.append(self.P_ee[a['head_lemma']][e['head_lemma']])  
+          a_token = a['head_lemma']
+          if mode == 'textual' and self.is_match(e, a, mode):
+            probs.append(self.P_ee[a_token][e_token])  
         
-        if e.get('is_visual', True):
-          e_prob = np.asarray([self.P_ve[k][e['head_lemma']] for k in range(self.Kv)])
+        if mode == 'visual':
+          e_prob = np.asarray([self.P_ve[k][e_token] for k in range(self.Kv)])
           probs.extend((v_prob @ e_prob).tolist())
         
         ll += np.log(np.maximum(np.mean(probs), EPS))
@@ -221,29 +247,38 @@ class AmodalSMTEventCoreferencer:
     log_prob = logit - logsumexp(logit, axis=1)[:, np.newaxis]
     return np.exp(log_prob)
 
+  def action_event_prob(self, e):
+    e_token = e['head_lemma']
+    return np.asarray([self.P_ve[k][e_token] for k in range(self.Kv)])
+
   def predict_antecedents(self, event_features, action_features):
     antecedents = []
     cluster_ids = []
     scores_all = []
+    modes_sents = self.get_modes(event_features)
 
     n_cluster = 0
-    for e_feat, v_feat in zip(event_features, action_features):
+    for e_feat, v_feat, modes_sent in zip(event_features, action_features, modes_sents):
       v_prob = self.compute_cluster_prob(v_feat)
       antecedent = [-1]*len(e_feat)
       cluster_id = [0]*len(e_feat)
       scores_all.append([])
       L = v_feat.shape[0]
-      for e_idx, e in enumerate(e_feat):
+      for e_idx, (e, mode) in enumerate(zip(e_feat, modes_sent)):
         e_token = e['head_lemma']
-        e_prob = self.action_event_prob(v_feat, e) # TODO
-        scores.append(self.P_ee[NULL][e_token])
+        if mode == 'textual':
+          scores = [self.P_ee[NULL][e_token]]
+        else:
+          scores = [0]
         for a_idx, a in enumerate(e_feat[:e_idx]):
           a_token = a['head_lemma']
-          if self.is_match(e, a, mode='text'): # TODO
-            scores.append(self.P_ee[a_token][e_token])
-          elif self.is_match(e, a, mode='visual'):
-            a_prob = self.action_event_prob(v_feat, a)
-            scores.append(v_prob @ (e_prob * a_prob).mean(0))
+          if self.is_match(e, a, mode):
+            if mode == 'textual':
+              scores.append(self.P_ee[a_token][e_token])
+            else:
+              e_prob = self.action_event_prob(e)
+              a_prob = self.action_event_prob(a)
+              scores.append((v_prob @ (e_prob * a_prob)).mean(0)) # XXX
           else:
             scores.append(0)
        
@@ -497,7 +532,7 @@ if __name__ == '__main__':
   vocab_feats = load_data(config)
 
   ## Model training
-  aligner = AmodalSMTCoreferencer(event_feats_train+event_feats_test, action_feats_train+action_feats_test, config)
+  aligner = AmodalSMTEventCoreferencer(event_feats_train+event_feats_test, action_feats_train+action_feats_test, config)
   aligner.train(10)
   antecedents, cluster_ids_all, scores_all = aligner.predict_antecedents(event_feats_test, action_feats_test)
 
