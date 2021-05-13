@@ -77,22 +77,24 @@ class AmodalSMTJointCoreferencer:
     event_modes_sents = self.event_coref_model.get_modes(event_feats)
     entity_feats = []
     entity_modes_sents = []
-    modes = self.entity_coref_model.modes
-    match_func = self.entity_coref_model.is_match
+    P_aa = self.entity_coref_model.P_ee
 
     for e_feat in event_feats:
       modes_sent = []
       for e_idx, e in enumerate(e_feat):
         antecedents = [a for ant in e_feat[:e_idx] for a in ant['arguments']]
-        modes_e = []
+        modes = []
         for a2_idx, a2 in enumerate(e['arguments']):
+          a2_token = a2['head_lemma']
           mode = MODE_D
           for a1 in antecedents:
-            if match_func(a1, a2, MODE_S):
-              mode = MODE_S
-              break
-          modes_e.append(mode) 
-        modes_sent.append(modes_e)
+            a1_token = a1['head_lemma']
+            if a1_token in P_aa[MODE_S]:
+              if a2_token in P_aa[MODE_S][a1_token]
+                mode = MODE_S
+                break
+          modes.append(mode) 
+        modes_sent.append(modes)
       entity_modes_sents.append(modes_sent)
     return event_modes_sents, entity_modes_sents
 
