@@ -90,20 +90,29 @@ class SMTEntityCoreferencer:
     return vocab
 
   def initialize(self):
-    for mode in self.modes:
-      for v in self.vocab[mode]:
-        if not v in self.P_ee[mode]:
-          self.P_ee[mode][v] = dict()
+    translate_prob_file = os.path.join(self.config['model_path'], 'translation_probs.json')
+    position_prob_file = os.path.join(self.config['model_path'], 'position_probs.json') 
+    if os.path.exists(translate_prob_file):
+      self.P_ee = json.load(open(translate_prob_file))
+      print(f'Loaded pretrained translation probability file: {translate_prob_file}')
+    else:
+      for mode in self.modes:
+        for v in self.vocab[mode]:
+          if not v in self.P_ee[mode]:
+            self.P_ee[mode][v] = dict()
 
-        for v2 in self.vocab[mode]:
-          if v2 != NULL:
-            self.P_ee[mode][v][v2] = 1. / (len(self.vocab[mode]) - 1)          
+          for v2 in self.vocab[mode]:
+            if v2 != NULL:
+              self.P_ee[mode][v][v2] = 1. / (len(self.vocab[mode]) - 1)          
     
     for mode in self.modes:
       self.P_ij[mode] = dict()
       for e_feat in self.e_feats_train:
         for i in range(len(e_feat)):
           self.P_ij[mode][i + 1] = {j: 1. / (i + 1) for j in range(i + 1)}
+      if mode == MODE_D and os.path.exists(position_prob_file):
+        print(f'Loaded pretrained position probability file: {position_prob_file}')
+        self.P_ij[mode] = json.load(open(position_prob_file)) 
 
   def is_match(self, e1, e2, mode):
     if mode == MODE_S:
