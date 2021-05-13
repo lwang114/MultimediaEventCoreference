@@ -282,24 +282,17 @@ def to_antecedents(labels):
         break
   return antecedents
  
-def load_text_features(config, vocab_feat, action_labels, split):
+def load_event_features(config, action_labels, split):
   lemmatizer = WordNetLemmatizer()
   event_feature_types = config['event_feature_types']
-  entity_feature_types = config['entity_feature_types']
   event_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events.json'), 'r', 'utf-8'))
-  entity_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_entities.json'), 'r', 'utf-8'))
   ontology_map = json.load(open(os.path.join(config['data_folder'], '../ontology_mapping.json')))
   doc_train = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}.json')))
   event_docs_embs = np.load(os.path.join(config['data_folder'], f'{split}_events_with_arguments_glove_embeddings.npz')) 
-  entity_docs_embs = np.load(os.path.join(config['data_folder'], f'{split}_entities_glove_embeddings.npz')) 
-
   doc_to_event_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in event_docs_embs}
-  doc_to_entity_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in entity_docs_embs}
 
   event_label_dicts = dict()
   event_feats = []
-  entity_label_dicts = dict()
-  entity_feats = []
   doc_ids = []
   spans_all = []
   cluster_ids_all = []
@@ -315,16 +308,6 @@ def load_text_features(config, vocab_feat, action_labels, split):
 
     for feat_type in event_feature_types:
       event_label_dicts[m['doc_id']][span][feat_type] = m[feat_type]
-  
-  for m in entity_mentions:
-    if not m['doc_id'] in entity_label_dicts:
-      entity_label_dicts[m['doc_id']][span] = dict()
-    token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
-    span = (min(m['tokens_ids']), max(m['tokens_ids']))
-    entity_label_dicts[m['doc_id']][span] = {'tokens_id': token,
-                                             'cluster_id': m['cluster_id']}
-    for feat_type in entity_feature_types:
-      entity_label_dicts[m['doc_id']][span][feat_type] = m[feat_type]
 
   for feat_idx, doc_id in enumerate(sorted(event_label_dicts)): # XXX
     action_label = action_labels[feat_idx]
@@ -351,18 +334,76 @@ def load_text_features(config, vocab_feat, action_labels, split):
     cluster_ids_all.append(np.asarray(cluster_ids))
     tokens_all.append([t[2] for t in doc_train[doc_id]])
 
-  for feat_idx, doc_id in enumerate(sorted(entity_label_dicts)):
-    entity_doc_embs = entity_docs_embs[doc_to_entity_feat[doc_id]]
-    entity_label_dict = entity_label_dicts[doc_id]
+  return event_feats,\
+         doc_ids,\
+         spans_all,\
+         cluster_ids_all,\
+         tokens_all
 
-    spans = sorted(entity_label_dict)
+def load_entity_features(config, split):
+  entity_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_entities.json'), 'r', 'utf-8'))
+  doc = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}.json')))
+  docs_embs = np.load(os.path.join(config['data_folder'], f'{split}_entities_glove_embeddings.npz')) 
+  doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in docs_embs}
+
+  label_dicts = {}
+  entity_feats = []
+  doc_ids = []
+  spans_all = []
+  cluster_ids_all = []
+  tokens_all = [] 
+
+  for m in entity_mentions:
+    if not m['doc_id'] in label_dicts:
+      label_dicts[m['doc_id']] = dict()
+    span = (min(m['tokens_ids']), max(m['tokens_ids']))
+    label_dicts[m['doc_id']][span] = deepcopy(m)
+        
+  for feat_idx, doc_id in enumerate(sorted(label_dicts)): # XXX
+    doc_embs = docs_embs[doc_to_feat[doc_id]]
+    label_dict = label_dicts[doc_id]
+    spans = sorted(label_dict)
     entities = []
     for span_idx, span in enumerate(spans):
-      entity = {feat_type: entity_label_dict[span][feat_type] for feat_type in feature_types}
-      entity['entity_embedding'] = entity_doc_embs[span_idx] 
-
-  return event_feats,\
-         entity_feats,\
+      entity = deepcopy(label_dict[span])
+      entity['entity_embedding'] = doc_embs[span_idx, :300]
+      entity['idx'] = span_idx 
+      token = entity['head_lemma']
+      pos_tag = entity['pos_tag']
+      if pos_tag in ['PRP', 'PRP$']:
+        entity['mention_type'] = PRON
+        if token in PLURAL_PRON:
+          entity['number'] = PLURAL
+        else:
+          entity['number'] = SINGULAR
+      elif pos_tag in ['NNP', 'NNPS']:
+        entity['mention_type'] = PROPER
+        if pos_tag[-1] == 'S':
+          entity['number'] = PLURAL
+        else:
+          entity['number'] = SINGULAR
+      elif pos_tag in ['NN', 'NNS']:
+        entity['mention_type'] = NOMINAL
+        if pos_tag[-1] == 'S':
+          entity['number'] = PLURAL
+        else:
+          entity['number'] = SINGULAR
+      elif pos_tag == 'CD':
+        entity['mention_type'] = NOMINAL
+        entity['number'] = token
+      else:
+        entity['mention_type'] = NOMINAL
+        entity['number'] = SINGULAR
+      
+      entities.append(entity)  
+    cluster_ids = [label_dict[span]['cluster_id'] for span in spans]
+    
+    entity_feats.append(entities)
+    doc_ids.append(doc_id)
+    spans_all.append(spans)
+    cluster_ids_all.append(np.asarray(cluster_ids))
+    tokens_all.append([t[2] for t in doc[doc_id]])
+  return entity_feats,\
          doc_ids,\
          spans_all,\
          cluster_ids_all,\
@@ -389,49 +430,72 @@ def load_visual_features(config, split):
   return action_feats, action_labels
 
 def load_data(config):
-  lemmatizer = WordNetLemmatizer()
-  event_mentions_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train_events.json'), 'r', 'utf-8'))
-  doc_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train.json')))
-  event_mentions_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test_events.json'), 'r', 'utf-8'))
-  doc_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test.json')))
-  feature_types = config['feature_types']
+  event_mentions_train = []
+  doc_train = dict()
+  for split in config['splits']['train']:
+    event_mentions_train.extend(json.load(codecs.open(os.path.join(config['data_folder'], 'train_events.json'), 'r', 'utf-8')))
+    doc_train.update(json.load(codecs.open(os.path.join(config['data_folder'], 'train.json'))))
+  
+  event_mentions_test = []
+  doc_test = dict()
+  for split in config['splits']['test']:
+    entity_mentions_test.extend(json.load(codecs.open(os.path.join(config['data_folder'], 'test_events.json'), 'r', 'utf-8')))
+    doc_test.update(json.load(codecs.open(os.path.join(config['data_folder'], 'test.json'))))
 
-  vocab_feats = {feat_type: {NULL: 0} for feat_type in feature_types}
-  vocab_feats_freq = {feat_type: {NULL: 0} for feat_type in feature_types}
-  for m in event_mentions_train + event_mentions_test:    
-    for feat_type in feature_types: 
-      if feat_type == 'arguments':
-        for a in m['arguments']:
-          if not a['head_lemma'] in vocab_feats[feat_type]:
-            vocab_feats['arguments'][a['head_lemma']] = 1
-            vocab_feats_freq['arguments'][a['head_lemma']] = 1 
-          else:
-            vocab_feats_freq['arguments'][a['head_lemma']] += 1
-      else:
-        if not m[feat_type] in vocab_feats[feat_type]:
-          vocab_feats[feat_type][m[feat_type]] = len(vocab_feats[feat_type])
-          vocab_feats_freq[feat_type][m[feat_type]] = 1
-        else:
-          vocab_feats_freq[feat_type][m[feat_type]] += 1
-  json.dump(vocab_feats_freq, open('vocab_feats_freq.json', 'w'), indent=2)
-
-  action_feats_train, action_labels_train = load_visual_features(config, split='train')
-  event_feats_train,\
-  entity_feats_train,\
-  doc_ids_train,\
-  spans_train,\
-  cluster_ids_train,\
-  tokens_train = load_text_features(config, vocab_feats_freq, action_labels_train, split='train')
+  event_feats_train = []
+  entity_feats_train = []
+  action_feats_train = []
+  action_labels_train = []
+  doc_ids_train = []
+  spans_train = []
+  cluster_ids_train = []
+  tokens_train = []
+  for split in config['splits']['train']:
+    cur_action_feats_train, cur_action_labels_train = load_visual_features(config, split=split)
+    cur_event_feats_train,\
+    cur_doc_ids_train,\
+    cur_spans_train,\
+    cur_cluster_ids_train,\
+    cur_tokens_train = load_event_features(config, action_labels_train, split=split)
+    cur_entity_feats_train = load_entity_features(config, split=split)[0] 
+    
+    action_feats_train.extend(cur_action_feats_train)
+    action_labels_train.extend(cur_action_labels_train)
+    event_feats_train.extend(cur_event_feats_train)
+    entity_feats_train.extend(cur_entity_feats_train)
+    doc_ids_train.extend(cur_doc_ids_train)
+    spans_train.extend(cur_spans_train)
+    cluster_ids_train.extend(cur_cluster_ids_train)
+    tokens_train.extend(cur_tokens_train)
+    
   print(f'Number of training examples: {len(event_feats_train)}')
   
-  action_feats_test, action_labels_test = load_visual_features(config, split='test')
-  event_feats_test,\
-  entity_feats_test,\
-  doc_ids_test,\
-  spans_test,\
-  cluster_ids_test,\
-  tokens_test = load_text_features(config, vocab_feats_freq, action_labels_test, split='test')
-
+  event_feats_test = []
+  entity_feats_test = []
+  action_feats_test = []
+  action_labels_test = []
+  doc_ids_test = []
+  spans_test = []
+  cluster_ids_test = []
+  tokens_test = []
+  for split in config['splits']['test']:
+    cur_action_feats_test, cur_action_labels_test = load_visual_features(config, split='test')
+    cur_event_feats_test,\
+    cur_entity_feats_test,\
+    cur_doc_ids_test,\
+    cur_spans_test,\
+    cur_cluster_ids_test,\
+    cur_tokens_test = load_text_features(config, action_labels_test, split='test')
+    cur_entity_feats_test = load_entity_features(config, split=split)[0]
+  
+    action_feats_test.extend(cur_action_feats_test)
+    action_labels_test.extend(cur_action_labels_test)
+    event_feats_test.extend(cur_event_feats_test)
+    entity_feats_test.extend(cur_entity_feats_test)
+    doc_ids_test.extend(cur_doc_ids_test)
+    spans_test.extend(cur_spans_test)
+    cluster_ids_test.extend(cur_cluster_ids_test)
+    tokens_test.extend(cur_tokens_test)
   print(f'Number of test examples: {len(event_feats_test)}')
   
   return event_feats_train,\
@@ -449,8 +513,7 @@ def load_data(config):
          doc_ids_test,\
          spans_test,\
          cluster_ids_test,\
-         tokens_test,\
-         vocab_feats
+         tokens_test
 
 def plot_attention(prediction, e_feats, v_labels, out_prefix):
   fig, ax = plt.subplots(figsize=(7, 10))
@@ -509,8 +572,7 @@ if __name__ == '__main__':
   doc_ids_test,\
   spans_test,\
   cluster_ids_test,\
-  tokens_test,\
-  vocab_feats = load_data(config)
+  tokens_test = load_data(config)
 
   ## Model training
   aligner = AmodalSMTJointCoreferencer(event_feats_train+event_feats_test, entity_feats_train+entity_feats_test, action_feats_train+action_feats_test, config)
