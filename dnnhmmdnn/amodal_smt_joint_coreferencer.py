@@ -291,7 +291,7 @@ def to_antecedents(labels):
         break
   return antecedents
  
-def load_event_features(config, action_labels, split):
+def load_event_features(config, action_labels, entity_label_dicts, split):
   lemmatizer = WordNetLemmatizer()
   event_feature_types = config['event_feature_types']
   event_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events.json'), 'r', 'utf-8'))
@@ -313,7 +313,7 @@ def load_event_features(config, action_labels, split):
     token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
     span = (min(m['tokens_ids']), max(m['tokens_ids']))
     event_label_dicts[m['doc_id']][span] = {'token_id': token,
-                                            'cluster_id': m['cluster_id']} # XXX vocab_feat['event_type'][m['event_type']]
+                                            'cluster_id': m['cluster_id']}
 
     for feat_type in event_feature_types:
       event_label_dicts[m['doc_id']][span][feat_type] = m[feat_type]
@@ -328,9 +328,9 @@ def load_event_features(config, action_labels, split):
     for span_idx, span in enumerate(spans):
       event = {feat_type: event_label_dict[span][feat_type] for feat_type in event_feature_types}
       event['trigger_embedding'] = event_doc_embs[span_idx, :300]
-      arg_embs = event_doc_embs[span_idx, 300:].reshape(-1, 300)
-      for a_idx in range(len(event_label_dict[span]['arguments'])):
-        event_label_dict[span]['arguments'][a_idx]['entity_embedding'] = arg_embs[a_idx]
+      for a_idx, a in enumerate(event['arguments']):
+        a_span = (a['start'], a['end'])
+        event['arguments'][a_idx] = deepcopy(entity_label_dicts[doc_id][a_span]) 
 
       if 'event_type' in event:
         match_action_types = ontology_map[event['event_type']]
@@ -369,15 +369,15 @@ def load_entity_features(config, split):
     if not m['doc_id'] in label_dicts:
       label_dicts[m['doc_id']] = dict()
     span = (min(m['tokens_ids']), max(m['tokens_ids']))
-    label_dicts[m['doc_id']][span] = deepcopy(m)
-        
+    label_dicts[m['doc_id']][span] = deepcopy(m)      
+
   for feat_idx, doc_id in enumerate(sorted(label_dicts)): # XXX
     doc_embs = docs_embs[doc_to_feat[doc_id]]
     label_dict = label_dicts[doc_id]
     spans = sorted(label_dict)
     entities = []
     for span_idx, span in enumerate(spans):
-      entity = deepcopy(label_dict[span])
+      entity = deepcopy(label_dict[span])  
       entity['entity_embedding'] = doc_embs[span_idx, :300]
       entity['idx'] = span_idx 
       token = entity['head_lemma']
@@ -406,7 +406,8 @@ def load_entity_features(config, split):
       else:
         entity['mention_type'] = NOMINAL
         entity['number'] = SINGULAR
-      
+    
+      label_dicts[doc_id][span] = deepcopy(entity)
       entities.append(entity)  
     cluster_ids = [label_dict[span]['cluster_id'] for span in spans]
     
@@ -419,7 +420,8 @@ def load_entity_features(config, split):
          doc_ids,\
          spans_all,\
          cluster_ids_all,\
-         tokens_all
+         tokens_all,\
+         entity_label_dicts
 
 def load_visual_features(config, split):
   ontology = json.load(open(os.path.join(config['data_folder'], '../ontology.json')))
@@ -452,12 +454,12 @@ def load_data(config):
   tokens_train = []
   for split in config['splits']['train']:
     cur_action_feats_train, cur_action_labels_train = load_visual_features(config, split=split)
+    cur_entity_feats_train, entity_label_dicts = load_entity_features(config, split=split)[0] 
     cur_event_feats_train,\
     cur_doc_ids_train,\
     cur_spans_train,\
     cur_cluster_ids_train,\
-    cur_tokens_train = load_event_features(config, cur_action_labels_train, split=split)
-    cur_entity_feats_train = load_entity_features(config, split=split)[0] 
+    cur_tokens_train = load_event_features(config, cur_action_labels_train, entity_label_dicts, split=split)
     
     action_feats_train.extend(cur_action_feats_train)
     action_labels_train.extend(cur_action_labels_train)
@@ -479,13 +481,13 @@ def load_data(config):
   tokens_test = []
   for split in config['splits']['test']:
     cur_action_feats_test, cur_action_labels_test = load_visual_features(config, split='test')
+    cur_entity_feats_test, entity_label_dicts = load_entity_features(config, split=split)[0]
     cur_event_feats_test,\
     cur_doc_ids_test,\
     cur_spans_test,\
     cur_cluster_ids_test,\
-    cur_tokens_test = load_event_features(config, cur_action_labels_test, split='test')
-    cur_entity_feats_test = load_entity_features(config, split=split)[0]
-  
+    cur_tokens_test = load_event_features(config, cur_action_labels_test, entity_label_dicts, split='test')
+ 
     action_feats_test.extend(cur_action_feats_test)
     action_labels_test.extend(cur_action_labels_test)
     event_feats_test.extend(cur_event_feats_test)

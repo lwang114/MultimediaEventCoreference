@@ -296,7 +296,6 @@ def to_antecedents(labels):
   return antecedents
  
 def load_text_features(config, split):
-  lemmatizer = WordNetLemmatizer()
   entity_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_entities.json'), 'r', 'utf-8'))
   doc = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}.json')))
   docs_embs = np.load(os.path.join(config['data_folder'], f'{split}_entities_glove_embeddings.npz')) 
@@ -366,7 +365,6 @@ def load_text_features(config, split):
          tokens_all
 
 def load_data(config):
-  lemmatizer = WordNetLemmatizer() 
   entity_mentions_train = []
   doc_train = dict()
   for split in config['splits']['train']:
