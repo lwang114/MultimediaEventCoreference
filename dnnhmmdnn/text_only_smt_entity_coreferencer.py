@@ -59,14 +59,11 @@ class SMTEntityCoreferencer:
     for e_feat in entity_feats:
       modes_sent = []
       for e_idx, e in enumerate(e_feat):
-        matched = False
+        mode = MODE_D
         for a_idx, a in enumerate(e_feat[:e_idx]):
           if self.is_match(e, a, mode=MODE_S):
             mode = MODE_S
-            matched = True
             break
-        if not matched:  
-          mode = MODE_D
         modes_sent.append(mode)
       modes_sents.append(modes_sent)
     return modes_sents

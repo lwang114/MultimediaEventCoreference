@@ -49,6 +49,7 @@ class AmodalSMTJointCoreferencer:
     self.P_ea = dict()    
     self.Kv = config.get('Kv', 4)
     self.vocab = self.get_vocab(event_features)
+    self.event_modes_sent, self.entity_modes_sent = self.get_modes(event_feats)
 
     self.initialize()
     logging.info(f'Number of documents = {len(self.e_feats_train)}, vocab.size = {len(self.vocab)}')
@@ -64,7 +65,27 @@ class AmodalSMTJointCoreferencer:
     return vocab 
   
   def get_modes(self, event_feats):
-    return self.event_coref_model.get_modes(event_feats)
+    event_modes_sents = self.event_coref_model.get_modes(event_feats)
+    entity_feats = []
+    entity_modes_sents = []
+    modes = self.entity_coref_model.modes
+    match_func = self.entity_coref_model.is_match
+
+    for e_feat in event_feats:
+      modes_sent = []
+      for e_idx, e in enumerate(e_feat):
+        antecedents = [a for ant in e_feat[:e_idx] for a in ant['arguments']]
+        modes_e = []
+        for a2_idx, a2 in enumerate(e_feat['arguments']):
+          mode = modes[1]
+          for a1 in antecedents:
+            if match_func(a1, a2, modes[0]):
+              mode = modes[0]
+              break
+          modes_e.append(mode) 
+        modes_sent.append(modes_e)
+      entity_modes_sents.append(modes_sent)
+    return event_modes_sents, entity_modes_sents
 
   def initialize(self):
     self.event_coref_model.initialize()
@@ -136,16 +157,16 @@ class AmodalSMTJointCoreferencer:
     '''
     return v_prob, e_prob 
 
-  def event_event_prob(self, e1, e2):
+  def event_event_prob(self, e1, e2, arg_modes):
     P_ee = self.event_coref_model.P_ee
     P_aa = self.entity_coref_model.P_aa
     e1_token = e1['head_lemma']
     e2_token = e2['head_lemma']
     prob = P_ee[e1_token][e2_token]
-    prob *= self.argument_argument_prob(e1, e2)
+    prob *= self.argument_argument_prob(e1, e2, arg_modes)
     return prob
   
-  def argument_argument_prob(self, e1, e2):
+  def argument_argument_prob(self, e1, e2, arg_modes):
     a1_by_types = dict()
     for i, a1 in enumerate(e1['arguments']):
       if not a1['entity_type'] in a1_by_types:
@@ -154,26 +175,30 @@ class AmodalSMTJointCoreferencer:
         a1_by_types[a1['entity_type']].append(i)
 
     a2_by_types = dict()
-    for i, a2 in enumerate(e2['arguments']):
+    for i, (a2, arg_mode) in enumerate(zip(e2['arguments'], arg_modes)):
       if not a2['entity_type'] in a2_by_types:
-        a2_by_types[a2['entity_type']] = [i]
+        a2_by_types[a2['entity_type']] = [i, arg_mode]
       else:
-        a2_by_types[a2['entity_type']].append(i)
+        a2_by_types[a2['entity_type']].append([i, arg_mode])
 
     prob = 1.
     for a_type in a2_by_types:
       if not a_type in a1_by_types: 
-        for a2 in a2_by_types[a_type]:
+        for a2_idx, _ in a2_by_types[a_type]:
+          a2 = e2['arguments'][a2_idx]
           a2_token = a2['head_lemma']
           if not a2_token in self.P_ea[a_type][e1_token]:
             a2_token = UNK
           prob *= self.P_ea[a_type][e1_token][a2_token]
       else:
-        for a2 in a2_by_types[a_type]:
+        for a2_idx, arg_mode in a2_by_types[a_type]:
+          a2 = e2['arguments'][a2_idx]
+          a2_token = a2['head_lemma']
           a_prob = []
-          for a1 in a1_by_types[a_type]:
+          for a1_idx in a1_by_types[a_type]:
+            a1 = e1['arguments'][a1_idx]
             a1_token = a1['head_lemma']
-            a_prob.append(P_aa[a1_token][a2_token])
+            a_prob.append(P_aa[arg_mode][a1_token][a2_token])
           prob *= np.mean(a_prob)
     return prob
             
@@ -181,38 +206,38 @@ class AmodalSMTJointCoreferencer:
     antecedents = []
     cluster_ids = []
     scores_all = []
-    modes_sents = get_modes(event_features)
+    event_modes_sents, argument_modes_sents = get_modes(event_features)
 
     n_cluster = 0
-    for e_feat, v_feat, modes_sent in zip(event_features, action_features, modes_sents):
+    for e_feat, v_feat, event_modes_sent, argument_modes_sent in zip(event_features, action_features, event_modes_sents, argument_modes_sents):
       v_prob = self.compute_cluster_prob(v_feat) 
       antecedent = [-1]*len(e_feat)
       cluster_id = [0]*len(e_feat)
       scores_all.append([])
       L = v_feat.shape[0]
-      for e_idx, (e, mode) in enumerate(zip(e_feat, modes_sent)):
+      for e_idx, (e, event_mode, arg_modes) in enumerate(zip(e_feat, event_modes_sent, argument_modes_sent)):
         e_null = {'head_lemma': NULL,
                   'arguments': [{'head_lemma': NULL,
                                 'entity_type': a['entity_type']} for a in e['arguments']]}
-        if mode == 'textual':
-          scores = [self.event_event_prob(e_null, e)]
+        if event_mode == 'textual':
+          scores = [self.event_event_prob(e_null, e, arg_modes)]
         else:
-          scores = [1. / L * self.argument_argument_prob(e_null, e)]
+          scores = [1. / L * self.argument_argument_prob(e_null, e, arg_modes)]
         for a_idx, a in enumerate(e_feat[:e_idx]):
           score = 0
-          if self.is_match(e, a, mode):
+          if self.is_match(e, a, event_mode):
             # If the current mention is in text mode
-            if mode == 'textual':
-              score += self.event_event_prob(a, e)  
+            if event_mode == 'textual':
+              score += self.event_event_prob(a, e, arg_modes)  
             # If the current mention is in visual mode
-            elif mode == 'visual':
+            elif event_mode == 'visual':
               e_prob = self.action_event_prob(e) 
               a_prob = self.action_event_prob(a)
               ve_prob = v_prob @ e_prob
               va_prob = v_prob @ a_prob
               ve_prob /= ve_prob.sum()
               va_prob /= va_prob.sum()
-              ea_prob = self.argument_argument_prob(a, e)
+              ea_prob = self.argument_argument_prob(a, e, arg_modes)
               score += (ve_prob @ va_prob) * ea_prob 
           scores.append(score)
         
