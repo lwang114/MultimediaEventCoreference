@@ -25,6 +25,15 @@ random.seed(2)
 NULL = '###NEW###'
 UNK = '###UNK###'
 EPS = 1e-100
+PLURAL_PRON = ['they', 'them', 'those', 'these', 'we', 'us', 'their', 'our']
+SINGULAR = 'singular'
+PLURAL = 'plural'
+PROPER = 'proper'
+NOMINAL = 'nominal'
+PRON = 'pronoun'
+MODE_S = 'semantic'
+MODE_D = 'discourse'
+
 class AmodalSMTJointCoreferencer:
   def __init__(self, event_features, entity_features, action_features, config):
     '''
@@ -40,16 +49,16 @@ class AmodalSMTJointCoreferencer:
     self.a_feats_train = entity_features
     self.v_feats_train = action_features
     event_config = deepcopy(config)
-    entity_config['model_path'] = deepcopy(config)
+    entity_config = deepcopy(config)
     event_config['model_path'] = config['event_model_path']
     entity_config['model_path'] = config['entity_model_path']
     self.event_coref_model = AmodalSMTEventCoreferencer(event_features, action_features, event_config)
-    self.entity_coref_model = AmodalSMTEntityCoreferencer(entity_features, action_features, entity_config)
+    self.entity_coref_model = SMTEntityCoreferencer(entity_features, entity_config)
 
     self.P_ea = dict()    
     self.Kv = config.get('Kv', 4)
     self.vocab = self.get_vocab(event_features)
-    self.event_modes_sent, self.entity_modes_sent = self.get_modes(event_feats)
+    self.event_modes_sent, self.entity_modes_sent = self.get_modes(event_features)
 
     self.initialize()
     logging.info(f'Number of documents = {len(self.e_feats_train)}, vocab.size = {len(self.vocab)}')
@@ -76,11 +85,11 @@ class AmodalSMTJointCoreferencer:
       for e_idx, e in enumerate(e_feat):
         antecedents = [a for ant in e_feat[:e_idx] for a in ant['arguments']]
         modes_e = []
-        for a2_idx, a2 in enumerate(e_feat['arguments']):
-          mode = modes[1]
+        for a2_idx, a2 in enumerate(e['arguments']):
+          mode = MODE_D
           for a1 in antecedents:
-            if match_func(a1, a2, modes[0]):
-              mode = modes[0]
+            if match_func(a1, a2, MODE_S):
+              mode = MODE_S
               break
           modes_e.append(mode) 
         modes_sent.append(modes_e)
@@ -317,9 +326,12 @@ def load_event_features(config, action_labels, split):
     spans = sorted(event_label_dict)
     events = []
     for span_idx, span in enumerate(spans):
-      event = {feat_type: event_label_dict[span][feat_type] for feat_type in feature_types}
+      event = {feat_type: event_label_dict[span][feat_type] for feat_type in event_feature_types}
       event['trigger_embedding'] = event_doc_embs[span_idx, :300]
-      event['argument_embedding'] = event_doc_embs[span_idx, 300:].reshape(-1, 300)
+      arg_embs = event_doc_embs[span_idx, 300:].reshape(-1, 300)
+      for a_idx in range(len(event_label_dict[span]['arguments'])):
+        event_label_dict[span]['arguments'][a_idx]['entity_embedding'] = arg_embs[a_idx]
+
       if 'event_type' in event:
         match_action_types = ontology_map[event['event_type']]
         if len(set(match_action_types).intersection(set(action_label))) > 0:
@@ -430,18 +442,6 @@ def load_visual_features(config, split):
   return action_feats, action_labels
 
 def load_data(config):
-  event_mentions_train = []
-  doc_train = dict()
-  for split in config['splits']['train']:
-    event_mentions_train.extend(json.load(codecs.open(os.path.join(config['data_folder'], 'train_events.json'), 'r', 'utf-8')))
-    doc_train.update(json.load(codecs.open(os.path.join(config['data_folder'], 'train.json'))))
-  
-  event_mentions_test = []
-  doc_test = dict()
-  for split in config['splits']['test']:
-    entity_mentions_test.extend(json.load(codecs.open(os.path.join(config['data_folder'], 'test_events.json'), 'r', 'utf-8')))
-    doc_test.update(json.load(codecs.open(os.path.join(config['data_folder'], 'test.json'))))
-
   event_feats_train = []
   entity_feats_train = []
   action_feats_train = []
@@ -456,7 +456,7 @@ def load_data(config):
     cur_doc_ids_train,\
     cur_spans_train,\
     cur_cluster_ids_train,\
-    cur_tokens_train = load_event_features(config, action_labels_train, split=split)
+    cur_tokens_train = load_event_features(config, cur_action_labels_train, split=split)
     cur_entity_feats_train = load_entity_features(config, split=split)[0] 
     
     action_feats_train.extend(cur_action_feats_train)
@@ -466,8 +466,7 @@ def load_data(config):
     doc_ids_train.extend(cur_doc_ids_train)
     spans_train.extend(cur_spans_train)
     cluster_ids_train.extend(cur_cluster_ids_train)
-    tokens_train.extend(cur_tokens_train)
-    
+    tokens_train.extend(cur_tokens_train)    
   print(f'Number of training examples: {len(event_feats_train)}')
   
   event_feats_test = []
@@ -481,11 +480,10 @@ def load_data(config):
   for split in config['splits']['test']:
     cur_action_feats_test, cur_action_labels_test = load_visual_features(config, split='test')
     cur_event_feats_test,\
-    cur_entity_feats_test,\
     cur_doc_ids_test,\
     cur_spans_test,\
     cur_cluster_ids_test,\
-    cur_tokens_test = load_text_features(config, action_labels_test, split='test')
+    cur_tokens_test = load_event_features(config, cur_action_labels_test, split='test')
     cur_entity_feats_test = load_entity_features(config, split=split)[0]
   
     action_feats_test.extend(cur_action_feats_test)
