@@ -129,12 +129,58 @@ class AmodalSMTJointCoreferencer:
     return True
   
   def is_match(self, e1, e2, mode):
-    return self.event_coref_model.is_match(e1, e2, mode)
-              
+    if not self.event_coref_model.is_match(e1, e2, mode):
+      return False 
+    
+    first_args = [a1['tokens'] for a1 in e1['arguments']]
+    second_args = [a2['tokens'] for a2 in e2['arguments']]
+    print(f"{a['tokens']}, {first_args}, {e['tokens']}, {second_args}, {score}") # XXX
+   
+    a1_by_types = dict()
+    for i, a1 in enumerate(e1['arguments']):
+      if not a1['entity_type'] in a1_by_types:
+        a1_by_types[a1['entity_type']] = [i]
+      else:
+        a1_by_types[a1['entity_type']].append(i)
+    
+    a2_by_types = dict()
+    for i, (a2, arg_mode) in enumerate(zip(e2['arguments'], arg_modes)):
+      if not a2['entity_type'] in a2_by_types:
+        a2_by_types[a2['entity_type']] = [[i, arg_mode]]
+      else:
+        a2_by_types[a2['entity_type']].append([i, arg_mode])
+
+    prob = 1.
+    for a_type in a2_by_types:
+      if not a_type in a1_by_types:
+        continue
+      for a2_idx in a2_by_types[a_type]:
+        a2 = e2['arguments'][a2_idx]
+        a1s = [e1['arguments'][i] for i in a1_by_types[a_type]]
+        if a_type == 'GeoPoliticalEntity':
+          a2_emb = a2['entity_embedding']
+          a1_embs = [a1['entity_embedding'] for a1 in a1s]
+          score = max([cosine_similarity(a1_emb, a2_emb) for a1_emb in a1_embs])
+          if score <= 0.5:
+            return False 
+        else:
+          c2 = a2['cluster_id']
+          c1s = [e1['arguments'][a1_idx]['cluster_id'] for a1_idx in a1_by_types[a_type]]
+          if not c2 in c1s:
+            return False
+    return True
+       
   def train(self, n_epochs=10):
     self.event_coref_model.train(n_epochs=n_epochs)
     self.entity_coref_model.train(n_epochs=n_epochs)
-  
+    _, cluster_ids, _ = self.entity_coref_model.predict_antecedents(self.a_feats_train, self.v_feats_train)
+    for idx, (e_feat, cluster_id) in enumerate(zip(self.e_feats_train, cluster_ids)):
+      n = 0
+      for e_idx, e in enumerate(e_feat):
+        for a_idx, a in enumerate(e['arguments']):
+          self.e_feats_train[idx][e_idx]['arguments'][a_idx]['cluster_id'] = cluster_id[n]
+          n += 1
+
   def compute_cluster_prob(self, v_feat):
     return self.event_coref_model.compute_cluster_prob(v_feat)
 
@@ -207,7 +253,7 @@ class AmodalSMTJointCoreferencer:
           for a1_idx in a1_by_types[a_type]:
             a1 = e1['arguments'][a1_idx]
             a1_token = self.entity_coref_model.get_mode_feature(a1, arg_mode) 
-            d_sent = a2['sentence_id'] - a1['sentence_id']
+        d_sent = a2['sentence_id'] - a1['sentence_id']
             if self.entity_coref_model.is_match(a1, a2, arg_mode):
               a_prob.append(P_ij[arg_mode][d_sent] * P_aa[arg_mode][a1_token][a2_token])
             else:
@@ -234,19 +280,14 @@ class AmodalSMTJointCoreferencer:
                   'tokens': NULL,
                   'head_lemma': NULL,
                   'arguments': []}
-        if event_mode == 'textual':
-          scores = [self.event_event_prob(e_null, e, arg_modes)]
-        else:
-          scores = [1. / L * self.argument_argument_prob(e_null, e, arg_modes)]
+
+        scores = [self.event_event_prob(e_null, e, event_mode, arg_modes)] # TODO
         for a_idx, a in enumerate(e_feat[:e_idx]):
           score = 0
           if self.is_match(e, a, event_mode):
             # If the current mention is in textual mode
             if event_mode == 'textual':
-              score += self.event_event_prob(a, e, arg_modes)  
-              first_args = [arg['tokens'] for arg in a['arguments']]
-              second_args = [arg['tokens'] for arg in e['arguments']]
-              print(f"{a['tokens']}, {first_args}, {e['tokens']}, {second_args}, {score}") # XXX
+              score += self.event_event_prob(a, e, event_mode, arg_modes)  
             # If the current mention is in visual mode
             elif event_mode == 'visual':
               e_prob = self.action_event_prob(e) 
@@ -255,8 +296,7 @@ class AmodalSMTJointCoreferencer:
               va_prob = v_prob @ a_prob
               ve_prob /= ve_prob.sum()
               va_prob /= va_prob.sum()
-              ea_prob = self.argument_argument_prob(a, e, arg_modes)
-              score += (ve_prob @ va_prob) * ea_prob 
+              score += ve_prob @ va_prob 
           scores.append(score)
         print(scores) # XXX
         scores_all[-1].append(scores)
