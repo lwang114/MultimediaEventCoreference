@@ -1,0 +1,15 @@
+{
+  "gpu_num": [0],
+  "visual_feature_type": "mmaction_feat",
+  "training_method":"e2e",
+  "epochs": 61,
+  "batch_size": 32,
+  "learning_rate": 1e-4,
+  "optimizer": "adam",
+  "adam_epsilon": 1e-8,
+  "data_folder": "data/video_m2e2/mentions",
+  "model_path": "models/action_video_m2e2/",
+  "log_path": "models/action_video_m2e2/",
+  "visual_model_path": "models/action_video_m2e2/visual_model.pth",
+  "classifier_path": "models/action_video_m2e2/classifier.pth" 
+}
