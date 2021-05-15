@@ -111,6 +111,8 @@ class AmodalSMTEventCoreferencer:
     if mode == 'textual':
       v1 = e1['trigger_embedding']
       v2 = e2['trigger_embedding']
+      if e1['is_visual'] != e2['is_visual']:
+        return False
       if cosine_similarity(v1, v2) <= 0.5:
         return False 
       if not self.has_same_plurality(e1, e2):
