@@ -33,12 +33,15 @@ def get_mention_doc_oneie(data_dir, out_prefix, separate_sentence=False):
   lemmatizer = WordNetLemmatizer()
   data_files = os.listdir(data_dir)
   documents = {}
-  mentions = []
+  events = []
+  entities = []
   for data_file in data_files: # XXX
     print(data_file)
     doc_id = None
     tokens_all = []
-    cur_mentions = []
+    cur_events = []
+    cur_entities = []
+
     start_sent = 0
     with open(os.path.join(data_dir, data_file), 'r') as f:
       for line in f:
@@ -71,32 +74,51 @@ def get_mention_doc_oneie(data_dir, out_prefix, separate_sentence=False):
           else:
             event_id = doc_id
             event_tokens_ids = list(range(start_sent+trigger[0], start_sent+trigger[1]))
-          mention = {'doc_id': event_id,
-                     'tokens': ' '.join(trigger_tokens),
-                     'tokens_ids': event_tokens_ids,
-                     'event_type': trigger[2],
-                     'arguments': [],
-                     'cluster_id': 0}
+          event = {'doc_id': event_id,
+                   'tokens': ' '.join(trigger_tokens),
+                   'tokens_ids': event_tokens_ids,
+                   'event_type': trigger[2],
+                   'arguments': [],
+                   'cluster_id': 0}
           pos_abbrev = postags[trigger[1]-1][0].lower() if postags[trigger[1]-1] in ['NOUN', 'VERB', 'ADJ'] else 'n'   
           head_lemma = lemmatizer.lemmatize(trigger_tokens[-1].lower(), pos=pos_abbrev) 
-          mention['head_lemma'] = head_lemma
+          event['head_lemma'] = head_lemma
           for role in roles_info:
             if role[0] == trigger_idx:
               entity = entities_info[role[1]]
-              mention['arguments'].append({'start': entity[0] if separate_sentence else start_sent+entity[0],
-                                           'end': entity[1]-1 if separate_sentence else start_sent+entity[1]-1,
-                                           'tokens': ' '.join(tokens[entity[0]:entity[1]]),
-                                           'role': role[2]})
-          cur_mentions.append(mention)
+              event['arguments'].append({'start': entity[0] if separate_sentence else start_sent+entity[0],
+                                         'end': entity[1]-1 if separate_sentence else start_sent+entity[1]-1,
+                                         'tokens': ' '.join(tokens[entity[0]:entity[1]]),
+                                         'role': role[2]})
+          cur_events.append(event)
+
+        for entity_idx, cur_entity_info in enumerate(entities_info):
+          entity_tokens = tokens[cur_entity_info[0]:cur_entity_info[1]]
+
+          if separate_sentence:
+            entity_id = f'{doc_id}-{sent_idx}'
+            entity_tokens_ids = list(range(cur_entity_info[0], cur_entity_info[1]))
+          else:
+            entity_id = doc_id
+            entity_tokens_ids = list(range(start_sent+cur_entity_info[0], start_sent+cur_entity_info[1]))
+
+          entity = {'doc_id': entity_id,
+                    'tokens': ' '.join(entity_tokens),
+                    'tokens_ids': entity_tokens_ids,
+                    'entity_type': cur_entity_info[2],
+                    'cluster_id': 0}
+          cur_entities.append(entity)
         start_sent += len(tokens)
 
-    mentions.extend(cur_mentions)
-    if len(cur_mentions) > 0 and not separate_sentence:
+    events.extend(cur_events)
+    entities.extend(cur_entities)
+    if len(cur_events+cur_entities) > 0 and not separate_sentence:
       documents[doc_id] = tokens_all
   
   print(f'Number of documents: {len(documents)}')
   json.dump(documents, open(f'{out_prefix}.json', 'w'), indent=2)
-  json.dump(mentions, open(f'{out_prefix}_events.json', 'w'), indent=2)
+  json.dump(events, open(f'{out_prefix}_events.json', 'w'), indent=2)
+  json.dump(entities, open(f'{out_prefix}_entities.json', 'w'), indent=2)
 
 def get_mention_doc_m2e2(data_json, out_prefix, inclusive=False):
   '''
@@ -691,6 +713,29 @@ def extract_visual_embeddings(csv_dirs, out_prefix, mapping_file=None, image_ids
     img_feats['{}_{}'.format(doc_id, idx)] = img_feat
   np.savez(out_prefix, **img_feats)
 
+def extract_visual_embeddings_npy(npy_dirs, out_prefix, mapping_file=None, image_ids=None):
+  # Create a mapping from Youtube id to short description
+  id2desc = None
+  mapping_dict = json.load(open(mapping_file))
+  id2desc = {v['id'].split('v=')[-1]:k for k, v in mapping_dict.items()}
+  doc_ids = sorted(id2desc)
+  
+  video_feats = {}
+  for idx, doc_id in enumerate(doc_ids): # XXX
+    print(idx, doc_id)
+    desc = id2desc[doc_id]
+    for punct in PUNCT:
+      desc = desc.replace(punct, '')
+    npy_file = os.path.join(npy_dirs[0], desc+'.npy')
+  
+    if not os.path.exists(npy_file):
+      print('File {} not found'.format(npy_file))
+      continue
+
+    video_feat = np.load(npy_file)
+    video_feats['{}_{}'.format(doc_id, idx)] = video_feat
+  np.savez(out_prefix, **video_feats)
+
 def train_test_split(feat_file, test_id_file, mapping_file, out_prefix): # TODO random split
   mapping_dict = json.load(open(mapping_file)) 
   id2desc = {v['id'].split('v=')[-1]:k for k, v in mapping_dict.items()}
@@ -861,3 +906,8 @@ if __name__ == '__main__':
                                mapping_file,
                                mention_json,
                                out_prefix=os.path.join('video_m2e2/mentions/', f'{split}_oneie'))
+  elif args.task == 13:
+    npy_dir = 'video_m2e2/original_vids/video_feats/3d'
+    out_prefix = 'video_m2e2/original_vid_3d' 
+    extract_visual_embeddings_npy([npy_dir], out_prefix, mapping_file=mapping_file)
+

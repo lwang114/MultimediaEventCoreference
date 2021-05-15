@@ -10,6 +10,7 @@ import argparse
 import pyhocon 
 import random
 import numpy as np
+import sklearn
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
 from text_models import NoOp, BiLSTM
@@ -36,23 +37,29 @@ def get_optimizer(config, models):
         return optim.SGD(parameters, momentum=0.9, lr=config.learning_rate, weight_decay=config.weight_decay)
 
 
-def train(visual_model, classifier, train_loader, test_loader, args): # TODO
+def train(visual_model, classifier, train_loader, test_loader, args):
   config = pyhocon.ConfigFactory.parse_file(args.config)
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
   torch.set_grad_enabled(True)
+
+  if not isinstance(visual_model, torch.nn.DataParallel):
+    visual_model = nn.DataParallel(visual_model)
+
+  if not isinstance(classifier, torch.nn.DataParallel):
+    classifier = nn.DataParallel(classifier)
 
   visual_model.to(device)
   classifier.to(device)
 
   # Create exp
   if not os.path.isdir(args.exp_dir):
-    os.path.mkdir(args.exp_dir)
+    os.mkdir(args.exp_dir)
     
   # Define the training criterion
   criterion = nn.CrossEntropyLoss()
   
   # Set up the optimizer
-  optimizer = get_optimizer(config, [text_model, visual_model])
+  optimizer = get_optimizer(config, [visual_model, classifier])
 
   # Start training
   total_loss = 0.
@@ -91,33 +98,35 @@ def train(visual_model, classifier, train_loader, test_loader, args): # TODO
         logging.info(info)
 
     if epoch % 5 == 0:
-      macro_f1 = test(visual_model, test_loader, args)
+      macro_f1 = test(visual_model, classifier, test_loader, args)
       if macro_f1 > best_f1:
         best_f1 = macro_f1    
         torch.save(visual_model.module.state_dict(), '{}/visual_model.pth'.format(args.exp_dir))
-        torch.save(visual_model.module.state_dict(), '{}/classifier.pth'.format(args.exp_dir))
+        torch.save(classifier.module.state_dict(), '{}/classifier.pth'.format(args.exp_dir))
+      _ = test(visual_model, classifier, train_loader, args)
+
     info = 'Epoch: [{}][{}/{}]\tTime {:.3f}\tLoss total {:.4f} ({:.4f})\tBest F1 {:.3f}'.format(epoch, i, len(train_loader), time.time()-begin_time, total_loss, total_loss / total, best_f1)
     print(info)
     logging.info(info)
 
   if args.evaluate_only:
-    test(visual_model, train_loader, args)
-    test(text_model, train_loader, args)
+    test(visual_model, classifier, train_loader, args)
+    test(visual_model, classifier, test_loader, args)
 
 def test(visual_model, classifier, test_loader, args):
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-  config = pyhocon.ConfigFactor.parse_file(args.config)
+  config = pyhocon.ConfigFactory.parse_file(args.config)
   v_feat_type = config["visual_feature_type"]
   all_scores = []
   all_labels = []
 
   visual_model.eval()
-  classifier.eval(0
+  classifier.eval()
   with torch.no_grad():
     pred_dicts = []
     embs = dict()
     action_class_labels = dict()
-    f_out = open(os.path.join(config['model_path'], 'prediction.readable'), 'w') 
+    f_out = open(os.path.join(config['model_path'], f'{test_loader.dataset.split}_prediction.readable'), 'w') 
     f_out.write('Document id\taction info\tscore\tlabel\n')
     for i, batch in enumerate(test_loader):
       action_embedding,\
@@ -135,14 +144,16 @@ def test(visual_model, classifier, test_loader, args):
         global_idx = i * test_loader.batch_size + idx
         doc_id, span, label = test_loader.dataset.data_list[global_idx]
         if not doc_id in embs:
-          embs[doc_id] = dict()
+          embs[doc_id] = []
           action_class_labels[doc_id] = []
 
-        embs[doc_id] = action_output[idx].detach().cpu().numpy()
+        embs[doc_id].append(action_output[idx].detach().cpu().numpy())
         action_class_labels[doc_id].append(label)
-
-        f_out.write(f'{doc_id}\t({span})\t{scores[idx]}\t{label[idx]}\n')
-    embs = {f'{doc_id}_{doc_idx}':np.stack([embs[doc_id][span] for span in sorted(embs[doc_id])]) for doc_idx, doc_id in enumerate(sorted(embs))}
+        
+        pred_str = test_loader.dataset.ontology[scores[idx].max(-1)[1]]
+        label_str = test_loader.dataset.ontology[label]
+        f_out.write(f'{doc_id}\t{span}\t{pred_str}\t{label_str}\n')
+    embs = {f'{doc_id}_{doc_idx}':np.stack(embs[doc_id]) for doc_idx, doc_id in enumerate(sorted(embs))}
     np.savez(os.path.join(config['model_path'], f'{test_loader.dataset.split}_{v_feat_type}_finetuned.npz'), **embs)
     all_scores = torch.cat(all_scores)
     all_labels = torch.cat(all_labels)
@@ -169,7 +180,7 @@ if __name__ == '__main__':
   parser.add_argument('--evaluate_only', action='store_true')
   args = parser.parse_args()
 
-  device = torch.device('cuda' if torch.cuda_is_available() else 'cpu')
+  device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
   config = pyhocon.ConfigFactory.parse_file(args.config)
   if not args.exp_dir:
     args.exp_dir = config['model_path']
@@ -189,8 +200,14 @@ if __name__ == '__main__':
   test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
 
   # Initialize models
-  visual_model = BiLSTM(400, 400, num_layers=3)
-  classifier = nn.Linear(800, len(train_set.ontology))
+  if config['visual_feature_type'] == 'mmaction_feat':
+    input_dim = 400
+  else:
+    input_dim = 2048
+  visual_model = BiLSTM(input_dim, int(input_dim // 2), num_layers=1)
+
+  classifier = nn.Sequential(nn.Linear(input_dim, len(train_set.ontology)),
+                             nn.Dropout(config['dropout']))
 
   if config['training_method'] == 'continue':
     visual_model.load_state_dict(torch.load(config['visual_model_path']))

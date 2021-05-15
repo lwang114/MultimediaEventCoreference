@@ -19,7 +19,7 @@ def fix_embedding_length(emb, L):
     emb = emb[:L]
   return emb  
 
-class VideoM2E2ActionDataset(Dataset): # TODO
+class VideoM2E2ActionDataset(Dataset):
   def __init__(self, config, split='train'):
     super(VideoM2E2ActionDataset, self).__init__()
     self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -43,12 +43,14 @@ class VideoM2E2ActionDataset(Dataset): # TODO
     self.ontology = ontology_dict['event']
 
     # Load action embeddings
-    self.action_embeddings = np.load(os.path.join(config['data_folder'], f'{split}_{visual_feat_type}.npz'))
-    
-    # Load action labels
-    label_dict = self.create_dict_labels(id_mapping, action_anno_dict, action_dur_dict)
-    self.label_dict = {doc_id:label_dict[doc_id] for doc_id in documents}
+    self.action_embeddings = np.load(os.path.join(config['data_folder'], f'{split}_{self.visual_feat_type}.npz'))
     self.doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in self.action_embeddings}
+    frame_dict = {'_'.join(feat_id.split('_')[:-1]):self.action_embeddings[feat_id].shape[0] for feat_id in self.action_embeddings}
+
+    # Load action labels
+    label_dict = self.create_dict_labels(id_mapping, action_anno_dict, action_dur_dict, frame_dict)
+    self.label_dict = {doc_id:label_dict[doc_id] for doc_id in documents}
+
     self.data_list = self.create_data_list(self.label_dict)
     print('Number of documents: ', len(self.label_dict))
     print('Number of action segments: ', len(self.data_list))
@@ -56,7 +58,8 @@ class VideoM2E2ActionDataset(Dataset): # TODO
   def create_dict_labels(self,
                          id_map,
                          anno_dict,
-                         dur_dict):
+                         dur_dict,
+                         frame_dict):
     label_dict = dict()
     for desc_id, desc in id_map.items():
       doc_id = desc['id'].split('v=')[-1]
@@ -67,10 +70,11 @@ class VideoM2E2ActionDataset(Dataset): # TODO
       
       label_dict[doc_id] = dict()
       dur = dur_dict[desc_id]['duration_second']
+      nframes = frame_dict[doc_id] 
       for ann in anno_dict[desc_id+'.mp4']:
         action_class = ann['Event_Type'] 
         start_sec, end_sec = ann['Temporal_Boundary']
-        start, end = int(start_sec / dur * 100), int(end_sec / dur * 100)
+        start, end = int(start_sec / dur * nframes), int(end_sec / dur * nframes)
         label_dict[doc_id][(start, end)] = action_class
     return label_dict
   
@@ -87,7 +91,7 @@ class VideoM2E2ActionDataset(Dataset): # TODO
     action_embedding = torch.FloatTensor(action_embedding[span[0]:span[1]+1])
     
     action_mask = torch.zeros(self.max_frame_num)
-    action_mask[:action_embedding_size(0)] = 1.
+    action_mask[:action_embedding.size(0)] = 1.
     action_embedding = fix_embedding_length(action_embedding, self.max_frame_num)
     
     return action_embedding, action_mask, label
