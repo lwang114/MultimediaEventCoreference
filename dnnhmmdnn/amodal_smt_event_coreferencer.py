@@ -22,6 +22,9 @@ random.seed(2)
 
 NULL = '###NEW###'
 EPS = 1e-100
+MODE_V = 'visual'
+MODE_S = 'semantic'
+MODE_D = 'discourse' 
 class AmodalSMTEventCoreferencer:
   def __init__(self, event_features, action_features, config):
     '''
@@ -45,6 +48,8 @@ class AmodalSMTEventCoreferencer:
     self.Kv = config.get('Kv', 4)
     self.vocab = self.get_vocab(event_features)
     self.modes_sents = self.get_modes(event_features)
+    self.text_modes = [MODE_S, MODE_D]
+    self.P_ij = {mode: dict() for mode in self.text_modes} 
 
     self.initialize()
     logging.info(f'Number of documents = {len(self.e_feats_train)}, vocab.size = {len(self.vocab)}')
@@ -64,17 +69,23 @@ class AmodalSMTEventCoreferencer:
     for e_feat in event_feats:
       modes_sent = []
       for e_idx, e in enumerate(e_feat):
-        matched = False
+        mode = MODE_V
         for a_idx, a in enumerate(e_feat[:e_idx]):
-          if self.is_match(e, a, 'textual'):
-            mode = 'textual'
-            matched = True
+          if self.is_match(a, e, MODE_S):
+            mode = MODE_S
             break
-        if not matched:
-          mode = 'visual'
+          elif self.is_match(a, e, MODE_D):
+            mode = MODE_P
+            break
         modes_sent.append(mode)
       modes_sents.append(modes_sent)
     return modes_sents
+
+  def get_mode_feature(self, e, mode):
+    if mode in [MODE_S, MODE_V]:
+      return e['head_lemma']
+    if mode == MODE_D:
+      return '__'.join([e['mention_type'], e['number']]) # TODO
 
   def initialize(self):
     # Initialize event-event translation probs
@@ -94,33 +105,30 @@ class AmodalSMTEventCoreferencer:
     self.vars = EPS * np.ones(self.Kv)
     for k in range(self.Kv):
       self.vars[k] = np.var(X[(y == k).nonzero()[0]]) * X.shape[1] / 3
+ 
+  def is_number_match(self, e1, e2):
+    return e1['number'] == e2['number']
 
-  def has_same_plurality(self, e1, e2):
-    if e1.get('word_class', 'VERB') == 'NOUN' and e2.get('word_class', 'VERB') == 'NOUN':
-      if (e1['pos_tag'][-1] == 'S' and e2['pos_tag'][-1] != 'S') or (e2['pos_tag'][-1] == 'S' and e1['pos_tag'][-1] != 'S'):
-        return False 
-    elif e1.get('word_class', 'VERB') == 'NOUN' and e2.get('word_class', 'VERB') == 'VERB':
-      if e1['pos_tag'][-1] == 'S':
-        return False
-    elif e2.get('word_class', 'VERB') == 'NOUN' and e1.get('word_class', 'VERB') == 'VERB':
-      if e2['pos_tag'][-1] == 'S':
-        return False
-    return True
-  
   def is_match(self, e1, e2, mode):
-    if mode == 'textual':
+    if mode == MODE_S:
       v1 = e1['trigger_embedding']
       v2 = e2['trigger_embedding']
       if e1['is_visual'] != e2['is_visual']:
         return False
       if cosine_similarity(v1, v2) <= 0.5:
         return False 
-      if not self.has_same_plurality(e1, e2):
-        return False 
-    elif mode == 'visual':
+      if not self.is_number_match(e1, e2):
+        return False
+    elif mode == MODE_D:
+      if e1['head_lemma'] == NULL:
+        if e2['pos_tag'] in ['PRP', 'PRP$']:
+          return False
+      if (e1['mention_type'], e2['mention_type']) != (NOMINAL, PRON): # TODO
+        return False
+    elif mode == MODE_V:
       if not e1['is_visual'] or not e2['is_visual']:
         return False
-      if not self.has_same_plurality(e1, e2):
+      if not self.has_number_match(e1, e2):
         return False
     return True 
   
@@ -134,75 +142,85 @@ class AmodalSMTEventCoreferencer:
       v_prob = self.compute_cluster_prob(v_feat)
 
       for e_idx, (e, mode) in enumerate(zip(e_feat, modes_sent)):
-        C_ee[e_idx] = dict()
-        C_ev[e_idx] = dict()
-        token = e['head_lemma']
+        token = self.get_mode_feature(e, mode)
+        e_sent_id = e['sentence_id']
 
         # Compute event-event alignment counts
-        C_ee[e_idx][0] = self.P_ee[NULL][token] 
-        for a_idx, a in enumerate(e_feat[:e_idx]):
-          if mode == 'textual' and self.is_match(e, a, mode):
-            a_token = a['head_lemma']  
-            C_ee[e_idx][a_idx+1] = self.P_ee[a_token][token]
-        
+        if mode in self.text_modes:
+          if not mode in C_ee:
+            C_ee[mode] = dict()
+          C_ee[mode][e_idx] = dict()
+          C_ee[mode][e_idx][0] = self.P_ee[mode][NULL][token] 
+          for a_idx, a in enumerate(e_feat[:e_idx]):
+            if self.is_match(e, a, mode):
+              a_token = self.get_mode_feature(a, mode)  
+              a_sent_id = antecedent['sentence_id']
+              C_ee[mode][e_idx][a_idx+1] = self.P_ij[mode][e_sent_id-a_sent_id] * self.P_ee[mode][a_token][token]
+          norm_factor = sum(C_ee[mode][e_idx].values())
+          for a_idx in C_ee[e_idx]:
+            C_ee[e_idx][a_idx] /= max(norm_factor, EPS)
+
         # Compute event-action alignment counts
-        if mode == 'visual':
+        elif mode == MODE_V:
+          C_ev[e_idx] = dict()
+          if not mode in C_ee:
+            C_ee[MODE_V] = dict()
+          C_ee[MODE_V][e_idx] = dict()
+          C_ee[MODE_V][e_idx][0] = self.P_ee[MODE_V][NULL][token] 
           e_prob = self.action_event_prob(e)
           for v_idx, v in enumerate(v_feat):
             C_ev[e_idx][v_idx] = v_prob[v_idx] * e_prob 
 
-        norm_factor = sum(C_ee[e_idx].values())
-        norm_factor += sum(C_ev[e_idx][v_idx].sum() for v_idx in C_ev[e_idx])
-
-        for a_idx in C_ee[e_idx]:
-          C_ee[e_idx][a_idx] /= max(norm_factor, EPS)
-        
-        for v_idx in C_ev[e_idx]:
-          C_ev[e_idx][v_idx] /= max(norm_factor, EPS)
-          C_ev[e_idx][v_idx] = C_ev[e_idx][v_idx].tolist()
-        
+          norm_factor = C_ee[MODE_V][e_idx][0]
+          norm_factor += sum(C_ev[e_idx][v_idx].sum() for v_idx in C_ev[e_idx])          
+          
+          C_ee[MODE_V][e_idx][0] /= max(norm_factor, EPS)
+          for v_idx in C_ev[e_idx]:
+            C_ev[e_idx][v_idx] /= max(norm_factor, EPS)
+            C_ev[e_idx][v_idx] = C_ev[e_idx][v_idx].tolist()  
       ee_counts.append(C_ee)
       ev_counts.append(C_ev)
-
     return ee_counts, ev_counts 
 
   def update_translation_probs(self):
-    P_ee = dict()
+    P_ee = {mode: dict() for mode in self.text_modes}
     P_ve = {k:dict() for k in range(self.Kv)}
     for e_feat, v_feat, ee_count, ev_count, modes_sent in zip(self.e_feats_train, self.v_feats_train, self.ee_counts, self.ev_counts, self.modes_sents):
-      for e_idx in ee_count:
-        token = e_feat[e_idx]['head_lemma']
-        for a_idx in ee_count[e_idx]:
-          if a_idx == 0:
-            if not NULL in P_ee:
-              P_ee[NULL] = dict()
-            
-            if not token in P_ee[NULL]:
-              P_ee[NULL][token] = ee_count[e_idx][a_idx]
+      for mode in ee_count:
+        for e_idx in ee_count[mode]:
+          token = self.get_mode_feature(e_feat[e_idx], mode)
+          for a_idx in ee_count[mode][e_idx]:
+            if a_idx == 0:
+              if not NULL in P_ee[mode]:
+                P_ee[mode][NULL] = dict()
+              
+              if not token in P_ee[mode][NULL]:
+                P_ee[mode][NULL][token] = ee_count[mode][e_idx][a_idx]
+              else:
+                P_ee[mode][NULL][token] += ee_count[mode][e_idx][a_idx]
             else:
-              P_ee[NULL][token] += ee_count[e_idx][a_idx]
-          else:
-            a_token = e_feat[a_idx-1]['head_lemma']
-            if not a_token in P_ee:
-              P_ee[a_token] = dict()
+              a_token = self.get_mode_feature(e_feat[a_idx-1], mode)
+              if not a_token in P_ee[mode]:
+                P_ee[mode][a_token] = dict()
 
-            if not token in P_ee[a_token]:
-              P_ee[a_token][token] = ee_count[e_idx][a_idx]
-            else:
-              P_ee[a_token][token] += ee_count[e_idx][a_idx]
+              if not token in P_ee[mode][a_token]:
+                P_ee[mode][a_token][token] = ee_count[mode][e_idx][a_idx]
+              else:
+                P_ee[mode][a_token][token] += ee_count[mode][e_idx][a_idx]
         
-        for v_idx in ev_count[e_idx]:
-          for k in range(self.Kv):
-            if not token in P_ve[k]:
-              P_ve[k][token] = ev_count[e_idx][v_idx][k]
-            else:
-              P_ve[k][token] += ev_count[e_idx][v_idx][k]
+      for v_idx in ev_count[e_idx]:
+        for k in range(self.Kv):
+          if not token in P_ve[k]:
+            P_ve[k][token] = ev_count[e_idx][v_idx][k]
+          else:
+            P_ve[k][token] += ev_count[e_idx][v_idx][k]
 
     # Normalize
-    for a in P_ee:
-      norm_factor = sum(P_ee[a].values())
-      for e in P_ee[a]:
-        P_ee[a][e] /= max(norm_factor, EPS)
+    for mode in P_ee:
+      for a in P_ee[mode]:
+        norm_factor = sum(P_ee[mode][a].values())
+        for e in P_ee[mode][a]:
+          P_ee[mode][a][e] /= max(norm_factor, EPS)
     
     for v in P_ve:
       norm_factor = sum(P_ve[v].values())
@@ -210,19 +228,40 @@ class AmodalSMTEventCoreferencer:
         P_ve[v][e] /= max(norm_factor, EPS)
     return P_ee, P_ve
 
+  def update_position_probs(self):
+    P_ij = dict()
+    for e_feat, count, modes_sent in zip(self.e_feats_train, self.ee_counts, self.modes_sents):
+      for mode in count:
+        if mode == MODE_D:
+          for e_idx in count[mode]:
+            e_sent_id = e_feat[e_idx]['sentence_id']
+            for a_idx in count[mode][e_idx]:
+              a_sent_id = e_feat[a_idx-1]['sentence_id']
+              if not e_sent_id - a_sent_id in P_ij:
+                P_ij[e_sent_id - a_sent_id] = count[mode][e_idx][a_idx]
+              else:
+                P_ij[e_sent_id - a_sent_id] += count[mode][e_idx][a_idx]
+
+    norm_factor = sum(P_ij.values())
+    for d in P_ij:
+      P_ij[d] /= max(norm_factor, EPS)
+
+    return P_ij
+
   def log_likelihood(self):
     ll = 0.
     for e_feat, v_feat, modes_sent in zip(self.e_feats_train, self.v_feats_train, self.modes_sents):
       v_prob = self.compute_cluster_prob(v_feat)
       for e_idx, (e, mode) in enumerate(zip(e_feat, modes_sent)):
-        e_token = e['head_lemma']
-        probs = [self.P_ee[NULL][e_token]]
-        for a_idx, a in enumerate(e_feat[:e_idx]):
-          a_token = a['head_lemma']
-          if mode == 'textual' and self.is_match(e, a, mode):
-            probs.append(self.P_ee[a_token][e_token])  
-        
-        if mode == 'visual':
+        e_token = self.get_mode_feature(e, mode)
+        if mode in self.text_modes:
+          probs = [self.P_ee[mode][NULL][e_token]]
+          for a_idx, a in enumerate(e_feat[:e_idx]):
+            a_token = a['head_lemma']
+            if self.is_match(e, a, mode):
+              probs.append(self.P_ee[mode][a_token][e_token])  
+        else:
+          probs = [self.P_ee[MODE_V][NULL][e_token]]
           e_prob = np.asarray([self.P_ve[k][e_token] for k in range(self.Kv)])
           probs.extend((v_prob @ e_prob).tolist())
         
@@ -267,16 +306,20 @@ class AmodalSMTEventCoreferencer:
       scores_all.append([])
       L = v_feat.shape[0]
       for e_idx, (e, mode) in enumerate(zip(e_feat, modes_sent)):
-        e_token = e['head_lemma']
-        if mode == 'textual':
-          scores = [self.P_ee[NULL][e_token]]
+        e_token = self.get_mode_feature(e, mode)
+        e_sent_id = e['sentence_id']
+        if mode in self.text_modes:
+          scores = [self.P_ij[mode][e_sent_id] * self.P_ee[mode][NULL][e_token]]
         else:
-          scores = [1. / L]
+          scores = [self.P_ee[mode][NULL][e_token]]
+
         for a_idx, a in enumerate(e_feat[:e_idx]):
-          a_token = a['head_lemma']
           if self.is_match(e, a, mode):
-            if mode == 'textual':
-              scores.append(self.P_ee[a_token][e_token])
+            if mode in self.text_modes:
+              a_token = self.get_mode_feature(a, mode)
+              a_sent_id = a['sentence_id']
+              d = e_sent_id - a_sent_id
+              scores.append(self.P_ij[mode][d] * self.P_ee[mode][a_token][e_token])
             else:
               e_prob = self.action_event_prob(e)
               a_prob = self.action_event_prob(a)
@@ -329,70 +372,93 @@ def to_antecedents(labels):
         break
   return antecedents
 
- 
-def load_text_features(config, vocab_feat, action_labels, split):
+def get_number_and_mention_type(entity):
+  token = entity['head_lemma']
+  pos_tag = entity['pos_tag']
+  if pos_tag in ['PRP', 'PRP$']:
+    entity['mention_type'] = PRON
+    if token in PLURAL_PRON:
+      entity['number'] = PLURAL
+    else:
+      entity['number'] = SINGULAR
+  elif pos_tag in ['NNP', 'NNPS']:
+    entity['mention_type'] = PROPER
+    if pos_tag[-1] == 'S':
+      entity['number'] = PLURAL
+    else:
+      entity['number'] = SINGULAR
+  elif pos_tag in ['NN', 'NNS']:
+    entity['mention_type'] = NOMINAL
+    if pos_tag[-1] == 'S':
+      entity['number'] = PLURAL
+    else:
+      entity['number'] = SINGULAR
+  elif pos_tag == 'CD':
+    entity['mention_type'] = NOMINAL
+    entity['number'] = token
+  else:
+    entity['mention_type'] = NOMINAL
+    entity['number'] = SINGULAR
+  return entity 
+
+def load_event_features(config, action_labels, entity_label_dicts, split):
   lemmatizer = WordNetLemmatizer()
-  feature_types = config['feature_types']
+  event_feature_types = config['event_feature_types']
   event_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events.json'), 'r', 'utf-8'))
-  entity_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_entities.json'), 'r', 'utf-8'))
   ontology_map = json.load(open(os.path.join(config['data_folder'], '../ontology_mapping.json')))
   doc_train = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}.json')))
-  docs_embs = np.load(os.path.join(config['data_folder'], f'{split}_events_with_arguments_glove_embeddings.npz')) 
-  doc_to_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in docs_embs}
+  event_docs_embs = np.load(os.path.join(config['data_folder'], f'{split}_events_with_arguments_glove_embeddings.npz')) 
+  doc_to_event_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in event_docs_embs}
 
-  label_dicts = dict()
+  event_label_dicts = dict()
   event_feats = []
   doc_ids = []
   spans_all = []
   cluster_ids_all = []
   tokens_all = [] 
-  entity_label_dicts = dict()
-  for m in entity_mentions:
-    if not m['doc_id'] in entity_label_dicts:
-      entity_label_dicts[m['doc_id']] = dict()
-    span = (min(m['tokens_ids']), max(m['tokens_ids']))
-    entity_label_dicts[m['doc_id']][span] = m['cluster_id']
 
   for m in event_mentions:
-      if not m['doc_id'] in label_dicts:
-        label_dicts[m['doc_id']] = dict()
-      token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
-      span = (min(m['tokens_ids']), max(m['tokens_ids']))
-      label_dicts[m['doc_id']][span] = {'token_id': token,
-                                        'cluster_id': m['cluster_id']}
+    if not m['doc_id'] in event_label_dicts:
+      event_label_dicts[m['doc_id']] = dict()
+    token = lemmatizer.lemmatize(m['tokens'].lower(), pos='v')
+    span = (min(m['tokens_ids']), max(m['tokens_ids']))
+    event_label_dicts[m['doc_id']][span] = {'token_id': token,
+                                            'cluster_id': m['cluster_id']}
 
-      for feat_type in feature_types:
-        label_dicts[m['doc_id']][span][feat_type] = m[feat_type]
-        if feat_type == 'arguments':
-          for a_idx, a in enumerate(label_dicts[m['doc_id']][span]['arguments']):
-            a_span = (a['start'], a['end'])
-            a_cluster_id = entity_label_dicts[m['doc_id']][a_span]
-            label_dicts[m['doc_id']][span]['arguments'][a_idx]['cluster_id'] = a_cluster_id  
-        
-  for feat_idx, doc_id in enumerate(sorted(label_dicts)): # XXX
+    for feat_type in event_feature_types:
+      event_label_dicts[m['doc_id']][span][feat_type] = m[feat_type]
+
+  for feat_idx, doc_id in enumerate(sorted(event_label_dicts)): # XXX
     action_label = action_labels[feat_idx]
-    doc_embs = docs_embs[doc_to_feat[doc_id]]
-    label_dict = label_dicts[doc_id]
-    spans = sorted(label_dict)
+    event_doc_embs = event_docs_embs[doc_to_event_feat[doc_id]]
+    event_label_dict = event_label_dicts[doc_id]
+
+    spans = sorted(event_label_dict)
     events = []
     for span_idx, span in enumerate(spans):
-      event = {feat_type: label_dict[span][feat_type] for feat_type in feature_types}
-      event['trigger_embedding'] = doc_embs[span_idx, :300]
-      event['argument_embedding'] = doc_embs[span_idx, 300:].reshape(-1, 300)
+      event = {feat_type: event_label_dict[span][feat_type] for feat_type in event_feature_types}
+      event['trigger_embedding'] = event_doc_embs[span_idx, :300]
+      event = get_number_and_mention_type(event)
+
+      for a_idx, a in enumerate(event['arguments']):
+        a_span = (a['start'], a['end'])
+        event['arguments'][a_idx] = deepcopy(entity_label_dicts[doc_id][a_span]) 
+
       if 'event_type' in event:
         match_action_types = ontology_map[event['event_type']]
-        if len(set(match_action_types).intersection(set(action_label))) > 0:
+        # if len(set(match_action_types).intersection(set(action_label))) > 0:
+        if len(match_action_types) > 0:
           event['is_visual'] = True
         else:
           event['is_visual'] = False
       events.append(event)  
-    cluster_ids = [label_dict[span]['cluster_id'] for span in spans]
-    
+    cluster_ids = [event_label_dict[span]['cluster_id'] for span in spans]
     event_feats.append(events)
     doc_ids.append(doc_id)
     spans_all.append(spans)
     cluster_ids_all.append(np.asarray(cluster_ids))
     tokens_all.append([t[2] for t in doc_train[doc_id]])
+
   return event_feats,\
          doc_ids,\
          spans_all,\
@@ -427,31 +493,12 @@ def load_data(config):
   doc_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test.json')))
   feature_types = config['feature_types']
 
-  vocab_feats = {feat_type: {NULL: 0} for feat_type in feature_types}
-  vocab_feats_freq = {feat_type: {NULL: 0} for feat_type in feature_types}
-  for m in event_mentions_train + event_mentions_test:    
-    for feat_type in feature_types: 
-      if feat_type == 'arguments':
-        for a in m['arguments']:
-          if not a['head_lemma'] in vocab_feats[feat_type]:
-            vocab_feats['arguments'][a['head_lemma']] = 1
-            vocab_feats_freq['arguments'][a['head_lemma']] = 1 
-          else:
-            vocab_feats_freq['arguments'][a['head_lemma']] += 1
-      else:
-        if not m[feat_type] in vocab_feats[feat_type]:
-          vocab_feats[feat_type][m[feat_type]] = len(vocab_feats[feat_type])
-          vocab_feats_freq[feat_type][m[feat_type]] = 1
-        else:
-          vocab_feats_freq[feat_type][m[feat_type]] += 1
-  json.dump(vocab_feats_freq, open('vocab_feats_freq.json', 'w'), indent=2)
-
   action_feats_train, action_labels_train = load_visual_features(config, split='train')
   event_feats_train,\
   doc_ids_train,\
   spans_train,\
   cluster_ids_train,\
-  tokens_train = load_text_features(config, vocab_feats_freq, action_labels_train, split='train')
+  tokens_train = load_event_features(config, action_labels_train, split='train')
   print(f'Number of training examples: {len(event_feats_train)}')
   
   action_feats_test, action_labels_test = load_visual_features(config, split='test')
@@ -459,7 +506,7 @@ def load_data(config):
   doc_ids_test,\
   spans_test,\
   cluster_ids_test,\
-  tokens_test = load_text_features(config, vocab_feats_freq, action_labels_test, split='test')
+  tokens_test = load_event_features(config, action_labels_test, split='test')
 
   print(f'Number of test examples: {len(event_feats_test)}')
   
