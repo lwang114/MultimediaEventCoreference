@@ -139,9 +139,51 @@ class AmodalSMTEventCoreferencer:
     self.vars = EPS * np.ones(self.Kv)
     for k in range(self.Kv):
       self.vars[k] = np.var(X[(y == k).nonzero()[0]]) * X.shape[1] / 3
+
+  def is_str_match(self, e1, e2):
+    if e1['tokens'] == e2['tokens']:
+      return True
+    if e1['head_lemma'] == e2['head_lemma']:
+      return True
+    if (e1['tokens'] in e2['tokens']) or (e2['tokens'] in e1['tokens']): 
+      return True
+    ned = editdistance.eval(e1['tokens'], e2['tokens']) / max(len(e1['tokens']), len(e2['tokens']))
+    if ned <= 0.2:
+      return True
+    ned_lemma = editdistance.eval(e1['head_lemma'], e2['head_lemma']) / max(len(e1['head_lemma']), len(e2['head_lemma']))
+    if ned_lemma <= 0.4:
+      return True
+    return False
  
   def is_number_match(self, e1, e2):
     return e1['number'] == e2['number']
+
+  def is_argument_match(self, e1, e2):
+    a1_by_types = dict()
+    for i, a1 in enumerate(e1['arguments']):
+      if not a1['entity_type'] in a1_by_types:
+        a1_by_types[a1['entity_type']] = [i]
+      else:
+        a1_by_types[a1['entity_type']].append(i)
+    
+    a2_by_types = dict()
+    for i, a2 in enumerate(e2['arguments']):
+      if not a2['entity_type'] in a2_by_types:
+        a2_by_types[a2['entity_type']] = [i]
+      else:
+        a2_by_types[a2['entity_type']].append(i)
+
+    for a_type in a2_by_types:
+      if not a_type in a1_by_types:
+        continue
+      for a2_idx in a2_by_types[a_type]:
+        a2 = e2['arguments'][a2_idx]
+        a1s = [e1['arguments'][i] for i in a1_by_types[a_type]]
+
+        for a1 in a1s:
+          if is_str_match(a1, a2):
+            return True 
+    return False
 
   def is_match(self, e1, e2, mode):
     if mode == MODE_S:
@@ -173,7 +215,7 @@ class AmodalSMTEventCoreferencer:
       e1_token = self.get_mode_feature(e1, MODE_V)
       if not e1_token in self.P_ve[0]:
         return False
-    return True 
+    return True  
 
   def compute_alignment_counts(self):
     ev_counts = []
@@ -379,7 +421,7 @@ class AmodalSMTEventCoreferencer:
         for a_idx, a in enumerate(e_feat[:e_idx]):
           a_sent_id = a['sentence_id']
           d = e_sent_id - a_sent_id
-          if self.is_match(a, e, mode):
+          if self.is_match(a, e, mode) and self.is_argument_match(a, e):
             if mode in self.text_modes:
               a_token = self.get_mode_feature(a, mode)
               scores.append(self.P_ij[mode][d] * self.P_ee[mode][a_token][e_token])
@@ -464,6 +506,21 @@ def get_number_and_mention_type(entity):
     entity['number'] = SINGULAR
   return entity 
 
+def get_proper_mention(entity, label_dict):
+  cluster_id = entity['cluster_id']
+  mention_type = entity['mention_type']
+  found = False
+  for span, m in label_dict.items():
+    if (m['cluster_id'] == cluster_id) and (m['mention_type'] == PROPER):
+      found = True
+      return m
+
+  if not found and (mention_type == PRON):
+    for span, m in label_dict.items():
+      if (m['cluster_id'] == cluster_id) and (m['mention_type'] == NOMINAL):
+        return m
+  return entity
+
 def load_event_features(config, split, action_labels=None):
   lemmatizer = WordNetLemmatizer()
   event_feature_types = config['feature_types']
@@ -487,7 +544,19 @@ def load_event_features(config, split, action_labels=None):
     if not m['doc_id'] in entity_label_dicts:
       entity_label_dicts[m['doc_id']] = dict()
     span = (min(m['tokens_ids']), max(m['tokens_ids']))
+    m = get_number_and_mention_type(m)
     entity_label_dicts[m['doc_id']][span] = deepcopy(m)      
+    
+  # Replace pronouns with its coreferent proper mention
+  new_entity_label_dicts = dict() 
+  for doc_id in entity_label_dicts:
+    new_entity_dict = dict()
+    for span, m in entity_label_dicts[doc_id].items():
+      if m['mention_type'] in [PRON, NOMINAL]:
+        new_entity_dict[span] = get_proper_mention(m, entity_label_dicts[doc_id])
+
+    new_entity_label_dicts[doc_id] = deepcopy(new_entity_dict)
+  entity_label_dicts = deepcopy(new_entity_label_dicts)
 
   for m in event_mentions:
     if not m['doc_id'] in event_label_dicts:
