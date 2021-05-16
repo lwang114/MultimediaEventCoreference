@@ -738,7 +738,8 @@ if __name__ == '__main__':
     if doc_id in select_ids:
       plot_attention(predictions[doc_idx], event_feats_test[doc_idx], action_labels_test[doc_idx], out_prefix=os.path.join(config['model_path'], doc_id))
      
-    pred_clusters_str, gold_clusters_str = conll_eval.make_output_readable(pred_clusters, gold_clusters, token) 
+    arguments = {(min(e['tokens_ids']), max(e['tokens_ids'])):e['arguments'] for e in event_feats_test[doc_idx]} 
+    pred_clusters_str, gold_clusters_str = conll_eval.make_output_readable(pred_clusters, gold_clusters, token, arguments) 
     token_str = ' '.join(token)
     f_out.write(f'{doc_id}: {token_str}\n')
     f_out.write(f'Pred: {pred_clusters_str}\n')
