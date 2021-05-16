@@ -66,7 +66,7 @@ class SMTEntityCoreferencer:
       modes_sent = []
       for e_idx, e in enumerate(e_feat):
         mode = MODE_D
-        for a_idx, a in enumerate(e_feat[:e_idx]):
+        for a_idx, a in enumerate(e_feat[:e_idx]):          
           if self.is_match(a, e, mode=MODE_S):
             mode = MODE_S
             break
@@ -145,20 +145,23 @@ class SMTEntityCoreferencer:
     ned = editdistance.eval(e1['tokens'], e2['tokens']) / max(len(e1['tokens']), len(e2['tokens']))
     if ned <= 0.2:
       return True
+    ned_lemma = editdistance.eval(e1['head_lemma'], e2['head_lemma']) / max(len(e1['head_lemma']), len(e2['head_lemma']))
+    if ned_lemma <= 0.4:
+      return True
     return False
 
   def is_number_match(self, e1, e2):
     if e1['number'] != e2['number']:
-      if sorted((e1['number'], e2['number'])) != (PLURAL, NUMERIC):  
+      if sorted((e1['number'], e2['number'])) != sorted((PLURAL, NUMERIC)):  
         return False
-    elif ((e1['number'], e2['number']) == (NUMERIC, NUMERIC)) and (e1['head_lemma'] != e2['head_lemma']):
+    elif (e1['number'] == e2['number'] == NUMERIC) and (e1['head_lemma'] != e2['head_lemma']):
       return False
     return True
 
   def is_consecutive(self, e1, e2):
     span1 = (min(e1['tokens_ids']), max(e1['tokens_ids']))
     span2 = (min(e2['tokens_ids']), max(e2['tokens_ids']))
-    return abs(span2[0] - span1[1]) <= 2
+    return abs(span2[0] - span1[1]) <= 1
 
   def is_match(self, e1, e2, mode):
     if mode == MODE_S:
@@ -167,7 +170,7 @@ class SMTEntityCoreferencer:
           return False
         else:
           return True
-      if self.is_str_match(e1, e2):
+      if self.is_str_match(e1, e2): 
         if e1['entity_type'] != e2['entity_type'] or not self.is_number_match(e1, e2):
           return False
         
@@ -188,25 +191,16 @@ class SMTEntityCoreferencer:
         else:
           return True
       
-      if self.is_consecutive(e1, e2): # Capture juxtaposition formed by consecutive mentions 
+      if self.is_consecutive(e1, e2): # Capture collocations formed by consecutive mentions 
         if (e1['pos_tag'] == 'PRP$') or (e1['pos_tag'] == 'JJ' and e1['entity_type'] != 'Person'):
           return False
-        elif e1['entity_type'] == e2['entity_type'] and self.is_number_match(e1, e2):
+        if e1['entity_type'] == e2['entity_type'] and self.is_number_match(e1, e2):
           return True 
-        else:
-          return False
-      '''
-      elif self.is_consecutive(e1, e1['right_mention']) and self.is_consecutive(e2, e2['right_mention']): # Avoid false links between two juxtapositions
-        if self.is_str_match(e1['right_mention'], e2['right_mention']):
-          return True
-        else:
-          return False       
-      elif self.is_consecutive(e1['left_mention'], e1) and self.is_consecutive(e2['left_mention'], e2): # Avoid false links between two juxtapositions
-        if self.is_str_match(e1, e2) and self.is_str_match(e1['left_mention'], e2['left_mention']):
-          return True
-        else:
-          return False
-      '''
+      elif e2['pos_tag'] == 'CD':
+        if e1['entity_type'] == e2['entity_type'] and self.is_number_match(e1, e2):
+          return True  
+      else:
+        return False
       return False
     if mode == MODE_P:
       if e1['head_lemma'] == NULL:
@@ -236,7 +230,15 @@ class SMTEntityCoreferencer:
           align_count[mode][e_idx+1][0] = 0
           
         for a_idx, antecedent in enumerate(e_feat[:e_idx]):
-          if self.is_match(antecedent, e, mode):
+          '''
+          if (sorted((e['head_lemma'], antecedent['head_lemma'])) == sorted(('lebanon', 'lebanese'))): # XXX
+            print(mode)
+            print(self.is_str_match(antecedent, e))
+            print(e.items())
+            print(antecedent.items())
+            print('\n')
+          '''
+          if self.is_match(antecedent, e, mode):                       
             a_token = self.get_mode_feature(antecedent, mode)
             a_sent_id = antecedent['sentence_id']
             align_count[mode][e_idx+1][a_idx+1] = self.P_ij[mode][e_sent_id-a_sent_id] * self.P_ee[mode][a_token][token]
@@ -408,7 +410,7 @@ def load_text_features(config, split):
     entities = []
     for span_idx, span in enumerate(spans):
       entity = deepcopy(label_dict[span])
-      entity['entity_embedding'] = doc_embs[span_idx, :300]
+      entity['entity_embedding'] = [] # XXX doc_embs[span_idx, :300]
       entity['idx'] = span_idx 
       token = entity['head_lemma']
       pos_tag = entity['pos_tag']

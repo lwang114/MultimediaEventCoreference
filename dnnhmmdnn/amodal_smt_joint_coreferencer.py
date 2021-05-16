@@ -31,6 +31,9 @@ PLURAL = 'plural'
 PROPER = 'proper'
 NOMINAL = 'nominal'
 PRON = 'pronoun'
+MODE_S = 'semantic'
+MODE_V = 'visual'
+MODE_D_ENTITY = 'syntactic'
 
 class AmodalSMTJointCoreferencer:
   def __init__(self, event_features, entity_features, action_features, config):
@@ -53,8 +56,9 @@ class AmodalSMTJointCoreferencer:
     self.P_ea = dict()
     self.Kv = config.get('Kv', 4)
     self.vocab = self.get_vocab(event_features)
-    self.event_modes_sent, self.entity_modes_sent = self.get_modes(event_features)
-
+    self.event_modes_sents, self.entity_modes_sents = self.get_modes(event_features)
+    self.event_coref_model.modes_sents = self.event_modes_sents # XXX
+  
     self.initialize()
     logging.info(f'Number of documents = {len(self.e_feats_train)}, vocab.size = {len(self.vocab)}')
     
@@ -72,7 +76,9 @@ class AmodalSMTJointCoreferencer:
     return vocab 
   
   def get_modes(self, event_feats):
-    event_modes_sents = [['textual' for _ in e_feat] for e_feat in event_feats] # XXX self.event_coref_model.get_modes(event_feats) 
+    event_modes_sents = self.event_coref_model.get_modes(event_feats) 
+    # XXX
+    # event_modes_sents = [[MODE_S if m == MODE_V else m for m in modes_sent] for modes_sent in event_modes_sents]
     argument_feats = self.get_argument_features(event_feats) 
     entity_modes_sents = self.entity_coref_model.get_modes(argument_feats)
     argument_modes_sents = []
@@ -115,28 +121,11 @@ class AmodalSMTJointCoreferencer:
         norm_factor = sum(self.P_ea[a_type][e_token].values())
         for a_token in self.P_ea[a_type][e_token]:
           self.P_ea[a_type][e_token][a_token] /= norm_factor
-
-  def has_same_plurality(self, e1, e2):
-    if e1.get('word_class', 'VERB') == 'NOUN' and e2.get('word_class', 'VERB') == 'NOUN':
-      if (e1['pos_tag'][-1] == 'S' and e2['pos_tag'][-1] != 'S') or (e2['pos_tag'][-1] == 'S' and e1['pos_tag'][-1] != 'S'):
-        return False 
-    elif e1.get('word_class', 'VERB') == 'NOUN' and e2.get('word_class', 'VERB') == 'VERB':
-      if e1['pos_tag'][-1] == 'S':
-        return False
-    elif e2.get('word_class', 'VERB') == 'NOUN' and e1.get('word_class', 'VERB') == 'VERB':
-      if e2['pos_tag'][-1] == 'S':
-        return False
-    return True
-  
+ 
   def is_match(self, e1, e2, mode):
     if not self.event_coref_model.is_match(e1, e2, mode):
       return False
-    
-    first_args = [a1['tokens'] for a1 in e1['arguments']]
-    second_args = [a2['tokens'] for a2 in e2['arguments']]
-    first_cluster_ids = [a1['cluster_id'] for a1 in e1['arguments']]
-    second_cluster_ids = [a2['cluster_id'] for a2 in e2['arguments']]
-    
+        
     a1_by_types = dict()
     for i, a1 in enumerate(e1['arguments']):
       if not a1['entity_type'] in a1_by_types:
@@ -159,7 +148,7 @@ class AmodalSMTJointCoreferencer:
         a2 = e2['arguments'][a2_idx]
         a1s = [e1['arguments'][i] for i in a1_by_types[a_type]]
         
-        
+        '''        
         if (a_type == 'GeopoliticalEntity') and (a2['mention_type'] == PROPER):
           a2_emb = a2['entity_embedding']
           a1_embs = [a1['entity_embedding'] for a1 in a1s if a1['mention_type'] == PROPER]
@@ -167,11 +156,18 @@ class AmodalSMTJointCoreferencer:
             score = max([cosine_similarity(a1_emb, a2_emb) for a1_emb in a1_embs])
             if score <= 0.5:
               return False 
-        elif a_type == 'Person':
+        '''
+        if a_type == 'Person':
           c2 = a2['cluster_id']
           c1s = [a1['cluster_id'] for a1 in a1s]  
           print(e2['doc_id'], e2['head_lemma'], a2['tokens'], c2, e1['head_lemma'], [a1['tokens'] for a1 in a1s], [a1['cluster_id'] for a1 in a1s]) # XXX
           if (len(c1s) > 0) and not c2 in c1s:
+            matched = False
+            for a1 in a1s:
+              if self.entity_coref_model.is_match(a1, a2, MODE_D_ENTITY): 
+                matched = True
+            if not matched:
+              print('Not matched') # XXX
             return False
     return True
        
@@ -186,7 +182,7 @@ class AmodalSMTJointCoreferencer:
         span = (min(e['tokens_ids']), max(e['tokens_ids']))
       
         if not doc_id in label_dict:
-          label_dict[doc_id] = dict()
+          label_dict[doc_id] = dict() 
         label_dict[doc_id][span] = c
 
     for idx, e_feat in enumerate(self.e_feats_train): 
@@ -201,11 +197,14 @@ class AmodalSMTJointCoreferencer:
     return self.event_coref_model.compute_cluster_prob(v_feat)
 
   def action_event_prob(self, e):
+    P_ij = self.event_coref_model.P_ij[MODE_V]
     P_ve = self.event_coref_model.P_ve
+    
     # P_va = self.entity_coref_model.P_va
 
     e_token = e['head_lemma']
-    e_prob = np.asarray([P_ve[k][e_token] for k in range(self.Kv)])
+    d = e['sentence_id']
+    e_prob = np.asarray([P_ij[d] * P_ve[k][e_token] for k in range(self.Kv)])
     '''
     a_by_types = dict()
     for i, a in enumerate(e['arguments']):
@@ -222,11 +221,14 @@ class AmodalSMTJointCoreferencer:
     '''
     return e_prob 
 
-  def event_event_prob(self, e1, e2, arg_modes):
-    P_ee = self.event_coref_model.P_ee
+  def event_event_prob(self, e1, e2, event_mode, arg_modes):
+    P_ee = self.event_coref_model.P_ee[event_mode]
+    P_ij = self.event_coref_model.P_ij[event_mode]
     e1_token = e1['head_lemma']
     e2_token = e2['head_lemma']
-    prob = P_ee[e1_token][e2_token]
+    d = e2['sentence_id'] - e1['sentence_id']
+    prob = P_ij[d] * P_ee[e1_token][e2_token]
+
     return prob
   
   def argument_argument_prob(self, e1, e2, arg_modes):
@@ -273,7 +275,6 @@ class AmodalSMTJointCoreferencer:
               a_prob.append(P_ij[arg_mode][d_sent] * P_aa[arg_mode][a1_token][a2_token])
             else:
               a_prob.append(P_ij[arg_mode][d_sent] * P_aa[arg_mode][NULL][a2_token])
-            print(a1_token, a2_token, prob) # XXX 
           prob *= np.max(a_prob)
     return prob
             
@@ -296,13 +297,17 @@ class AmodalSMTJointCoreferencer:
                   'head_lemma': NULL,
                   'arguments': []}
 
-        scores = [self.event_event_prob(e_null, e, arg_modes)]
+        if self.event_coref_model.is_match(e_null, e, event_mode): 
+          scores = [self.event_event_prob(e_null, e, event_mode, arg_modes)]
+        else:
+          scores = [0.]
+
         for a_idx, a in enumerate(e_feat[:e_idx]):
           score = 0
           if self.is_match(e, a, event_mode):
             # If the current mention is in textual mode
-            if event_mode == 'textual':
-              score += self.event_event_prob(a, e, arg_modes)  
+            if event_mode in self.event_coref_model.text_modes:
+              score += self.event_event_prob(a, e, event_mode, arg_modes) 
             # If the current mention is in visual mode
             elif event_mode == 'visual':
               e_prob = self.action_event_prob(e) 
