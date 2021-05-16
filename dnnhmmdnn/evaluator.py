@@ -122,8 +122,10 @@ class CoNLLEvaluation:
 
   def make_output_readable(self, pred_clusters, gold_clusters, tokens, arguments=None):
     if arguments:
-      pred_clusters_str = [[' '.join(tokens[m[0]:m[1]+1]) for m in cluster] for cluster in pred_clusters]
-      gold_clusters_str = [[[' '.join(tokens[m[0]:m[1]+1]), [' '.join(a['tokens']) for a in arguments.get(tuple(m), [])]] for m in cluster] for cluster in gold_clusters]
+      pred_clusters_str = [[[' '.join(tokens[m[0]:m[1]+1]), [a['tokens'] for a in arguments.get(tuple(m), [])]] for m in cluster] for cluster in pred_clusters]
+      gold_clusters_str = [[[' '.join(tokens[m[0]:m[1]+1]), [a['tokens'] for a in arguments.get(tuple(m), [])]] for m in cluster] for cluster in gold_clusters]
+      pred_clusters_str = [['{}:({})'.format(m[0], ','.join(m[1])) for m in c] for c in pred_clusters_str]
+      gold_clusters_str = [['{}:({})'.format(m[0], ','.join(m[1])) for m in c] for c in gold_clusters_str]
     else:
       pred_clusters_str = [[' '.join(tokens[m[0]:m[1]+1]) for m in cluster] for cluster in pred_clusters]
       gold_clusters_str = [[' '.join(tokens[m[0]:m[1]+1]) for m in cluster] for cluster in gold_clusters]
