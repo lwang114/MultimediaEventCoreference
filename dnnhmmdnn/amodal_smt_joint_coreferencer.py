@@ -353,6 +353,35 @@ def to_antecedents(labels):
         antecedents[idx] = a_idx
         break
   return antecedents
+
+def get_number_and_mention_type(entity):
+  token = entity['head_lemma']
+  pos_tag = entity['pos_tag']
+  if pos_tag in ['PRP', 'PRP$']:
+    entity['mention_type'] = PRON
+    if token in PLURAL_PRON:
+      entity['number'] = PLURAL
+    else:
+      entity['number'] = SINGULAR
+  elif pos_tag in ['NNP', 'NNPS']:
+    entity['mention_type'] = PROPER
+    if pos_tag[-1] == 'S':
+      entity['number'] = PLURAL
+    else:
+      entity['number'] = SINGULAR
+  elif pos_tag in ['NN', 'NNS']:
+    entity['mention_type'] = NOMINAL
+    if pos_tag[-1] == 'S':
+      entity['number'] = PLURAL
+    else:
+      entity['number'] = SINGULAR
+  elif pos_tag == 'CD':
+    entity['mention_type'] = NOMINAL
+    entity['number'] = token
+  else:
+    entity['mention_type'] = NOMINAL
+    entity['number'] = SINGULAR
+  return entity 
  
 def load_event_features(config, action_labels, entity_label_dicts, split):
   lemmatizer = WordNetLemmatizer()
@@ -391,6 +420,8 @@ def load_event_features(config, action_labels, entity_label_dicts, split):
     for span_idx, span in enumerate(spans):
       event = {feat_type: event_label_dict[span][feat_type] for feat_type in event_feature_types}
       event['trigger_embedding'] = event_doc_embs[span_idx, :300]
+      event = get_number_and_mention_type(event)
+
       for a_idx, a in enumerate(event['arguments']):
         a_span = (a['start'], a['end'])
         event['arguments'][a_idx] = deepcopy(entity_label_dicts[doc_id][a_span]) 
@@ -444,33 +475,8 @@ def load_entity_features(config, split):
       entity = deepcopy(label_dict[span])  
       entity['entity_embedding'] = doc_embs[span_idx, :300]
       entity['idx'] = span_idx 
-      token = entity['head_lemma']
-      pos_tag = entity['pos_tag']
-      if pos_tag in ['PRP', 'PRP$']:
-        entity['mention_type'] = PRON
-        if token in PLURAL_PRON:
-          entity['number'] = PLURAL
-        else:
-          entity['number'] = SINGULAR
-      elif pos_tag in ['NNP', 'NNPS']:
-        entity['mention_type'] = PROPER
-        if pos_tag[-1] == 'S':
-          entity['number'] = PLURAL
-        else:
-          entity['number'] = SINGULAR
-      elif pos_tag in ['NN', 'NNS']:
-        entity['mention_type'] = NOMINAL
-        if pos_tag[-1] == 'S':
-          entity['number'] = PLURAL
-        else:
-          entity['number'] = SINGULAR
-      elif pos_tag == 'CD':
-        entity['mention_type'] = NOMINAL
-        entity['number'] = token
-      else:
-        entity['mention_type'] = NOMINAL
-        entity['number'] = SINGULAR
-    
+      entity = get_number_and_mention_type(entity)
+   
       label_dicts[doc_id][span] = deepcopy(entity)
       entities.append(entity)  
     cluster_ids = [label_dict[span]['cluster_id'] for span in spans]
