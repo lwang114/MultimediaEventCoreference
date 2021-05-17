@@ -10,6 +10,7 @@ import itertools
 import argparse
 import pyhocon
 import random
+import editdistance
 from copy import deepcopy
 from scipy.special import logsumexp
 from sklearn.cluster import KMeans
@@ -136,9 +137,9 @@ class AmodalSMTEventCoreferencer:
 
     self.centroids = deepcopy(kmeans.cluster_centers_)
     y = kmeans.predict(X)
-    self.vars = EPS * np.ones(self.Kv)
-    for k in range(self.Kv):
-      self.vars[k] = np.var(X[(y == k).nonzero()[0]]) * X.shape[1] / 3
+    self.vars = 0.01 * np.ones(self.Kv)
+    # XXX for k in range(self.Kv):
+    #   self.vars[k] = np.var(X[(y == k).nonzero()[0]]) * X.shape[1] / 3
 
   def is_str_match(self, e1, e2):
     if e1['tokens'] == e2['tokens']:
@@ -148,10 +149,10 @@ class AmodalSMTEventCoreferencer:
     if (e1['tokens'] in e2['tokens']) or (e2['tokens'] in e1['tokens']): 
       return True
     ned = editdistance.eval(e1['tokens'], e2['tokens']) / max(len(e1['tokens']), len(e2['tokens']))
-    if ned <= 0.2:
+    if ned <= 0.5:
       return True
     ned_lemma = editdistance.eval(e1['head_lemma'], e2['head_lemma']) / max(len(e1['head_lemma']), len(e2['head_lemma']))
-    if ned_lemma <= 0.4:
+    if ned_lemma <= 0.5:
       return True
     return False
  
@@ -173,6 +174,9 @@ class AmodalSMTEventCoreferencer:
       else:
         a2_by_types[a2['entity_type']].append(i)
 
+    if len(set(a2_by_types.keys()).intersection(set(a1_by_types.keys()))) == 0:
+      return True
+
     for a_type in a2_by_types:
       if not a_type in a1_by_types:
         continue
@@ -180,12 +184,23 @@ class AmodalSMTEventCoreferencer:
         a2 = e2['arguments'][a2_idx]
         a1s = [e1['arguments'][i] for i in a1_by_types[a_type]]
 
-        for a1 in a1s:
-          if is_str_match(a1, a2):
-            return True 
-    return False
+        if a_type == 'Person':
+          matched = False
+          for a1 in a1s:
+            if self.is_str_match(a1, a2):
+              matched = True
+              break
+            elif cosine_similarity(a1['entity_embedding'], a2['entity_embedding']) > 0.3:
+              matched = True
+          if not matched:
+            return False
+             
+    return True
 
   def is_match(self, e1, e2, mode):
+    if e1['head_lemma'] != NULL:
+      if e1['event_type'] != e2['event_type']:
+        return False
     if mode == MODE_S:
       if e1['head_lemma'] == NULL:
         if e2['pos_tag'] in ['PRP', 'PRP$']:
@@ -421,7 +436,7 @@ class AmodalSMTEventCoreferencer:
         for a_idx, a in enumerate(e_feat[:e_idx]):
           a_sent_id = a['sentence_id']
           d = e_sent_id - a_sent_id
-          if self.is_match(a, e, mode) and self.is_argument_match(a, e):
+          if self.is_match(a, e, mode): # XXX and self.is_argument_match(a, e):
             if mode in self.text_modes:
               a_token = self.get_mode_feature(a, mode)
               scores.append(self.P_ij[mode][d] * self.P_ee[mode][a_token][e_token])
@@ -508,6 +523,8 @@ def get_number_and_mention_type(entity):
 
 def get_proper_mention(entity, label_dict):
   cluster_id = entity['cluster_id']
+  if cluster_id == 0:
+    return entity
   mention_type = entity['mention_type']
   found = False
   for span, m in label_dict.items():
@@ -530,7 +547,9 @@ def load_event_features(config, split, action_labels=None):
   ontology_map = json.load(open(os.path.join(config['data_folder'], '../ontology_mapping.json')))
   doc_train = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}.json')))
   event_docs_embs = np.load(os.path.join(config['data_folder'], f'{split}_events_with_arguments_glove_embeddings.npz')) 
+  entity_docs_embs = np.load(os.path.join(config['data_folder'], f'{split}_entities_glove_embeddings.npz'))
   doc_to_event_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in event_docs_embs}
+  doc_to_entity_feat = {'_'.join(feat_id.split('_')[:-1]):feat_id for feat_id in entity_docs_embs}
 
   entity_label_dicts = dict()
   event_label_dicts = dict()
@@ -545,8 +564,13 @@ def load_event_features(config, split, action_labels=None):
       entity_label_dicts[m['doc_id']] = dict()
     span = (min(m['tokens_ids']), max(m['tokens_ids']))
     m = get_number_and_mention_type(m)
-    entity_label_dicts[m['doc_id']][span] = deepcopy(m)      
-    
+    entity_label_dicts[m['doc_id']][span] = deepcopy(m)
+
+  for doc_id in sorted(entity_label_dicts):
+    for span_idx, span in enumerate(sorted(entity_label_dicts[doc_id])):
+      entity_doc_embs = entity_docs_embs[doc_to_entity_feat[doc_id]]
+      entity_label_dicts[doc_id][span]['entity_embedding'] = entity_doc_embs[span_idx, :300]  
+
   # Replace pronouns with its coreferent proper mention
   new_entity_label_dicts = dict() 
   for doc_id in entity_label_dicts:
@@ -554,6 +578,8 @@ def load_event_features(config, split, action_labels=None):
     for span, m in entity_label_dicts[doc_id].items():
       if m['mention_type'] in [PRON, NOMINAL]:
         new_entity_dict[span] = get_proper_mention(m, entity_label_dicts[doc_id])
+      else:
+        new_entity_dict[span] = deepcopy(m)
 
     new_entity_label_dicts[doc_id] = deepcopy(new_entity_dict)
   entity_label_dicts = deepcopy(new_entity_label_dicts)
@@ -586,17 +612,21 @@ def load_event_features(config, split, action_labels=None):
 
       if 'event_type' in event:
         match_action_types = ontology_map.get(event['event_type'], [])
+         
+        ''' XXX
         if action_labels is not None:
           action_label = action_labels[feat_idx]
           if len(set(match_action_types).intersection(set(action_label))) > 0:
             event['is_visual'] = True
           else:
             event['is_visual'] = False
-        elif len(match_action_types) > 0:
+        '''
+        if len(match_action_types) > 0:
           event['is_visual'] = True
         else:
           event['is_visual'] = False
-
+        event['is_visual'] = True
+        
       events.append(event)  
     cluster_ids = [event_label_dict[span]['cluster_id'] for span in spans]
     event_feats.append(events)
@@ -621,7 +651,7 @@ def load_visual_features(config, split):
       label_dicts[m['doc_id']] = dict()
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
       label_dicts[m['doc_id']][span] = m['cluster_id']
-  action_npz = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_feat.npz')) # f'{split}_original_vid_3d.npz')) # f'{split}_mmaction_feat.npz')) # XXX f'{split}_events_event_type_labels.npz'
+  action_npz = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_event_finetuned_crossmedia.npz')) # f'{split}_mmaction_feat.npz')) # f'{split}_original_vid_3d.npz')) # f'{split}_mmaction_feat.npz')) # XXX f'{split}_events_event_type_labels.npz'
     
   action_label_path = os.path.join(config['data_folder'], f'{split}_mmaction_event_feat_labels_average.npz')
   if os.path.exists(action_label_path):
@@ -647,7 +677,11 @@ def load_data(config):
   doc_ids_train = []
   spans_train = []
   cluster_ids_train = []
-  tokens_train = []
+  tokens_train = [] 
+  ontology_map = json.load(open(os.path.join(config['data_folder'], '../ontology_mapping.json')))
+  event_stoi = {k:i for i, k in enumerate(ontology_map)}
+  n_types = len(event_stoi)
+
   for split in config['splits']['train']:
     cur_action_feats_train, cur_action_labels_train = load_visual_features(config, split=split)
     cur_event_feats_train,\
@@ -656,6 +690,8 @@ def load_data(config):
     cur_cluster_ids_train,\
     cur_tokens_train = load_event_features(config, split=split, action_labels=cur_action_labels_train)
     
+    # cur_action_feats_train = [[np.eye(n_types)[event_stoi[e['event_type']]] for e in e_feat if e['is_visual']] for e_feat in cur_event_feats_train] # XXX 
+    # cur_action_feats_train = [np.stack(a_feat) if len(a_feat) > 0 else np.zeros((1,n_types)) for a_feat in cur_action_feats_train]
     action_feats_train.extend(cur_action_feats_train)
     if cur_action_labels_train is not None:
       action_labels_train.extend(cur_action_labels_train)
@@ -682,7 +718,8 @@ def load_data(config):
     cur_spans_test,\
     cur_cluster_ids_test,\
     cur_tokens_test = load_event_features(config, split=split, action_labels=cur_action_labels_test)
-    
+
+    # cur_action_feats_test = [[np.eye(n_types)[event_stoi[e['event_type']]] for e in e_feat if e['is_visual']] for e_feat in cur_event_feats_test] # XXX
     action_feats_test.extend(cur_action_feats_test)
     if cur_action_labels_test is not None:
       action_labels_test.extend(cur_action_labels_test)
