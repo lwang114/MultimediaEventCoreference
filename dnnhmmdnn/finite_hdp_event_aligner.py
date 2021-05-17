@@ -407,7 +407,7 @@ def to_antecedents(labels):
 def load_text_features(config, split):
   lemmatizer = WordNetLemmatizer()
   feature_types = config['feature_types']
-  event_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events_with_linguistic_features.json'), 'r', 'utf-8'))
+  event_mentions = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}_events.json'), 'r', 'utf-8'))
   doc_train = json.load(codecs.open(os.path.join(config['data_folder'], f'{split}.json')))
 
   label_dicts = {}
@@ -452,9 +452,9 @@ def load_text_features(config, split):
 
 def load_data(config):
   lemmatizer = WordNetLemmatizer() 
-  event_mentions_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train_events_with_linguistic_features.json'), 'r', 'utf-8'))
+  event_mentions_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train_events.json'), 'r', 'utf-8'))
   doc_train = json.load(codecs.open(os.path.join(config['data_folder'], 'train.json')))
-  event_mentions_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test_events_with_linguistic_features.json'), 'r', 'utf-8'))
+  event_mentions_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test_events.json'), 'r', 'utf-8'))
   doc_test = json.load(codecs.open(os.path.join(config['data_folder'], 'test.json')))
   feature_types = config['feature_types']
 
@@ -538,7 +538,7 @@ if __name__ == '__main__':
                             beta0=config['beta0'],
                             Kc=Kc,
                             Kf=Kf)
-  aligner.train(350, out_dir=config['model_path'])
+  aligner.train(100, out_dir=config['model_path'])
 
   ## Test and evaluation
   pred_cluster_ids = [np.asarray(cluster_ids) for cluster_ids in aligner.cluster_ids[len(event_feats_train):]]
