@@ -1,0 +1,25 @@
+{
+  "gpu_num" : [0],
+  "bert_model": "roberta-large",    
+  "use_gold_mentions": true,
+  "mention_type": "events",
+  "top_k": 0.35,
+  "training_method": "continue",
+
+  "random_seed": 0,
+  "epochs": 61,
+  "batch_size": 32,
+  "learning_rate": 1e-4,
+  "weight_decay": 0,
+  "loss": "bce",
+  "optimizer": "adam",
+  "adam_epsilon": 1e-8,
+    
+  "log_path": "models/coref_crossmedia_events_video_m2e2/",
+  "image_dir": "",
+  "data_folder": "data/video_m2e2/mentions",
+  "is_one_indexed": false,
+  "text_model_path": "models/coref_crossmedia_events_video_m2e2/text_model.60.pth",
+  "visual_model_path": "models/coref_crossmedia_events_video_m2e2/visual_model.60.pth",
+  "model_path": "models/coref_crossmedia_events_video_m2e2/" 
+}
