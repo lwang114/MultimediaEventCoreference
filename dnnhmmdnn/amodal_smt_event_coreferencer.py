@@ -83,6 +83,7 @@ class AmodalSMTEventCoreferencer:
       modes_sent = []
       for e_idx, e in enumerate(e_feat):
         mode = MODE_V # XXX
+        '''
         for a_idx, a in enumerate(e_feat[:e_idx]):
           if self.is_match(a, e, MODE_S):
             mode = MODE_S
@@ -92,6 +93,7 @@ class AmodalSMTEventCoreferencer:
             break
         if mode == MODE_V and not e['is_visual']:
           mode = MODE_S
+        '''
         modes_sent.append(mode)
       modes_sents.append(modes_sent)
     return modes_sents
@@ -190,7 +192,7 @@ class AmodalSMTEventCoreferencer:
             if self.is_str_match(a1, a2):
               matched = True
               break
-            elif cosine_similarity(a1['entity_embedding'], a2['entity_embedding']) > 0.3:
+            elif cosine_similarity(a1['entity_embedding'], a2['entity_embedding']) > 0.4:
               matched = True
           if not matched:
             return False
@@ -562,7 +564,7 @@ def load_event_features(config, split, action_labels=None):
   for m in entity_mentions:
     if not m['doc_id'] in entity_label_dicts:
       entity_label_dicts[m['doc_id']] = dict()
-    span = (min(m['tokens_ids']), max(m['tokens_ids']))
+    span = (min(m['tokens_ids']), max(m['tokens_ids'])) 
     m = get_number_and_mention_type(m)
     entity_label_dicts[m['doc_id']][span] = deepcopy(m)
 
@@ -580,7 +582,6 @@ def load_event_features(config, split, action_labels=None):
         new_entity_dict[span] = get_proper_mention(m, entity_label_dicts[doc_id])
       else:
         new_entity_dict[span] = deepcopy(m)
-
     new_entity_label_dicts[doc_id] = deepcopy(new_entity_dict)
   entity_label_dicts = deepcopy(new_entity_label_dicts)
 
@@ -651,7 +652,7 @@ def load_visual_features(config, split):
       label_dicts[m['doc_id']] = dict()
       span = (min(m['tokens_ids']), max(m['tokens_ids']))
       label_dicts[m['doc_id']][span] = m['cluster_id']
-  action_npz = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_event_finetuned_crossmedia.npz')) # f'{split}_mmaction_feat.npz')) # f'{split}_original_vid_3d.npz')) # f'{split}_mmaction_feat.npz')) # XXX f'{split}_events_event_type_labels.npz'
+  action_npz = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_feat.npz')) # f'{split}_mmaction_feat.npz')) # f'{split}_original_vid_3d.npz')) # f'{split}_mmaction_feat.npz')) # XXX f'{split}_events_event_type_labels.npz'
     
   action_label_path = os.path.join(config['data_folder'], f'{split}_mmaction_event_feat_labels_average.npz')
   if os.path.exists(action_label_path):

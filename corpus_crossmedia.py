@@ -98,7 +98,7 @@ class VideoM2E2SupervisedCrossmediaDataset(Dataset):
     documents = {doc_id:doc for doc_id, doc in documents.items() if doc_id in self.text_label_dict}
     self.documents = documents
 
-    self.data_list = self.create_data_list(self.text_label_dict, self.action_label_dict)[:20] # XXX
+    self.data_list = self.create_data_list(self.text_label_dict, self.action_label_dict) # XXX
     print('Number of documents: ', len(documents))
     print('Number of mention-action pairs: ', len(self.data_list))
  

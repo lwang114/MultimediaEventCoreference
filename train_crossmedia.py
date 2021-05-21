@@ -286,8 +286,16 @@ if __name__ == '__main__':
   test_set = VideoM2E2SupervisedCrossmediaDataset(config, split='test')
 
   fix_seed(config)
-  train_loader = torch.utils.data.DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, num_workers=0, pin_memory=True)
-  test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
+  train_loader = torch.utils.data.DataLoader(train_set, 
+                                             batch_size=config['batch_size'], 
+                                             shuffle=False if args.evaluate_only else True, 
+                                             num_workers=0, 
+                                             pin_memory=True)
+  test_loader = torch.utils.data.DataLoader(test_set, 
+                                            batch_size=config['batch_size'], 
+                                            shuffle=False, 
+                                            num_workers=0, 
+                                            pin_memory=True)
 
   # Initialize models
   if config['bert_model'] == 'roberta-large':
