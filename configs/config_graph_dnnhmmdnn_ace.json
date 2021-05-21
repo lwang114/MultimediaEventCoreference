@@ -1,8 +1,0 @@
-{
-  "data_folder": "../data/ace/mentions",
-  "action_feature_train": "traintest_event_features.npz",
-  "object_feature_train": "traintest_entity_features.npz", 
-  "action_feature_test": "traintest_event_features.npz",
-  "object_feature_test": "traintest_entity_features.npz",
-  "model_path": "models/coref_events_graph_dnnhmmdnn_video_m2e2"
-}
