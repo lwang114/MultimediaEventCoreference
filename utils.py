@@ -141,6 +141,25 @@ def save_gold_conll_files(doc_json, mention_json, dir_path):
     doc_name = doc_id
     write_output_file({doc_id:document}, non_singletons, doc_ids, starts, ends, dir_path, doc_name)
 
+def plot_trigger_type_across_datasets(dataset_names, mention_jsons):
+  trigger_to_type = dict()
+  for dset_name, mention_json in zip(dataset_names, mention_jsons):
+    mentions = json.load(open(mention_json))
+    for m in mentions:
+      trigger = m['head_lemma']
+      event_type = m['event_type']
+      if not trigger in trigger_to_type:
+        trigger_to_type[trigger] = {dset_name:[event_type]}
+      elif not dset_name in trigger_to_type[trigger]:
+        trigger_to_type[trigger][dset_name] = [event_type]
+      else:
+        trigger_to_type[trigger][dset_name].append(event_type)
+    
+  json.dump(trigger_to_type, 
+            open('trigger_info_across_datasets.json', 'w'), 
+            indent=2, 
+            sort_keys=True)         
+  
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
