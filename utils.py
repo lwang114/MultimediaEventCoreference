@@ -141,25 +141,90 @@ def save_gold_conll_files(doc_json, mention_json, dir_path):
     doc_name = doc_id
     write_output_file({doc_id:document}, non_singletons, doc_ids, starts, ends, dir_path, doc_name)
 
-def plot_trigger_type_across_datasets(dataset_names, mention_jsons):
+def plot_trigger_type_across_datasets(mention_jsons, dataset_names):
   trigger_to_type = dict()
   for dset_name, mention_json in zip(dataset_names, mention_jsons):
     mentions = json.load(open(mention_json))
     for m in mentions:
       trigger = m['head_lemma']
       event_type = m['event_type']
+
       if not trigger in trigger_to_type:
         trigger_to_type[trigger] = {dset_name:[event_type]}
       elif not dset_name in trigger_to_type[trigger]:
         trigger_to_type[trigger][dset_name] = [event_type]
       else:
         trigger_to_type[trigger][dset_name].append(event_type)
-    
+      
   json.dump(trigger_to_type, 
             open('trigger_info_across_datasets.json', 'w'), 
             indent=2, 
             sort_keys=True)         
+
+def compare_ontology_across_datasets(type_by_dataset_file, dataset1, dataset2):
+  type_by_dataset = json.load(open(type_by_dataset_file, 'r'))
+  stoi = {dataset1: dict(), dataset2: dict()}
+  n_triggers1 = 0
+  n_triggers2 = 0
+  n_overlap_triggers = 0
+  for token in type_by_dataset:
+    labels1 = type_by_dataset[token].get(dataset1, [])
+    labels2 = type_by_dataset[token].get(dataset2, [])
+    for y1 in labels1:
+      if not y1 in stoi[dataset1]:
+        stoi[dataset1][y1] = len(stoi[dataset1]) 
+    
+    for y2 in labels2:
+      if not y2 in stoi[dataset2]:
+        stoi[dataset2][y2] = len(stoi[dataset2])
+
+  confusion = np.zeros((len(stoi[dataset1]), len(stoi[dataset2])))
+  for token in type_by_dataset:
+    labels1 = type_by_dataset[token].get(dataset1, [])
+    labels2 = type_by_dataset[token].get(dataset2, [])
+    if len(labels1) * len(labels2) > 0:
+      n_overlap_triggers += 1
+    
+    if len(labels1) > 0:
+      n_triggers1 += 1
+    if len(labels2) > 0:
+      n_triggers2 += 1
+
+    for label1 in labels1:
+      for label2 in labels2:
+        y1 = stoi[dataset1][label1]
+        y2 = stoi[dataset2][label2]
+        confusion[y1, y2] += 1 
+
+  fig, ax = plt.subplots(figsize=(8, 8))
+  confusion_norm = confusion / np.maximum(confusion.sum(1, keepdims=True), 1.)
+  plt.pcolor(confusion_norm)
+  plt.colorbar()
+  xticks = np.arange(len(stoi[dataset2]))+0.5
+  yticks = np.arange(len(stoi[dataset1]))+0.5
+  ax.set_xticks(xticks)
+  ax.set_yticks(yticks)
+
+  xticklabels = sorted(stoi[dataset2], key=lambda x:stoi[dataset2][x])
+  yticklabels = sorted(stoi[dataset1], key=lambda x:stoi[dataset1][x])
+  ax.set_xticklabels(xticklabels, fontsize=8, rotation='vertical')
+  ax.set_yticklabels(yticklabels, fontsize=8, rotation=45)
+  # ax.invert_yaxis()
+
+  plt.xlabel(dataset2)
+  plt.ylabel(dataset1)
   
+  for x in range(len(stoi[dataset2])):
+    for y in range(len(stoi[dataset1])):
+      if confusion[y, x] > 0:
+        plt.text(x, y, confusion[y, x], fontsize=5, color='orange')
+  plt.savefig('ontology_comparison')
+  plt.show()
+  plt.close()
+
+  print(f'Number of triggers in {dataset1}: {n_triggers1}\n'
+        f'Number of triggers in {dataset2}: {n_triggers2}\n'
+        f'Number of overlapping triggers: {n_overlap_triggers}')
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -210,3 +275,13 @@ if __name__ == '__main__':
                {'entity_type': '1'}], open(mention_json, 'w'))
     type_to_idx = create_type_to_idx([mention_json])
     print(type_to_idx.items())
+  elif args.task == 4:
+    mention_jsons = ['data/ace/mentions/train_events.json',
+                     'data/ace/mentions/dev_events.json',
+                     'data/ace/mentions/test_events.json',
+                     'data/video_m2e2/mentions/train_events.json',
+                     'data/video_m2e2/mentions/test_events.json',]
+    dset_names = ['ACE', 'ACE', 'ACE', 'Video M2E2', 'Video M2E2']
+    plot_trigger_type_across_datasets(mention_jsons, dset_names)
+  elif args.task == 5:
+    compare_ontology_across_datasets('trigger_info_across_datasets.json', 'ACE', 'Video M2E2') 
