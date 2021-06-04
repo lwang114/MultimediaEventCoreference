@@ -195,8 +195,14 @@ def compare_ontology_across_datasets(type_by_dataset_file, dataset1, dataset2):
         y1 = stoi[dataset1][label1]
         y2 = stoi[dataset2][label2]
         confusion[y1, y2] += 1 
+  confusion_norm = confusion / np.maximum(confusion.sum(1, keepdims=True), 1.)
+  new_row_order = sorted(list(range(n_trigger1)), 
+                         key=lambda x:confusion_norm[x].max(), 
+                         reverse=True)
+  confusion = confusion[new_row_order]
+  confusion_norm = confusion_norm[new_row_order]
 
-  new_order = []
+  new_col_order = []
   for i in range(n_trigger1):
     if i >= n_trigger2:
       break
@@ -206,15 +212,14 @@ def compare_ontology_across_datasets(type_by_dataset_file, dataset1, dataset2):
       if confusion[i, j] > max_s and not j in new_order:
         max_s = confusion[i, j]
         max_j = j
-    new_order.append(max_j)
+    new_col_order.append(max_j)
 
   for j in range(n_trigger2):
     if not j in new_order:
-      new_order.append(j)
+      new_col_order.append(j)
 
-  fig, ax = plt.subplots(figsize=(8, 8))
-  confusion_norm = confusion / np.maximum(confusion.sum(1, keepdims=True), 1.)
-  plt.pcolor(confusion_norm[:, new_order], cmap=plt.cmap.Blues)
+  fig, ax = plt.subplots(figsize=(10, 10))
+  plt.pcolor(confusion_norm[:, new_col_order], cmap=plt.cmap.Blues)
   plt.colorbar()
   plt.xlabel(dataset2)
   plt.ylabel(dataset1)
@@ -232,8 +237,9 @@ def compare_ontology_across_datasets(type_by_dataset_file, dataset1, dataset2):
   ax.set_yticks(yticks)
 
   xticklabels = sorted(stoi[dataset2], key=lambda x:stoi[dataset2][x])
-  xticklabels = [xticklabels[i] for i in new_order]
+  xticklabels = [xticklabels[i] for i in new_col_order]
   yticklabels = sorted(stoi[dataset1], key=lambda x:stoi[dataset1][x])
+  yticklabels = [yticklabels[i] for i in new_row_order]
   ax.set_xticklabels(xticklabels, fontsize=8, rotation='vertical')
   ax.set_yticklabels(yticklabels, fontsize=8, rotation=45)
   ax.invert_yaxis()
