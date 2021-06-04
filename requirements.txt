@@ -1,0 +1,5 @@
+pyhocon
+allennlp
+allennlp-models
+opencv-python
+Transformer
