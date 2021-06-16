@@ -94,76 +94,14 @@ class CharCNN(nn.Module):
     x = x.squeeze(2)
     x = torch.transpose(x, -2, -1)
     return x 
-
-class SparseMM(torch.autograd.Function):
-    """
-    Sparse x dense matrix multiplication with autograd support.
-    Implementation by Soumith Chintala:
-    https://discuss.pytorch.org/t/
-    does-pytorch-support-autograd-on-sparse-matrix/6156/7
-    """
-
-    def __init__(self, sparse):
-        super(SparseMM, self).__init__()
-        self.sparse = sparse
-
-    def forward(self, dense):
-        return torch.mm(self.sparse, dense)
-
-    def backward(self, grad_output):
-        grad_input = None
-        if self.needs_input_grad[0]:
-            grad_input = torch.mm(self.sparse.t(), grad_output)
-        return grad_input
-
-class GraphConvolution(nn.Module):
-    def __init__(self, input_dim, embedding_dim, num_edge_types,
-                 dropout=0.5, bias=True, use_bn=False):
-        super(GraphConvolution, self).__init__()
-        self.input_dim = input_dim
-        self.embedding_dim = embedding_dim
-        self.num_edge_types = num_edge_types
-        self.dropout = dropout
-        self.Gates = nn.ModuleList()
-        self.GraphConv = nn.ModuleList()
-        self.use_bn = use_bn
-        for _ in range(num_edge_types):
-            self.Gates.append(nn.Linear(input_dim, 1, bias=bias))
-            self.GraphConv.append(nn.Linear(input_dim, embedding_dim, bias=bias))
-            nn.init.orthogonal_(self.Gates[-1].weight)
-            nn.init.orthogonal_(self.GraphConv[-1].weight)
-
-    def forward(self, x, adj):
-        '''
-        :param x: FloatTensor, input feature tensor, (batch size, seq len, input dim)
-        :param adj: FloatTensor, (sparse.FloatTensor.to_dense()), adjacent matrix, (batch size, edge type, seq len, seq len)
-        :return out: FloatTensor, (batch size, seq len, input dim)
-        '''
-        adj_ = adj.transpose(0, 1)
-        B = adj.size(0)
-        ts = []
-        for i in range(self.num_edge_types):
-            gate_status = F.sigmoid(self.Gates[i](x))
-            adj_hat_i = adj_[i] * gate_status
-            t = torch.bmm(adj_hat_i, self.GraphConv[i](x))
-            ts.append(t)
-        ts = torch.stack(ts).sum(dim=0)
-        
-        if self.use_bn:
-            ts = ts.transpose(1, 2).contiguous()
-            ts = self.bn(ts)
-            ts = ts.transpose(1, 2).contiguous()
-        out = F.dropout(F.relu(ts), p=self.dropout)
-        return out
-        
         
 class SpanEmbedder(nn.Module):
     def __init__(self, config, device):
         super(SpanEmbedder, self).__init__()
         self.bert_hidden_size = config.bert_hidden_size
+        self.with_start_end_embedding = config.with_start_end_embedding # TODO Add option
         self.with_width_embedding = config.with_mention_width
         self.use_head_attention = config.with_head_attention
-        self.with_type_embedding = config.get('with_type_embedding', False)
         self.device = device
         self.dropout = config.dropout
         self.padded_vector = torch.zeros(self.bert_hidden_size, device=device)
@@ -175,10 +113,9 @@ class SpanEmbedder(nn.Module):
             nn.Linear(config.hidden_layer, 1)
         )
         self.self_attention_layer.apply(init_weights)
+        self.sentence_id_feature = nn.Embedding(500, config.embedding_dimension)
         self.width_feature = nn.Embedding(5, config.embedding_dimension)
-        if self.with_type_embedding:
-            self.type_feature = nn.Embedding(200, config.type_embedding_dimension)
-
+        self.linguistic_feature_types = config.linguistic_feature_types
 
     def pad_continous_embeddings(self, continuous_embeddings, width):
         if isinstance(continuous_embeddings, list):
@@ -209,13 +146,22 @@ class SpanEmbedder(nn.Module):
         return padded_tokens_embeddings, masks
 
 
-    def forward(self, doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, type_labels=None):
+    def forward(self, doc_embeddings, 
+                start_mappings, 
+                end_mappings, 
+                continuous_mappings, 
+                width,
+                linguistic_labels):
         start_embeddings = torch.matmul(start_mappings, doc_embeddings)
         end_embeddings = torch.matmul(end_mappings, doc_embeddings)
         start_end = torch.cat([start_embeddings, end_embeddings], dim=-1)
         continuous_embeddings = torch.matmul(continuous_mappings, doc_embeddings.unsqueeze(1))
-        
-        vector = start_end
+       
+        if self.with_start_end_embedding: 
+          vector = start_end
+        else:
+          vector = start_embeddings
+
         B, S, M = None, None, None
         if not isinstance(continuous_embeddings, list):
           B = continuous_embeddings.size(0)
@@ -235,116 +181,20 @@ class SpanEmbedder(nn.Module):
             weighted_sum = (attention_scores.unsqueeze(-1) * padded_tokens_embeddings).sum(dim=1)
             vector = torch.cat((vector, weighted_sum), dim=1)
 
+        for feat_idx, feat_type in enumerate(self.linguistic_feature_types):
+            if feat_type == 'sentence_id':
+              sent_id_embedding = self.sentence_id_feature(linguistic_labels[:, feat_idx])
+              vector = torch.cat((vector, sent_id_embedding), dim=1)
+            else:
+              vector = torch.cat((vector, linguistic_labels[:, feat_idx:feat_idx+1]), dim=1)  
+
         if self.with_width_embedding:
             width = torch.clamp(width, max=4)
             width_embedding = self.width_feature(width)
             vector = torch.cat((vector, width_embedding), dim=1)
-        
-        if self.with_type_embedding:
-          type_labels = type_labels.view(B*S)
-          type_embedding = self.type_feature(type_labels)
-          vector = torch.cat((vector, type_embedding), dim=1) 
 
         if not isinstance(continuous_embeddings, list):
           vector = vector.view(B, S, -1)
-        return vector
-
-class GCNSpanEmbedder(nn.Module):
-    def __init__(self, config, num_role_types, device):
-        super(GCNSpanEmbedder, self).__init__()
-        self.num_role_types = num_role_types
-        self.bert_hidden_size = config.bert_hidden_size
-        self.with_width_embedding = config.with_mention_width
-        self.use_head_attention = config.with_head_attention
-        self.with_type_embedding = config.with_type_embedding
-        self.gcn_input_size = 2 * self.bert_hidden_size
-        if self.use_head_attention:
-            self.gcn_input_size += self.bert_hidden_size
-        if self.with_width_embedding:
-            self.gcn_input_size += config.embedding_dimension
-        if self.with_type_embedding:
-            self.gcn_input_size += config.type_embedding_dimension
-        
-        self.device = device
-        self.dropout = config.dropout
-        self.padded_vector = torch.zeros(self.bert_hidden_size, device=device)
-        self.self_attention_layer = nn.Sequential(
-            nn.Dropout(config.dropout),
-            nn.Linear(self.bert_hidden_size, config.hidden_layer),
-            # nn.Dropout(config['dropout']),
-            nn.ReLU(),
-            nn.Linear(config.hidden_layer, 1)
-        )
-        self.self_attention_layer.apply(init_weights)
-        self.width_feature = nn.Embedding(5, config.embedding_dimension)
-        self.type_feature = nn.Embedding(200, config.type_embedding_dimension)
-        self.gcn = GraphConvolution(self.gcn_input_size, self.bert_hidden_size, self.num_role_types)
-
-    def pad_continous_embeddings(self, continuous_embeddings, width):
-        if isinstance(continuous_embeddings, list):
-          max_length = max(len(v) for v in continuous_embeddings)
-          padded_tokens_embeddings = torch.stack(
-            [torch.cat((emb, self.padded_vector.repeat(max_length - len(emb), 1)))
-             for emb in continuous_embeddings]
-          )
-          masks = torch.stack(
-            [torch.cat(
-                (torch.ones(len(emb), device=self.device),
-                 torch.zeros(max_length - len(emb), device=self.device)))
-             for emb in continuous_embeddings]
-          )
-        else:
-          span_num = width.size(0)
-          max_length = continuous_embeddings.size(1)
-          if (max_length - width.max()) < 0:
-            print('max width {} is shorter than max width {} in the batch!'.format(max_length, width.max()))
-          padded_tokens_embeddings = continuous_embeddings
-          masks = torch.stack(
-            [torch.cat(
-                (torch.ones(max(width[idx].item(), 1), device=self.device),
-                 torch.zeros(max_length - max(width[idx].item(), 1), device=self.device)))
-             for idx in range(span_num)]
-          )
-
-        return padded_tokens_embeddings, masks
-        
-    def forward(self, doc_embeddings, start_mappings, end_mappings, continuous_mappings, width, type_labels, adjm):
-        start_embeddings = torch.matmul(start_mappings, doc_embeddings)
-        end_embeddings = torch.matmul(end_mappings, doc_embeddings)
-        start_end = torch.cat([start_embeddings, end_embeddings], dim=-1)
-        continuous_embeddings = torch.matmul(continuous_mappings, doc_embeddings.unsqueeze(1))
-
-        vector = start_end
-        B = continuous_embeddings.size(0)
-        S = continuous_embeddings.size(1)
-        M = continuous_embeddings.size(2)
-        continuous_embeddings = continuous_embeddings.view(B*S, M, -1)
-        width = width.view(B*S)
-        type_labels = type_labels.view(B*S)
-        vector = vector.view(B*S, -1)
-
-        if self.use_head_attention:
-            padded_tokens_embeddings, masks = self.pad_continous_embeddings(continuous_embeddings, width)
-            attention_scores = self.self_attention_layer(padded_tokens_embeddings).squeeze(-1)
-            attention_scores *= masks
-            attention_scores = torch.where(attention_scores != 0, attention_scores,
-                                           torch.tensor(-9e9, device=self.device))
-            attention_scores = F.softmax(attention_scores, dim=1)
-            weighted_sum = (attention_scores.unsqueeze(-1) * padded_tokens_embeddings).sum(dim=1)
-            vector = torch.cat((vector, weighted_sum), dim=1)
-
-        if self.with_width_embedding:
-            width = torch.clamp(width, max=4)
-            width_embedding = self.width_feature(width)
-            vector = torch.cat((vector, width_embedding), dim=1)
-        
-        if self.with_type_embedding:
-          type_embedding = self.type_feature(type_labels)
-          vector = torch.cat((vector, type_embedding), dim=1) 
-
-        vector = vector.view(B, S, -1)
-        vector = self.gcn(vector, adjm)
-
         return vector
 
 class SpanScorer(nn.Module):
@@ -365,6 +215,7 @@ class SpanScorer(nn.Module):
 
     def forward(self, span_embedding):
         return self.mlp(span_embedding)
+
 
 class StarSimplePairWiseClassifier(nn.Module):
   def __init__(self, config):
@@ -694,17 +545,23 @@ class StarTransformerClassifier(nn.Module):
     return antecedents, scores
 
 
-class SimplePairWiseClassifier(nn.Module):
+class SimplePairWiseClassifier(nn.Module): # TODO Add options in config
     def __init__(self, config):
         super(SimplePairWiseClassifier, self).__init__()
-        if config.get('mention_embedder', '') == 'gcn':
-            self.input_layer = config.bert_hidden_size
-        else:
-            self.input_layer = config.bert_hidden_size * 3 if config.with_head_attention else config.bert_hidden_size * 2 
-            if config.with_mention_width:
-                self.input_layer += config.embedding_dimension
-            if config.get('with_type_embedding', False):
-                self.input_layer += config.type_embedding_dimension
+        self.input_layer = config.bert_hidden_size
+        if config.with_start_end_embedding:
+          self.input_layer += config.bert_hidden_size 
+        if config.with_head_attention:
+          self.input_layer += config.bert_hidden_size 
+        
+        for feat_type in config.linguistic_feature_types:
+          if feat_type == "sentence_id":
+            self.input_layer += config.embedding_dimension
+          else:
+            self.input_layer += 1
+
+        if config.with_mention_width:
+          self.input_layer += config.embedding_dimension
 
         self.input_layer *= 3
         self.hidden_layer = config.hidden_layer
@@ -722,22 +579,19 @@ class SimplePairWiseClassifier(nn.Module):
     def forward(self, first, second):
         return self.pairwise_mlp(torch.cat((first, second, first * second), dim=1))
 
-    def predict_cluster(self, span_embeddings, first_idx, second_idx):
+    def predict_cluster(self, scores, first_idx, second_idx):
       '''
       :param span_embeddings: FloatTensor of size (num. of spans, span embed dim),
       :param first_idx: LongTensor of size (num. of mention pairs,)
       :param second_idx: LongTensor of size (num. of mention pairs,)
-      :return scores: FloatTensor of size (batch size, max num. of mention pairs),
-      :return clusters: dict of list of int, mapping from cluster id to mention ids of its members 
+      :param scores: FloatTensor of size (batch size, max num. of mention pairs),
+      :return antecedents: int array of size (batch size, num. of mentions), 
+      :return clusters: dict of list of int, mapping from cluster id to mention ids of its members
       '''
-      device = span_embeddings.device
+      device = scores.device
       thres = 0.
       span_num = max(second_idx) + 1
       span_mask = torch.ones(len(first_idx)).to(device)
-      first_span_embeddings = span_embeddings[first_idx]
-      second_span_embeddings = span_embeddings[second_idx]
-
-      scores = self(first_span_embeddings, second_span_embeddings)
       antecedents = -1 * np.ones(span_num, dtype=np.int64)
 
       # Antecedent prediction

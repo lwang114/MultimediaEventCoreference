@@ -13,7 +13,7 @@ import argparse
 import pyhocon
 from conll import write_output_file
 
-def create_type_to_idx(mention_jsons):
+def create_type_stoi(mention_jsons):
   n_entity_types = 0
   n_event_types = 0
   type_to_idx = {'###NULL###':0}
@@ -45,6 +45,21 @@ def create_role_to_idx(mention_jsons):
             role_to_idx[a['role']] = len(role_to_idx)
   print('Num. of role types = {}'.format(len(role_to_idx)))
   return role_to_idx
+
+def create_feature_stoi(mention_jsons, feature_types):
+  stoi = dict()
+  for mention_json in mention_jsons:
+    mentions = json.load(open(mention_json))
+    for feat_type in feature_types:
+      if not feat_type in stoi:
+        stoi[feat_type] = dict()
+      for m in mentions:
+        if not m[feat_type] in stoi[feat_type]:
+          if isinstance(m[feat_type], int) or isinstance(m[feat_type], float):
+            stoi[feat_type][m[feat_type]] = m[feat_type]
+          else:
+            stoi[feat_type][m[feat_type]] = len(stoi[feat_type])
+  return stoi
             
 def make_prediction_readable(pred_json, img_dir, mention_json, out_file='prediction_readable.txt'):
   pred_dicts = json.load(open(pred_json))

@@ -2,4 +2,4 @@ pyhocon
 allennlp
 allennlp-models
 opencv-python
-Transformer
+transformers=3.0.2
