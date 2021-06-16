@@ -1,4 +1,6 @@
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from text_models import BiLSTM
 
 def init_weights(m):
@@ -28,15 +30,15 @@ class BiLSTMVideoEncoder(nn.Module):
     B, N, F, D = x.size() 
     action_output = self.encoder(x.view(B*N, F, -1))
     action_len = mask.sum(-1).unsqueeze(-1)
-    action_output = action_output.view(B, N, F, -1).sum(-2) / torch.max(action_len, torch.ones(1, device=device))
-    action_output = (mask.sum(-1).unsqueeze(-1) > 0).float() * action_output 
+    action_output = (mask.unsqueeze(-1) * action_output.view(B, N, F, -1)).sum(-2)\
+                    / torch.max(action_len, torch.ones(1, device=device))
     return action_output
 
 
 class CrossmediaPairWiseClassifier(nn.Module):
   def __init__(self, config):
     super(CrossmediaPairWiseClassifier, self).__init__()
-    self.input_layer = config.hidden_layer
+    self.input_layer = 3 * config.hidden_layer 
     self.hidden_layer = config.hidden_layer
     self.pairwise_mlp = nn.Sequential(
         nn.Dropout(config.dropout),
@@ -79,9 +81,9 @@ class CrossmediaPairWiseClassifier(nn.Module):
     second_attention = attention_map[second_idxs]
     first_attention = F.softmax(first_attention, dim=-1)
     second_attention = F.softmax(second_attention, dim=-1)
-    first_score = first_attention.max(-1)[0]
-    second_score = second_attention.max(-1)[0]
-    pw_score = (first_attention * second_attention).max(-1)[0]
+    first_score = first_attention.max(-1)[0].unsqueeze(-1)
+    second_score = second_attention.max(-1)[0].unsqueeze(-1)
+    pw_score = (first_attention * second_attention).max(-1)[0].unsqueeze(-1)
     return self.crossmedia_pairwise_mlp(
               torch.cat((first_score, second_score, pw_score), dim=1)
               ) 

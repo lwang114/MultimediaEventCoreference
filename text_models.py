@@ -99,7 +99,7 @@ class SpanEmbedder(nn.Module):
     def __init__(self, config, device):
         super(SpanEmbedder, self).__init__()
         self.bert_hidden_size = config.bert_hidden_size
-        self.with_start_end_embedding = config.with_start_end_embedding # TODO Add option
+        self.with_start_end_embedding = config.with_start_end_embedding
         self.with_width_embedding = config.with_mention_width
         self.use_head_attention = config.with_head_attention
         self.device = device
@@ -113,7 +113,6 @@ class SpanEmbedder(nn.Module):
             nn.Linear(config.hidden_layer, 1)
         )
         self.self_attention_layer.apply(init_weights)
-        self.sentence_id_feature = nn.Embedding(500, config.embedding_dimension)
         self.width_feature = nn.Embedding(5, config.embedding_dimension)
         self.linguistic_feature_types = config.linguistic_feature_types
 
@@ -151,7 +150,7 @@ class SpanEmbedder(nn.Module):
                 end_mappings, 
                 continuous_mappings, 
                 width,
-                linguistic_labels):
+                linguistic_labels=None):
         start_embeddings = torch.matmul(start_mappings, doc_embeddings)
         end_embeddings = torch.matmul(end_mappings, doc_embeddings)
         start_end = torch.cat([start_embeddings, end_embeddings], dim=-1)
@@ -170,6 +169,7 @@ class SpanEmbedder(nn.Module):
           continuous_embeddings = continuous_embeddings.view(B*S, M, -1)
           width = width.view(B*S)
           vector = vector.view(B*S, -1)
+          linguistic_labels = linguistic_labels.view(B*S, -1)
 
         if self.use_head_attention:
             padded_tokens_embeddings, masks = self.pad_continous_embeddings(continuous_embeddings, width)
@@ -182,11 +182,7 @@ class SpanEmbedder(nn.Module):
             vector = torch.cat((vector, weighted_sum), dim=1)
 
         for feat_idx, feat_type in enumerate(self.linguistic_feature_types):
-            if feat_type == 'sentence_id':
-              sent_id_embedding = self.sentence_id_feature(linguistic_labels[:, feat_idx])
-              vector = torch.cat((vector, sent_id_embedding), dim=1)
-            else:
-              vector = torch.cat((vector, linguistic_labels[:, feat_idx:feat_idx+1]), dim=1)  
+            vector = torch.cat((vector, linguistic_labels[:, feat_idx:feat_idx+1]), dim=1)  
 
         if self.with_width_embedding:
             width = torch.clamp(width, max=4)
@@ -545,7 +541,7 @@ class StarTransformerClassifier(nn.Module):
     return antecedents, scores
 
 
-class SimplePairWiseClassifier(nn.Module): # TODO Add options in config
+class SimplePairWiseClassifier(nn.Module):
     def __init__(self, config):
         super(SimplePairWiseClassifier, self).__init__()
         self.input_layer = config.bert_hidden_size
@@ -554,11 +550,7 @@ class SimplePairWiseClassifier(nn.Module): # TODO Add options in config
         if config.with_head_attention:
           self.input_layer += config.bert_hidden_size 
         
-        for feat_type in config.linguistic_feature_types:
-          if feat_type == "sentence_id":
-            self.input_layer += config.embedding_dimension
-          else:
-            self.input_layer += 1
+        self.input_layer += len(config.linguistic_feature_types)
 
         if config.with_mention_width:
           self.input_layer += config.embedding_dimension
@@ -610,7 +602,7 @@ class SimplePairWiseClassifier(nn.Module): # TODO Add options in config
             antecedent = np.argmax(candidate_scores)
             antecedents[idx2] = antecedent
       
-      return antecedents, scores
+      return antecedents
 
 class TransformerClassifier(nn.Module):
   def __init__(self, config):

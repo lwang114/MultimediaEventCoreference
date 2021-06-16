@@ -193,7 +193,9 @@ def compare_ontology_across_datasets(type_by_dataset_file, dataset1, dataset2):
       if not y2 in stoi[dataset2]:
         stoi[dataset2][y2] = len(stoi[dataset2])
 
-  confusion = np.zeros((len(stoi[dataset1]), len(stoi[dataset2])))
+  n_types1 = len(stoi[dataset1])
+  n_types2 = len(stoi[dataset2])
+  confusion = np.zeros((n_types1, n_types2))
   for token in type_by_dataset:
     labels1 = type_by_dataset[token].get(dataset1, [])
     labels2 = type_by_dataset[token].get(dataset2, [])
@@ -210,31 +212,32 @@ def compare_ontology_across_datasets(type_by_dataset_file, dataset1, dataset2):
         y1 = stoi[dataset1][label1]
         y2 = stoi[dataset2][label2]
         confusion[y1, y2] += 1 
+
   confusion_norm = confusion / np.maximum(confusion.sum(1, keepdims=True), 1.)
-  new_row_order = sorted(list(range(n_trigger1)), 
-                         key=lambda x:confusion_norm[x].max(), 
+  new_row_order = sorted(list(range(n_types1)),
+                         key=lambda x:confusion_norm[x].max(),
                          reverse=True)
   confusion = confusion[new_row_order]
   confusion_norm = confusion_norm[new_row_order]
 
   new_col_order = []
-  for i in range(n_trigger1):
-    if i >= n_trigger2:
+  for i in range(n_types1):
+    if i >= n_types2:
       break
     max_s = 0
     max_j = -1
-    for j in range(n_trigger2):
-      if confusion[i, j] > max_s and not j in new_order:
+    for j in range(n_types2):
+      if confusion[i, j] >= max_s and not j in new_col_order:
         max_s = confusion[i, j]
         max_j = j
     new_col_order.append(max_j)
 
-  for j in range(n_trigger2):
-    if not j in new_order:
+  for j in range(n_types2):
+    if not j in new_col_order:
       new_col_order.append(j)
 
-  fig, ax = plt.subplots(figsize=(10, 10))
-  plt.pcolor(confusion_norm[:, new_col_order], cmap=plt.cmap.Blues)
+  fig, ax = plt.subplots(figsize=(8, 8))
+  plt.pcolor(confusion_norm[:, new_col_order], cmap=plt.cm.Blues)
   plt.colorbar()
   plt.xlabel(dataset2)
   plt.ylabel(dataset1)
@@ -242,8 +245,8 @@ def compare_ontology_across_datasets(type_by_dataset_file, dataset1, dataset2):
   '''
   for x in range(len(stoi[dataset2])):
     for y in range(len(stoi[dataset1])):
-      if confusion[y, new_order[x]] > 0:
-        plt.text(x, y, confusion[y, new_order[x]], fontsize=5, color='orange')
+      if confusion[y, new_col_order[x]] > 0:
+        plt.text(x, y, confusion[y, new_col_order[x]], fontsize=5, color='orange')
   '''
 
   xticks = np.arange(len(stoi[dataset2]))+0.5

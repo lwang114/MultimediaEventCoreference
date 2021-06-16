@@ -74,9 +74,9 @@ class TextVideoDataset(Dataset):
     self.event_stoi = event_stoi
     self.feature_stoi = feature_stoi
 
-    doc_json = os.path.join(config['data_folder'], 'test.json'),
+    doc_json = os.path.join(config['data_folder'], f'{split}.json')
     text_mention_json = os.path.join(config['data_folder'],
-                                     f'test_{config.mention_type}.json')
+                                     f'{split}_{config.mention_type}.json')
 
     documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
     self.documents = documents
@@ -97,19 +97,24 @@ class TextVideoDataset(Dataset):
     id_mapping_json = os.path.join(config['data_folder'], '../video_m2e2.json')
     action_anno_json = os.path.join(config['data_folder'], '../master.json') # Contain event time stamps
     action_dur_json = os.path.join(config['data_folder'], '../anet_anno.json')
+    ontology_json = os.path.join(config['data_folder'], '../ontology.json')
     ontology_map_json = os.path.join(config['data_folder'], '../ontology_mapping.json')
     id_mapping = json.load(codecs.open(id_mapping_json, 'r', 'utf-8'))
     action_anno_dict = json.load(codecs.open(action_anno_json, 'r', 'utf-8'))
     action_dur_dict = json.load(codecs.open(action_dur_json))
 
+    self.ontology = json.load(codecs.open(ontology_json))
     ontology_map = json.load(codecs.open(ontology_map_json))
     self.ontology_map = {l:k for k, v in ontology_map.items() for l in v}
+
     self.action_label_dict = self.create_action_dict_labels(id_mapping,\
-                                                                                action_anno_dict,\
-                                                                                action_dur_dict)
+                                                            action_anno_dict,\
+                                                            action_dur_dict)
 
     # Extract doc/image ids
-    self.feat_keys = sorted(self.action_embeddings, key=lambda x:int(x.split('_')[-1])) # XXX
+    self.feat_keys = sorted(self.action_embeddings, key=lambda x:int(x.split('_')[-1]))
+    if config.debug:
+      self.feat_keys = self.feat_keys[:20]
     self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in self.text_label_dict]
     self.doc_ids = ['_'.join(k.split('_')[:-1]) for k in self.feat_keys]
     documents = {doc_id:documents[doc_id] for doc_id in self.doc_ids}
@@ -197,7 +202,7 @@ class TextVideoDataset(Dataset):
   def create_action_dict_labels(self, 
                                id_map,
                                anno_dict,
-                               dur_dict): # TODO
+                               dur_dict):
     """
     :param id2desc: {[youtube id]: [description id with puncts]} 
     :param anno_dict: {[description id]: list of {'Temporal_Boundary': [float, float], 'Event_Type': int}}  
@@ -216,7 +221,7 @@ class TextVideoDataset(Dataset):
       label_dict[doc_id] = dict()
       dur = dur_dict[desc_id]['duration_second']
       for ann in anno_dict[desc_id+'.mp4']:
-        action_class = ann['Event_Type'] 
+        action_class = self.ontology['event'][ann['Event_Type']] 
         start_sec, end_sec = ann['Temporal_Boundary']  
         start, end = int(start_sec / dur * 100), int(end_sec / dur * 100)
         label_dict[doc_id][(start, end)] = action_class
@@ -272,6 +277,8 @@ class TextVideoDataset(Dataset):
     labels = fix_embedding_length(labels.unsqueeze(1), self.max_span_num).squeeze(1)
     event_labels = [self.event_stoi[self.text_label_dict[self.doc_ids[idx]][(start, end)]['event_type']]\
                     for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
+    event_labels = torch.LongTensor(event_labels)
+    event_labels = fix_embedding_length(event_labels.unsqueeze(1), self.max_span_num).squeeze(1)
 
     text_mask = torch.FloatTensor([1. if j < doc_len else 0 for j in range(self.max_token_num)])
     span_mask = continuous_mappings.sum(dim=1)
@@ -279,9 +286,9 @@ class TextVideoDataset(Dataset):
     # Extract linguistic feature labels
     linguistic_labels = {k:[] for k in self.linguistic_feat_types}
     for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1]):
-      feat_dict = self.ling_feat_dict[self.doc_ids[idx]][(start, end)]
+      feat_dict = self.ling_feature_dict[self.doc_ids[idx]][(start, end)]
       for k, v in feat_dict.items():
-        linguistic_labels[k].append(self.label_stoi[k][v])
+        linguistic_labels[k].append(self.feature_stoi[k][v])
     
     for k in linguistic_labels:  
       linguistic_labels[k] = torch.LongTensor(linguistic_labels[k])

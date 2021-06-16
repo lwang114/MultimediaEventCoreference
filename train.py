@@ -13,8 +13,8 @@ import random
 import numpy as np
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
-from text_models import SpanEmbedder, BiLSTM, SimplePairWiseClassifier, CrossmediaPairWiseClassifier
-from visual_models import BiLSTMVideoEncoder
+from text_models import SpanEmbedder, BiLSTM, SimplePairWiseClassifier
+from visual_models import BiLSTMVideoEncoder, CrossmediaPairWiseClassifier
 from corpus import TextVideoDataset
 from evaluator import Evaluation, CoNLLEvaluation
 from utils import make_prediction_readable, create_type_stoi, create_feature_stoi
@@ -45,20 +45,15 @@ def get_pairwise_labels(text_labels,
                         action_labels, 
                         is_training, 
                         device):
-    B = text_labels_batch.size(0)
+    B = text_labels.size(0)
     pairwise_labels = []
     first = [first_idx for first_idx in range(len(text_labels)) for second_idx in range(len(action_labels))]
     second = [second_idx for first_idx in range(len(text_labels)) for second_idx in range(len(action_labels))]
-    first = torch.tensor(first)
-    second = torch.tensor(second)
-    pairwise_labels = (text_labels[first] != 0) & (image_labels[second] != 0) & \
-                      (text_labels[first] == image_labels[second])
-    pairwise_labels = pairwise_labels.to(torch.long).to(device)      
+    pairwise_labels = (text_labels[first] == action_labels[second]).to(torch.long).to(device)      
 
     if config['loss'] == 'hinge' and is_training:
       pairwise_labels = torch.where(pairwise_labels == 1, pairwise_labels, torch.tensor(-1, device=device)) 
-    else:
-      pairwise_labels = torch.where(pairwise_labels == 1, pairwise_labels, torch.tensor(0, device=device))
+
     return first, second, pairwise_labels
 
 def get_pairwise_text_labels(labels, is_training, device):
@@ -106,6 +101,7 @@ def train(text_model,
           mention_model, 
           visual_model, 
           text_coref_model, 
+          visual_coref_model,
           train_loader, 
           test_loader, 
           args, random_seed=None):
@@ -167,20 +163,21 @@ def train(text_model,
     text_model.train()
     mention_model.train()
     visual_model.train()
-    coref_model.train()
+    text_coref_model.train()
+    visual_coref_model.train()
     for i, batch in enumerate(train_loader):
       doc_embeddings = batch['doc_embeddings'].to(device)
       start_mappings = batch['start_mappings'].to(device)
       end_mappings = batch['end_mappings'].to(device)
       continuous_mappings = batch['continuous_mappings'].to(device)
       width = batch['width'].to(device)
-      videos = batch['videos'].to(device)
+      videos = batch['action_embeddings'].to(device)
       text_labels = batch['cluster_labels'].to(device)
       event_labels = batch['event_labels'].to(device)
-      lingustic_labels = torch.stack(
+      linguistic_labels = torch.stack(
                            [batch[feat_type].to(device)\
                             for feat_type in config.linguistic_feature_types],
-                           dim=1)
+                           dim=2)
       action_labels = batch['action_labels'].to(device) 
       text_mask = batch['text_mask'].to(device)
       span_mask = batch['span_mask'].to(device)
@@ -190,15 +187,19 @@ def train(text_model,
                                               device=doc_embeddings.device), 
                              torch.tensor(0, dtype=torch.int, 
                                               device=doc_embeddings.device)).sum(-1)
-      action_num = action_mask.sum(-1).long()
+      action_num = torch.where(action_mask.sum(-1) > 0,
+                             torch.tensor(1, dtype=torch.int,
+                                              device=doc_embeddings.device), 
+                             torch.tensor(0, dtype=torch.int, 
+                                              device=doc_embeddings.device)).sum(-1)
 
-      video_output = visual_model(videos)
+      video_output = visual_model(videos, action_mask)
       mention_output = mention_model(doc_embeddings,
                                      start_mappings,
                                      end_mappings,
                                      continuous_mappings, 
                                      width,
-                                     linguistic_labels=linguistic_labels)
+                                     linguistic_labels)
       crossmedia_mention_output = text_model(mention_output)
       text_scores = []
       video_scores = []
@@ -215,28 +216,33 @@ def train(text_model,
         first_grounding_idx,\
         second_grounding_idx,\
         pairwise_grounding_label = get_pairwise_labels(
-        
-                                      event_labels[idx, :span_num[idx]].unsqueeze(0),
+                                      event_labels[idx, :span_num[idx]],
                                       action_labels[idx, :action_num[idx]],
                                       is_training=False,
                                       device=device)
         if first_grounding_idx is None or first_text_idx is None:
           continue
 
+        first_text_idx = first_text_idx.squeeze(0)
+        second_text_idx = second_text_idx.squeeze(0)
+        pairwise_text_label = pairwise_text_label.squeeze(0)
+        
         video_score = visual_coref_model(crossmedia_mention_output[idx, first_grounding_idx],
                                          video_output[idx, second_grounding_idx]) 
         crossmedia_score = visual_coref_model.module.crossmedia_score(
                                                        first_text_idx,
                                                        second_text_idx,
                                                        video_score)
-        text_score = text_coref_model(mention_output[idx, first_text_idx[idx]],
-                                      mention_output[idx, second_text_idx[idx]])
+        text_score = text_coref_model(mention_output[idx, first_text_idx],
+                                      mention_output[idx, second_text_idx])
         text_score = (text_score + crossmedia_score) / 2.
         text_scores.append(text_score) 
         video_scores.append(video_score) 
         pairwise_text_labels.append(pairwise_text_label)
         pairwise_grounding_labels.append(pairwise_grounding_label)
 
+      if not len(text_scores):
+        continue
       text_scores = torch.cat(text_scores).squeeze(1)
       video_scores = torch.cat(video_scores).squeeze(1)
       pairwise_text_labels = torch.cat(pairwise_text_labels).to(torch.float)
@@ -263,7 +269,8 @@ def train(text_model,
     torch.save(text_model.module.state_dict(), '{}/text_model-{}.pth'.format(config['model_path'], config['random_seed']))
     torch.save(visual_model.module.state_dict(), '{}/visual_model-{}.pth'.format(config['model_path'], config['random_seed']))
     torch.save(mention_model.module.state_dict(), '{}/mention_model-{}.pth'.format(config['model_path'], config['random_seed']))
-    torch.save(coref_model.module.state_dict(), '{}/coref_model-{}.pth'.format(config['model_path'], config['random_seed']))
+    torch.save(text_coref_model.module.state_dict(), '{}/text_coref_model-{}.pth'.format(config['model_path'], config['random_seed']))
+    torch.save(visual_coref_model.module.state_dict(), '{}/visual_coref_model-{}.pth'.format(config['model_path'], config['random_seed']))
  
     if epoch % 1 == 0:
       res = test(text_model, 
@@ -282,7 +289,8 @@ def train(text_model,
         torch.save(text_model.module.state_dict(), '{}/best_text_model-{}.pth'.format(config['model_path'], config['random_seed']))
         torch.save(visual_model.module.state_dict(), '{}/best_visual_model-{}.pth'.format(config['model_path'], config['random_seed']))
         torch.save(mention_model.module.state_dict(), '{}/best_mention_model-{}.pth'.format(config['model_path'], config['random_seed']))
-        torch.save(coref_model.module.state_dict(), '{}/best_coref_model-{}.pth'.format(config['model_path'], config['random_seed']))
+        torch.save(text_coref_model.module.state_dict(), '{}/best_text_coref_model-{}.pth'.format(config['model_path'], config['random_seed']))
+        torch.save(visual_coref_model.module.state_dict(), '{}/best_visual_coref_model-{}.pth'.format(config['model_path'], config['random_seed']))
         print('Best text coreference F1={}'.format(best_text_f1))
 
   if args.evaluate_only:
@@ -301,6 +309,8 @@ def test(text_model,
     documents = test_loader.dataset.documents
     all_scores = []
     all_labels = []
+    all_grounding_scores = []
+    all_grounding_labels = []
 
     text_model.eval()
     visual_model.eval()
@@ -318,8 +328,8 @@ def test(text_model,
           end_mappings = batch['end_mappings'].to(device)
           continuous_mappings = batch['continuous_mappings'].to(device)
           width = batch['width'].to(device)
-          videos = batch['videos'].to(device)
-          text_labels = batch['text_labels'].to(device) 
+          videos = batch['action_embeddings'].to(device)
+          text_labels = batch['cluster_labels'].to(device) 
           event_labels = batch['event_labels'].to(device)
           linguistic_labels = torch.stack(
                                 [batch[feat_type].to(device)\
@@ -336,16 +346,21 @@ def test(text_model,
                                               device=doc_embeddings.device), 
                                  torch.tensor(0, dtype=torch.int, 
                                               device=doc_embeddings.device)).sum(-1)
-          action_num = action_mask.sum(-1).long()
+          action_num = torch.where(action_mask.sum(-1) > 0,
+                                 torch.tensor(1, dtype=torch.int,
+                                              device=doc_embeddings.device), 
+                                 torch.tensor(0, dtype=torch.int, 
+                                              device=doc_embeddings.device)).sum(-1)
+
           
           # Extract span and video embeddings
-          video_output = visual_model(videos)
+          video_output = visual_model(videos, action_mask)
           mention_output = mention_model(doc_embeddings,
                                          start_mappings, 
                                          end_mappings,
                                          continuous_mappings, 
                                          width,
-                                         linguistic_labels=linguistic_labels)
+                                         linguistic_labels)
           crossmedia_mention_output = text_model(mention_output)
 
           B = doc_embeddings.size(0) 
@@ -361,27 +376,27 @@ def test(text_model,
             first_grounding_idx,\
             second_grounding_idx,\
             pairwise_grounding_labels = get_pairwise_labels(
-                                           event_labels[idx, :span_num[idx]].unsqueeze(0),
+                                           event_labels[idx, :span_num[idx]],
                                            action_labels[idx, :action_num[idx]],
                                            is_training=False,
                                            device=device)
 
-            if first_text_idx is None:
+            if first_text_idx is None or first_grounding_idx is None:
                 continue
+        
             first_text_idx = first_text_idx.squeeze(0)
             second_text_idx = second_text_idx.squeeze(0)
             pairwise_text_labels = pairwise_text_labels.squeeze(0)
             visual_scores = visual_coref_model(crossmedia_mention_output[idx, first_grounding_idx],
-                                             video_output[idx, second_grounding_idx])
+                                               video_output[idx, second_grounding_idx])
             crossmedia_scores = visual_coref_model.module.crossmedia_score(
                                                             first_text_idx,
                                                             second_text_idx,
                                                             visual_scores)
-            
             text_scores = text_coref_model(mention_output[idx, first_text_idx],
                                            mention_output[idx, second_text_idx])
-            text_scores = (text_scores + visual_scores) / 2.
-            predicted_antecedents = coref_model.module.predict_cluster(
+            text_scores = (text_scores + crossmedia_scores) / 2.
+            predicted_antecedents = text_coref_model.module.predict_cluster(
                                                text_scores, 
                                                first_text_idx,
                                                second_text_idx) 
@@ -395,26 +410,45 @@ def test(text_model,
                                                       text_labels[idx, :span_num[idx]])
             doc_id = test_loader.dataset.doc_ids[global_idx]
             tokens = [token[2] for token in test_loader.dataset.documents[doc_id]]
-            pred_clusters_str, gold_clusters_str = conll_eval.make_output_readable(pred_clusters, gold_clusters, tokens)
+            pred_clusters_str,\
+            gold_clusters_str = conll_eval.make_output_readable(
+                                  pred_clusters, 
+                                  gold_clusters, 
+                                  tokens
+                                )
             token_str = ' '.join(tokens).replace('\n', '')
             f_out.write(f"{doc_id}: {token_str}\n")
             f_out.write(f'Pred: {pred_clusters_str}\n')
             f_out.write(f'Gold: {gold_clusters_str}\n\n')
 
             all_scores.append(text_scores.squeeze(1))
-            all_labels.append(pairwise_text_labels.to(torch.int).cpu())            
+            all_labels.append(pairwise_text_labels.to(torch.int))
+            all_grounding_scores.append(visual_scores.squeeze(1))
+            all_grounding_labels.append(pairwise_grounding_labels.to(torch.int)) 
         all_scores = torch.cat(all_scores)
         all_labels = torch.cat(all_labels)
+        all_grounding_scores = torch.cat(all_grounding_scores)
+        all_grounding_labels = torch.cat(all_grounding_labels)
 
         strict_preds = (all_scores > 0).to(torch.int)
         eval = Evaluation(strict_preds, all_labels.to(device))
-
+        print('[Text Coreference Result]')
         print('Number of predictions: {}/{}'.format(strict_preds.sum(), len(strict_preds)))
         print('Number of positive pairs: {}/{}'.format(len((all_labels == 1).nonzero()),
-                                                     len(all_labels)))
+                                                       len(all_labels)))
         print('Pairwise - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
-                                                                eval.get_precision(), eval.get_f1()))
-        
+                                                                    eval.get_precision(), 
+                                                                    eval.get_f1()))
+        strict_preds = (all_grounding_scores > 0).to(torch.int)
+        grounding_eval = Evaluation(strict_preds, all_grounding_labels.to(device))
+        print('[Crossmedia Coreference Result]')
+        print('Number of predictions: {}/{}'.format(strict_preds.sum(), len(strict_preds)))
+        print('Number of positive pairs: {}/{}'.format(len((all_grounding_labels == 1).nonzero()),
+                                                       len(all_grounding_labels)))
+        print('Pairwise - Recall: {}, Precision: {}, F1: {}'.format(grounding_eval.get_recall(),
+                                                                    grounding_eval.get_precision(), 
+                                                                    grounding_eval.get_f1()))
+
         muc, b_cubed, ceafe, avg = conll_eval.get_metrics()
         results['pairwise'] = (eval.get_precision().item(), eval.get_recall().item(), eval.get_f1().item())
         results['muc'] = muc
@@ -452,11 +486,11 @@ if __name__ == '__main__':
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
 
   # Initialize dataloaders
-  splits = [os.path.join(config['data_folder'], 'train_mixed.json'),\
-            os.path.join(config['data_folder'], 'test_mixed.json')]
+  splits = [os.path.join(config['data_folder'], 'train_events.json'),\
+            os.path.join(config['data_folder'], 'test_events.json')]
   
   event_stoi = create_type_stoi(splits) 
-  feature_stoi = create_feature_stoi(splits, feature_types=config['feature_types'])
+  feature_stoi = create_feature_stoi(splits, feature_types=config['linguistic_feature_types'])
  
   train_set = TextVideoDataset(config, 
                                event_stoi, 
@@ -490,10 +524,10 @@ if __name__ == '__main__':
       # Initialize models
       mention_model = SpanEmbedder(config, device)
       text_coref_model = SimplePairWiseClassifier(config).to(device)
-      text_model = BiLSTM(text_coref_model.input_layer,
-                          config.hidden_layer)
-      visual_model = BLSTMVideoEncoder(400, config.hidden_layer)
-      visual_coref_model = CrossmediaPairwiseClassifier(config).to(device)
+      text_model = BiLSTM(int(text_coref_model.input_layer // 3),
+                          int(config.hidden_layer // 2))
+      visual_model = BiLSTMVideoEncoder(400, int(config.hidden_layer // 2))
+      visual_coref_model = CrossmediaPairWiseClassifier(config).to(device)
       
       if config['training_method'] in ('pipeline', 'continue'):
           text_model.load_state_dict(torch.load(config['text_model_path'], map_location=device))
@@ -520,7 +554,10 @@ if __name__ == '__main__':
       for p in mention_model.parameters():
           n_params += p.numel()
 
-      for p in coref_model.parameters():
+      for p in text_coref_model.parameters():
+          n_params += p.numel()
+
+      for p in visual_coref_model.parameters():
           n_params += p.numel()
 
       print('Number of parameters in coref classifier: {}'.format(n_params))
