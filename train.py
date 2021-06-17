@@ -15,7 +15,7 @@ from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
 from text_models import SpanEmbedder, BiLSTM, SimplePairWiseClassifier
 from visual_models import BiLSTMVideoEncoder, CrossmediaPairWiseClassifier
-from corpus import TextVideoDataset
+from corpus import TextVideoEventDataset
 from evaluator import Evaluation, CoNLLEvaluation
 from utils import make_prediction_readable, create_type_stoi, create_feature_stoi
 
@@ -146,7 +146,7 @@ def train(text_model,
   optimizer = get_optimizer(config, [text_model, 
                                      mention_model, 
                                      visual_model, 
-                                     text_coref_model, 
+                                     text_coref_model,
                                      visual_coref_model])
    
   # Start training
@@ -171,13 +171,23 @@ def train(text_model,
       end_mappings = batch['end_mappings'].to(device)
       continuous_mappings = batch['continuous_mappings'].to(device)
       width = batch['width'].to(device)
+      start_arg_mappings = batch['start_arg_mappings'].to(device)
+      end_arg_mappings = batch['end_arg_mappings'].to(device)
+      continuous_arg_mappings = batch['continuous_arg_mappings'].to(device)
+      arg_width = batch['arg_width'].to(device)
+      n_args = batch['n_args'].to(device)
+
       videos = batch['action_embeddings'].to(device)
       text_labels = batch['cluster_labels'].to(device)
       event_labels = batch['event_labels'].to(device)
-      linguistic_labels = torch.stack(
-                           [batch[feat_type].to(device)\
-                            for feat_type in config.linguistic_feature_types],
-                           dim=2)
+      event_linguistic_labels = torch.stack(
+                            [batch['linguistic_labels'][feat_type].to(device)\
+                             for feat_type in config.linguistic_feature_types],
+                            dim=2)
+      arg_linguistic_labels = torch.stack(
+                          [batch['arg_linguistic_labels'][feat_type].to(device)\
+                           for feat_type in config.linguistic_feature_types],
+                          dim=2) # TODO Check if this is allowed 
       action_labels = batch['action_labels'].to(device) 
       text_mask = batch['text_mask'].to(device)
       span_mask = batch['span_mask'].to(device)
@@ -200,6 +210,12 @@ def train(text_model,
                                      continuous_mappings, 
                                      width,
                                      linguistic_labels)
+      argument_output = mention_model(doc_embeddings,
+                                      start_arg_mappings,
+                                      end_arg_mappings,
+                                      continuous_arg_mappings,
+                                      arg_width,
+                                      arg_linguistic_labels)
       crossmedia_mention_output = text_model(mention_output)
       text_scores = []
       video_scores = []
@@ -235,7 +251,14 @@ def train(text_model,
                                                        video_score)
         text_score = text_coref_model(mention_output[idx, first_text_idx],
                                       mention_output[idx, second_text_idx])
-        text_score = (text_score + crossmedia_score) / 2.
+        argument_output_3d = argument_output[idx, :span_num[idx]*n_args[idx]]\
+                             .view(span_num[idx], n_args[idx], -1)
+        argument_score = text_coref_model(argument_output_3d[first_text_idx]\
+                                          .view(span_num[idx]*n_args[idx], -1),
+                                          argument_output_3d[second_text_idx]\
+                                          .view(span_num[idx]*n_args[idx], -1))
+        argument_score = argument_score.view(span_num[idx], n_args[idx]).mean(-1)
+        text_score = (text_score + crossmedia_score + argument_score) / 3.
         text_scores.append(text_score) 
         video_scores.append(video_score) 
         pairwise_text_labels.append(pairwise_text_label)
@@ -300,7 +323,7 @@ def train(text_model,
 def test(text_model,
          mention_model, 
          visual_model, 
-         text_coref_model, 
+         text_coref_model,
          visual_coref_model,
          test_loader, 
          args):
@@ -328,13 +351,23 @@ def test(text_model,
           end_mappings = batch['end_mappings'].to(device)
           continuous_mappings = batch['continuous_mappings'].to(device)
           width = batch['width'].to(device)
+          start_arg_mappings = batch['start_arg_mappings'].to(device)
+          end_arg_mappings = batch['end_arg_mappings'].to(device)
+          continuous_arg_mappings = batch['continuous_arg_mappings'].to(device)
+          arg_width = batch['arg_width'].to(device)
+          n_args = batch['n_args'].to(device)
+
           videos = batch['action_embeddings'].to(device)
           text_labels = batch['cluster_labels'].to(device) 
           event_labels = batch['event_labels'].to(device)
-          linguistic_labels = torch.stack(
-                                [batch[feat_type].to(device)\
+          event_linguistic_labels = torch.stack(
+                                [batch['linguistic_labels'][feat_type].to(device)\
                                  for feat_type in config.linguistic_feature_types],
-                                dim=1)
+                                dim=2)
+          arg_linguistic_labels = torch.stack(
+                                [batch['arg_linguistic_labels'][feat_type].to(device)\
+                                 for feat_type in config.linguistic_feature_types],
+                                dim=2) # TODO Check dim
           action_labels = batch['action_labels'].to(device)
           text_mask = batch['text_mask'].to(device)
           span_mask = batch['span_mask'].to(device)
@@ -361,6 +394,12 @@ def test(text_model,
                                          continuous_mappings, 
                                          width,
                                          linguistic_labels)
+          argument_output = mention_model(doc_embeddings,
+                                          start_arg_mappings,
+                                          end_arg_mappings,
+                                          continuous_arg_mappings,
+                                          arg_width,
+                                          arg_linguistic_labels)
           crossmedia_mention_output = text_model(mention_output)
 
           B = doc_embeddings.size(0) 
@@ -395,7 +434,14 @@ def test(text_model,
                                                             visual_scores)
             text_scores = text_coref_model(mention_output[idx, first_text_idx],
                                            mention_output[idx, second_text_idx])
-            text_scores = (text_scores + crossmedia_scores) / 2.
+            argument_output_3d = argument_output[idx, :span_num[idx]*n_args[idx]]\
+                                 .view(span_num[idx], n_args[idx], -1)
+            argument_scores = text_coref_model(argument_output_3d[first_text_idx]\
+                                                   .view(span_num[idx]*n_args[idx], -1),
+                                               argument_output_3d[second_text_idx]\
+                                                   .view(span_num[idx]*n_args[idx], -1))
+            argument_scores = argument_scores.view(span_num[idx], n_args[idx]).mean(-1)
+            text_scores = (text_scores + crossmedia_scores + argument_scores) / 3.
             predicted_antecedents = text_coref_model.module.predict_cluster(
                                                text_scores, 
                                                first_text_idx,
@@ -492,14 +538,14 @@ if __name__ == '__main__':
   event_stoi = create_type_stoi(splits) 
   feature_stoi = create_feature_stoi(splits, feature_types=config['linguistic_feature_types'])
  
-  train_set = TextVideoDataset(config, 
-                               event_stoi, 
-                               feature_stoi,
-                               split='train')
-  test_set = TextVideoDataset(config, 
-                              event_stoi, 
-                              feature_stoi,
-                              split='test')
+  train_set = TextVideoEventDataset(config, 
+                                    event_stoi, 
+                                    feature_stoi,
+                                    split='train')
+  test_set = TextVideoEventDataset(config, 
+                                   event_stoi, 
+                                   feature_stoi,
+                                   split='test')
 
   pairwises  = []
   mucs = []
