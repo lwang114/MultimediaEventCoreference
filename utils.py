@@ -4,6 +4,7 @@ import collections
 import pandas as pd
 import seaborn as sns; sns.set()
 import os
+import re
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -34,18 +35,31 @@ def create_type_stoi(mention_jsons):
   print('Num. of event types = {}'.format(n_event_types))
   return type_to_idx
 
-def create_role_to_idx(mention_jsons):
-  role_to_idx = {'###NULL###':0}
+def create_role_stoi(mention_jsons):
+  roles = set()
   for mention_json in mention_jsons:
     mention_dicts = json.load(open(mention_json))
     for mention_dict in mention_dicts:
       if 'event_type' in mention_dict:
         for a in mention_dict['arguments']:
-          if not a['role'] in role_to_idx:
-            role_to_idx[a['role']] = len(role_to_idx)
+          role = f"{mention_dict['event_type']}.{a['role']}"
+          if not role in roles:
+            roles.add(role)
+  roles = sorted(roles, key=lambda x:x.split('.')[0])
+  roles = ['###NULL###'] + roles
+  role_to_idx = {r:i for i, r in enumerate(roles)}
   print('Num. of role types = {}'.format(len(role_to_idx)))
   return role_to_idx
 
+def create_ontology(event_jsons, entity_jsons, out_prefix):
+  event_stoi = create_type_stoi(event_jsons)
+  entity_stoi = create_type_stoi(entity_jsons)
+  role_stoi = create_role_stoi(event_jsons)
+  ontology = {'entities': sorted(entity_stoi, key=lambda x:entity_stoi[x]),
+              'event': sorted(event_stoi, key=lambda x:event_stoi[x]),
+              'arguments': sorted(role_stoi, key=lambda x:role_stoi[x])}
+  json.dump(ontology, open(f'{out_prefix}.json', 'w'), indent=2)
+  
 def create_feature_stoi(mention_jsons, feature_types):
   stoi = dict()
   for mention_json in mention_jsons:
@@ -60,7 +74,23 @@ def create_feature_stoi(mention_jsons, feature_types):
           else:
             stoi[feat_type][m[feat_type]] = len(stoi[feat_type])
   return stoi
-            
+
+def create_ie_to_srl_mapping(ontology_file, out_prefix):
+  ie_roles = json.load(open(ontology_file))['arguments']
+  cur_event = ''
+  arg_idx = 0
+  ie_to_srl = dict()
+  for ie_role in ie_roles:
+    event = ie_role.split('.')[0]
+    role = re.sub(r"[0-9]", "", ie_role.split('.')[-1])
+    if event != cur_event:
+      cur_event = event
+      arg_idx = 0
+    if not role in ie_to_srl:
+      ie_to_srl[role] = f"arg_{arg_idx}"
+    arg_idx += 1
+  json.dump(ie_to_srl, open(f'{out_prefix}.json', 'w'), indent=2)
+
 def make_prediction_readable(pred_json, img_dir, mention_json, out_file='prediction_readable.txt'):
   pred_dicts = json.load(open(pred_json))
   mention_dicts = json.load(open(mention_json)) 
@@ -329,3 +359,12 @@ if __name__ == '__main__':
     plot_trigger_type_across_datasets(mention_jsons, dset_names)
   elif args.task == 5:
     compare_ontology_across_datasets('trigger_info_across_datasets.json', 'ACE', 'Video M2E2') 
+  elif args.task == 6:
+    out_prefix = 'data/video_m2e2/ontology_oneie'
+    create_ontology(['data/video_m2e2/mentions/train_events.json',
+                     'data/video_m2e2/mentions/test_events.json'],
+                    ['data/video_m2e2/mentions/train_entities.json',
+                     'data/video_m2e2/mentions/test_entities.json'],
+                    out_prefix)
+    create_ie_to_srl_mapping('data/video_m2e2/ontology_oneie.json',
+                             'data/video_m2e2/ie_to_srl')
