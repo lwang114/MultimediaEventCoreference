@@ -1,7 +1,9 @@
 {
-  "gpu_num" : [0],
+  "gpu_num": [0],
+  "debug": false, 
   "bert_model": "roberta-large",
   "video_feature": "mmaction_event_feat",
+  "use_action_boundary": true,
   "classifier": "simple",
   "bert_hidden_size": 1024,
   "hidden_layer": 1024,
@@ -9,7 +11,7 @@
   "with_start_end_embedding": false,
   "with_mention_width": false,
   "with_head_attention": false,
-  "linguistic_feature_types": ["sentence_id", "postag"],
+  "linguistic_feature_types": ["mention_type", "number", "sentence_id"],
   "embedding_dimension": 20,
   "classifier": "simple",
     
@@ -33,12 +35,12 @@
   "neg_samp": false,
   "task": "coreference",
     
-  "log_path": "models/joint_coref_events_video_m2e2/logs/",
+  "log_path": "models/joint_coref_events_video_m2e2_with_args/logs/",
   "image_dir": "",
   "data_folder": "data/video_m2e2/mentions",
   "is_one_indexed": false,
-  "text_model_path": "models/joint_coref_events_video_m2e2/best_text_model-0.pth",
-  "mention_model_path": "models/joint_coref_events_video_m2e2/best_mention_model-0.pth",
-  "coref_model_path": "models/joint_coref_events_video_m2e2/best_coref_model-0.pth",
-  "model_path": "models/joint_coref_events_video_m2e2" 
+  "text_model_path": "models/joint_coref_events_video_m2e2_with_args/best_text_model-0.pth",
+  "mention_model_path": "models/joint_coref_events_video_m2e2_with_args/best_mention_model-0.pth",
+  "coref_model_path": "models/joint_coref_events_video_m2e2_with_args/best_coref_model-0.pth",
+  "model_path": "models/joint_coref_events_video_m2e2_with_args" 
 }
