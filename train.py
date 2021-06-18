@@ -187,7 +187,7 @@ def train(text_model,
       arg_linguistic_labels = torch.stack(
                           [batch['arg_linguistic_labels'][feat_type].to(device)\
                            for feat_type in config.linguistic_feature_types],
-                          dim=2) # TODO Check if this is allowed 
+                          dim=2) 
       action_labels = batch['action_labels'].to(device) 
       text_mask = batch['text_mask'].to(device)
       span_mask = batch['span_mask'].to(device)
@@ -209,7 +209,7 @@ def train(text_model,
                                      end_mappings,
                                      continuous_mappings, 
                                      width,
-                                     linguistic_labels)
+                                     event_linguistic_labels)
       argument_output = mention_model(doc_embeddings,
                                       start_arg_mappings,
                                       end_arg_mappings,
@@ -242,7 +242,8 @@ def train(text_model,
         first_text_idx = first_text_idx.squeeze(0)
         second_text_idx = second_text_idx.squeeze(0)
         pairwise_text_label = pairwise_text_label.squeeze(0)
-        
+        n_pairs = first_text_idx.shape[0]
+
         video_score = visual_coref_model(crossmedia_mention_output[idx, first_grounding_idx],
                                          video_output[idx, second_grounding_idx]) 
         crossmedia_score = visual_coref_model.module.crossmedia_score(
@@ -253,12 +254,14 @@ def train(text_model,
                                       mention_output[idx, second_text_idx])
         argument_output_3d = argument_output[idx, :span_num[idx]*n_args[idx]]\
                              .view(span_num[idx], n_args[idx], -1)
+        
         argument_score = text_coref_model(argument_output_3d[first_text_idx]\
-                                          .view(span_num[idx]*n_args[idx], -1),
+                                          .view(n_pairs*n_args[idx], -1),
                                           argument_output_3d[second_text_idx]\
-                                          .view(span_num[idx]*n_args[idx], -1))
-        argument_score = argument_score.view(span_num[idx], n_args[idx]).mean(-1)
+                                          .view(n_pairs*n_args[idx], -1))
+        argument_score = argument_score.view(n_pairs, n_args[idx]).mean(-1, keepdim=True)
         text_score = (text_score + crossmedia_score + argument_score) / 3.
+
         text_scores.append(text_score) 
         video_scores.append(video_score) 
         pairwise_text_labels.append(pairwise_text_label)
@@ -266,6 +269,7 @@ def train(text_model,
 
       if not len(text_scores):
         continue
+
       text_scores = torch.cat(text_scores).squeeze(1)
       video_scores = torch.cat(video_scores).squeeze(1)
       pairwise_text_labels = torch.cat(pairwise_text_labels).to(torch.float)
@@ -393,7 +397,7 @@ def test(text_model,
                                          end_mappings,
                                          continuous_mappings, 
                                          width,
-                                         linguistic_labels)
+                                         event_linguistic_labels)
           argument_output = mention_model(doc_embeddings,
                                           start_arg_mappings,
                                           end_arg_mappings,
@@ -426,6 +430,8 @@ def test(text_model,
             first_text_idx = first_text_idx.squeeze(0)
             second_text_idx = second_text_idx.squeeze(0)
             pairwise_text_labels = pairwise_text_labels.squeeze(0)
+            n_pairs = first_text_idx.shape[0]
+
             visual_scores = visual_coref_model(crossmedia_mention_output[idx, first_grounding_idx],
                                                video_output[idx, second_grounding_idx])
             crossmedia_scores = visual_coref_model.module.crossmedia_score(
@@ -437,10 +443,10 @@ def test(text_model,
             argument_output_3d = argument_output[idx, :span_num[idx]*n_args[idx]]\
                                  .view(span_num[idx], n_args[idx], -1)
             argument_scores = text_coref_model(argument_output_3d[first_text_idx]\
-                                                   .view(span_num[idx]*n_args[idx], -1),
+                                                   .view(n_pairs*n_args[idx], -1),
                                                argument_output_3d[second_text_idx]\
-                                                   .view(span_num[idx]*n_args[idx], -1))
-            argument_scores = argument_scores.view(span_num[idx], n_args[idx]).mean(-1)
+                                                   .view(n_pairs*n_args[idx], -1))
+            argument_scores = argument_scores.view(n_pairs, n_args[idx]).mean(-1, keepdim=True)
             text_scores = (text_scores + crossmedia_scores + argument_scores) / 3.
             predicted_antecedents = text_coref_model.module.predict_cluster(
                                                text_scores, 

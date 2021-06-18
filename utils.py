@@ -65,8 +65,11 @@ def create_feature_stoi(mention_jsons, feature_types):
   for mention_json in mention_jsons:
     mentions = json.load(open(mention_json))
     for feat_type in feature_types:
+      if feat_type == 'mention_type' or feat_type == 'number':
+        feat_type = 'pos_tag'
       if not feat_type in stoi:
         stoi[feat_type] = dict()
+
       for m in mentions:
         if not m[feat_type] in stoi[feat_type]:
           if isinstance(m[feat_type], int) or isinstance(m[feat_type], float):

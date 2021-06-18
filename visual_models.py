@@ -57,13 +57,14 @@ class CrossmediaPairWiseClassifier(nn.Module):
   def forward(self, first, second):
     """
     Args :
-        first : FloatTensor of size (batch size, num. of pairs, common space dim.)
-        second : FloatTensor of size (batch size, num. of pairs, common space dim.)
+        first : FloatTensor of size (num. of pairs, common space dim.)
+        second : FloatTensor of size (num. of pairs, common space dim.)
     
     Returns :
-        scores : FloatTensor of size (batch size, num. of pairs, 1)
+        scores : FloatTensor of size (num. of pairs, 1)
     """ 
-    return self.pairwise_mlp(torch.cat((first, second, first * second), dim=1))   
+    # XXX return self.pairwise_mlp(torch.cat((first, second, first * second), dim=1))   
+    return torch.sum(first * second, dim=-1, keepdim=True) 
 
   def crossmedia_score(self, first_idxs, second_idxs, attention_map):
     """

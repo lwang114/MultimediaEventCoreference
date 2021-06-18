@@ -52,7 +52,7 @@ def fix_embedding_length(emb, L):
 class TextVideoEventDataset(Dataset):
   def __init__(self, config, 
                event_stoi,
-               feature_stoi, 
+               feature_stoi,
                split='train'):
     '''
     :param doc_json: dict of 
@@ -70,7 +70,7 @@ class TextVideoEventDataset(Dataset):
          'cluster_desc': '',
          'singleton': boolean, whether the mention is a singleton}
     '''
-    super(TextVideoDataset, self).__init__()
+    super(TextVideoEventDataset, self).__init__()
     self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     self.max_token_num = config.get('max_token_num', 512)
     self.max_span_num = config.get('max_span_num', 80)
@@ -78,9 +78,10 @@ class TextVideoEventDataset(Dataset):
     self.max_mention_span = config.get('max_mention_span', 15)
     self.img_feat_type = config.get('video_feature', 'mmaction_feat')
     self.event_stoi = event_stoi
+    feature_stoi['mention_type'] = {PROPER:0, NOMINAL:1, PRON:2}
+    feature_stoi['number'] = {SINGULAR:0, PLURAL:1}
     self.feature_stoi = feature_stoi
-    self.feature_stoi['mention_types'] = {PROPER:0, NOMINAL:1, PRON:2}
-    self.feature_stoi['number'] = {SINGULAR:0, PLURAL:1}
+
 
     doc_json = os.path.join(config['data_folder'], f'{split}.json')
     event_mention_json = os.path.join(config['data_folder'],
@@ -102,10 +103,8 @@ class TextVideoEventDataset(Dataset):
     
     # Extract coreference cluster labels
     self.linguistic_feat_types = config.get('linguistic_feature_types', None)
-    self.event_label_dict, self.event_ling_feature_dict = self.create_text_dict_labels(event_mentions) 
-    self.entity_label_dict, self.entity_ling_feature_dict = self.create_text_dict_labels(entity_mentions)
-    argument_spans = [[self.extract_argument(e) for e in mentions] for mentions in event_mentions]
-    self.argument_spans = np.asarray(argument_spans)
+    self.event_label_dict, self.event_feature_dict = self.create_text_dict_labels(event_mentions) 
+    self.entity_label_dict, self.entity_feature_dict = self.create_text_dict_labels(entity_mentions)
 
     self.use_action_boundary = config['use_action_boundary']
     id_mapping_json = os.path.join(config['data_folder'], '../video_m2e2.json')
@@ -113,8 +112,8 @@ class TextVideoEventDataset(Dataset):
     action_dur_json = os.path.join(config['data_folder'], '../anet_anno.json')
     ontology_json = os.path.join(config['data_folder'], '../ontology.json')
     ontology_map_json = os.path.join(config['data_folder'], '../ontology_mapping.json')
-    ie_to_srl_role_json = os.path.join(config['data_folder'], '../ie_to_srl_role_mapping.json') # TODO
-
+    ie_to_srl_json = os.path.join(config['data_folder'], '../ie_to_srl.json')
+    
     id_mapping = json.load(codecs.open(id_mapping_json, 'r', 'utf-8'))
     action_anno_dict = json.load(codecs.open(action_anno_json, 'r', 'utf-8'))
     action_dur_dict = json.load(codecs.open(action_dur_json))
@@ -122,7 +121,7 @@ class TextVideoEventDataset(Dataset):
     self.ontology = json.load(codecs.open(ontology_json))
     ontology_map = json.load(codecs.open(ontology_map_json))
     self.ontology_map = {l:k for k, v in ontology_map.items() for l in v}
-    self.ie_to_srl_dict = json.load(codecs.open(ie_to_srl_role_json))
+    self.ie_to_srl_dict = json.load(codecs.open(ie_to_srl_json))
 
     self.action_label_dict = self.create_action_dict_labels(id_mapping,\
                                                             action_anno_dict,\
@@ -139,7 +138,10 @@ class TextVideoEventDataset(Dataset):
 
     # Tokenize documents and extract token spans after bert tokenization
     self.tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
-    self.origin_tokens, self.bert_tokens, self.bert_start_ends, clean_start_end_dict = self.tokenize(documents)
+    self.origin_tokens,\
+    self.bert_tokens,\
+    self.bert_start_ends,\
+    clean_start_end_dict = self.tokenize(documents)
 
     # Extract spans
     self.origin_candidate_start_ends = [np.asarray(sorted(self.event_label_dict[doc_id])) for doc_id in self.doc_ids]
@@ -149,6 +151,10 @@ class TextVideoEventDataset(Dataset):
           print(doc_id, start, end, len(clean_start_end_dict[doc_id])) 
     self.candidate_start_ends = [np.asarray([[clean_start_end_dict[doc_id][start], clean_start_end_dict[doc_id][end]] for start, end in start_ends])
                                  for doc_id, start_ends in zip(self.doc_ids, self.origin_candidate_start_ends)]
+
+    self.argument_spans = [np.asarray(self.extract_argument(self.event_label_dict[doc_id][span])\
+                             for span in sorted(self.event_label_dict[doc_id])) for doc_id in self.doc_ids] 
+
 
   def tokenize(self, documents):
     '''
@@ -216,7 +222,7 @@ class TextVideoEventDataset(Dataset):
     arg_spans = []
     for role in ['arg_0', 'arg_1']:
       for rel_idx, arg in enumerate(event['arguments']):
-        cur_role = self.ie_to_srl_dict[arg['role']]
+        cur_role = self.ie_to_srl_dict.get(arg['role'], '')
         if cur_role == role:
           span = (arg['start'], arg['end'])
           arg_spans.append(span)
@@ -240,15 +246,22 @@ class TextVideoEventDataset(Dataset):
         if not m['doc_id'] in text_label_dict:
           text_label_dict[m['doc_id']] = dict()
           ling_feature_dict[m['doc_id']] = dict()
+        
+        if 'event_type' in m:
+          mention_class = m['event_type']
+        else:
+          mention_class = m['entity_type']
+
         text_label_dict[m['doc_id']][(start, end)] = {'cluster_id': m['cluster_id'],
-                                                      'type': m['type']}
+                                                      'type': mention_class,
+                                                      'arguments': m.get('arguments', [])}
         
         ling_feature_dict[m['doc_id']][(start, end)] = dict() 
         for feat_type in self.linguistic_feat_types:
           if feat_type == 'mention_type':
             ling_feature_dict[m['doc_id']][(start, end)][feat_type] = self.extract_mention_type(m['pos_tag'])
           elif feat_type == 'number':
-            ling_feature_dict[m['doc_id']][(start, end)][feat_type] = self.extract_number(m['pos_tag'])
+            ling_feature_dict[m['doc_id']][(start, end)][feat_type] = self.extract_number(m['tokens'], m['pos_tag'])
           else:
             ling_feature_dict[m['doc_id']][(start, end)][feat_type] = m[feat_type]
     return text_label_dict, ling_feature_dict
@@ -318,26 +331,37 @@ class TextVideoEventDataset(Dataset):
     width = torch.LongTensor([min(w, self.max_mention_span) for w in width])
 
     # Convert the argument spans to the bert tokenized spans
-    n_args = self.argument_spans[idx].shape[1]
-    arg_starts = self.argument_spans[idx][:, :, 0].flatten()
-    arg_ends = self.argument_spans[idx][:, :, 1].flatten()
-    bert_arg_starts = bert_start_ends[arg_starts, 0]
-    bert_arg_ends = bert_start_ends[arg_ends, 1] 
-    start_arg_mappings, end_arg_mappings, continuous_arg_mappings, arg_width =\
-      get_all_token_mapping(bert_arg_starts,
-                            bert_arg_ends,
-                            self.max_token_num,
-                            self.max_mention_span)
+    if not len(self.argument_spans[idx].shape):
+      n_args = 2
+      arg_starts = []
+      arg_ends = []
+      start_arg_mappings = torch.zeros(n_args*self.max_span_num, self.max_token_num)
+      end_arg_mappings = torch.zeros(n_args*self.max_span_num, self.max_token_num)
+      continuous_arg_mappings = torch.zeros(n_args*self.max_span_num,
+                                            self.max_mention_span,
+                                            self.max_token_num)
+      arg_width = torch.zeros(n_args*self.max_span_num)
+    else:
+      n_args = self.argument_spans[idx].shape[1]
+      arg_starts = self.argument_spans[idx][:, :, 0].flatten()
+      arg_ends = self.argument_spans[idx][:, :, 1].flatten()
+      bert_arg_starts = bert_start_ends[arg_starts, 0]
+      bert_arg_ends = bert_start_ends[arg_ends, 1] 
+      start_arg_mappings, end_arg_mappings, continuous_arg_mappings, arg_width =\
+        get_all_token_mapping(bert_arg_starts,
+                              bert_arg_ends,
+                              self.max_token_num,
+                              self.max_mention_span)
+      start_arg_mappings = fix_embedding_length(start_arg_mappings, n_args*self.max_span_num)
+      end_arg_mappings = fix_embedding_length(end_arg_mappings, n_args*self.max_span_num)
+      continuous_arg_mappings = fix_embedding_length(continuous_arg_mappings, n_args*self.max_span_num)
+      arg_width = fix_embedding_length(arg_width.unsqueeze(1), n_args*self.max_span_num).squeeze(1)
 
     # Pad/truncate the outputs to max num. of spans
     start_mappings = fix_embedding_length(start_mappings, self.max_span_num)
     end_mappings = fix_embedding_length(end_mappings, self.max_span_num)
     continuous_mappings = fix_embedding_length(continuous_mappings, self.max_span_num)
     width = fix_embedding_length(width.unsqueeze(1), self.max_span_num).squeeze(1)
-    start_arg_mappings = fix_embedding_length(start_arg_mappings, n_args*self.max_span_num)
-    end_arg_mappings = fix_embedding_length(end_arg_mappings, n_args*self.max_span_num)
-    continuous_arg_mappings = fix_embedding_length(continuous_arg_mappings, n_args*self.max_span_num)
-    arg_width = fix_embedding_length(arg_width.unsqueeze(1), n_args*self.max_span_num).squeeze(1)
 
     # Extract coreference cluster labels
     labels = [int(self.event_label_dict[self.doc_ids[idx]][(start, end)]['cluster_id'])\
@@ -355,9 +379,9 @@ class TextVideoEventDataset(Dataset):
     # Extract linguistic feature labels
     linguistic_labels = {k:[] for k in self.linguistic_feat_types}
     for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1]):
-      feat_dict = self.event_ling_feature_dict[self.doc_ids[idx]][(start, end)]
-      for k, v in feat_dict.items():
-        linguistic_labels[k].append(self.feature_stoi[k][v])
+      feat_dict = self.event_feature_dict[self.doc_ids[idx]][(start, end)]
+      for k in self.linguistic_feat_types:
+        linguistic_labels[k].append(self.feature_stoi[k][feat_dict[k]])
 
     for k in linguistic_labels:  
       linguistic_labels[k] = torch.LongTensor(linguistic_labels[k])
@@ -366,10 +390,10 @@ class TextVideoEventDataset(Dataset):
                                self.max_span_num).squeeze(1)
  
     arg_linguistic_labels = {k:[] for k in self.linguistic_feat_types}
-    for start, end in zip(arg_spans[:, 0], arg_spans[:, 1]):
-      feat_dict = self.entity_ling_feature_dict[self.doc_ids[idx]][(start, end)]
-      for k, v in feat_dict.items():
-        arg_linguistic_labels[k].append(self.feature_stoi[k][v]) 
+    for start, end in zip(arg_starts, arg_ends):
+      feat_dict = self.entity_feature_dict[self.doc_ids[idx]][(start, end)]
+      for k in self.linguistc_feat_types:
+        arg_linguistic_labels[k].append(self.feature_stoi[k][feat_dict[k]]) 
 
     for k in arg_linguistic_labels:  
       arg_linguistic_labels[k] = torch.LongTensor(arg_linguistic_labels[k])
@@ -386,7 +410,7 @@ class TextVideoEventDataset(Dataset):
             'end_arg_mappings': end_arg_mappings,
             'continuous_arg_mappings': continuous_arg_mappings,
             'arg_width': arg_width,
-            'labels': labels,
+            'cluster_labels': labels,
             'event_labels': event_labels,
             'linguistic_labels': linguistic_labels,
             'arg_linguistic_labels': arg_linguistic_labels,
