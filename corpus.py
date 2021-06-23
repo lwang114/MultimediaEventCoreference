@@ -18,6 +18,7 @@ PLURAL = 'plural'
 PROPER = 'proper'
 NOMINAL = 'nominal'
 PRON = 'pronoun'
+NULL = '###NULL###'
 
 def get_all_token_mapping(start, end, max_token_num, max_mention_span):
     try:
@@ -38,6 +39,7 @@ def get_all_token_mapping(start, end, max_token_num, max_mention_span):
             break
           span_mappings[span_idx, token_count, token_pos] = 1.
         length.append(e-s+1)
+    length = torch.LongTensor(length)
     return start_mappings, end_mappings, span_mappings, length
 
 def fix_embedding_length(emb, L):
@@ -316,7 +318,8 @@ class TextVideoEventDataset(Dataset):
     # Extract the current doc embedding
     bert_tokens = self.bert_tokens[idx]
     doc_len = len(bert_tokens)
-    if self.finetune_bert = True:
+    if self.finetune_bert:
+      bert_tokens = torch.LongTensor(bert_tokens)
       doc_embeddings = fix_embedding_length(bert_tokens.unsqueeze(-1), self.max_token_num).squeeze(-1)
     else:
       for k in self.docs_embeddings:
@@ -399,7 +402,7 @@ class TextVideoEventDataset(Dataset):
     arg_linguistic_labels = {k:[] for k in self.linguistic_feat_types}
     for start, end in zip(arg_starts, arg_ends):
       feat_dict = self.entity_feature_dict[self.doc_ids[idx]].get((start, end), dict())
-      for k in self.linguistc_feat_types:
+      for k in self.linguistic_feat_types:
         arg_linguistic_labels[k].append(self.feature_stoi[k][feat_dict.get(k, NULL)]) 
 
     for k in arg_linguistic_labels:  
