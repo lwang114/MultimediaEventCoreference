@@ -371,3 +371,13 @@ if __name__ == '__main__':
                     out_prefix)
     create_ie_to_srl_mapping('data/video_m2e2/ontology_oneie.json',
                              'data/video_m2e2/ie_to_srl')
+  elif args.task == 7:
+    out_prefix = 'data/ace/ontology'
+    create_ontology(['data/ace/mentions/train_events.json',
+                     'data/ace/mentions/test_events.json'],
+                    ['data/ace/mentions/train_entities.json',
+                     'data/ace/mentions/test_entities.json'],
+                    out_prefix)
+    create_ie_to_srl_mapping('data/ace/ontology.json',
+                             'data/ace/ie_to_srl')
+
