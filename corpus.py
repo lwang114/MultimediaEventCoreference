@@ -140,7 +140,11 @@ class TextVideoEventDataset(Dataset):
     print('Number of documents: ', len(self.doc_ids))
 
     # Tokenize documents and extract token spans after bert tokenization
-    self.tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
+    self.bert_model = config['bert_model']
+    if self.bert_model == 'uniter':
+      self.tokenizer = AutoTokenizer.from_pretrained('roberta-large')  
+    else:
+      self.tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
     self.origin_tokens,\
     self.bert_tokens,\
     self.bert_start_ends,\
@@ -272,9 +276,9 @@ class TextVideoEventDataset(Dataset):
     return text_label_dict, ling_feature_dict
   
   def create_action_dict_labels(self, 
-                               id_map,
-                               anno_dict,
-                               dur_dict):
+                                id_map,
+                                anno_dict,
+                                dur_dict):
     """
     :param id2desc: {[youtube id]: [description id with puncts]} 
     :param anno_dict: {[description id]: list of {'Temporal_Boundary': [float, float], 'Event_Type': int}}  
@@ -321,6 +325,8 @@ class TextVideoEventDataset(Dataset):
     if self.finetune_bert:
       bert_tokens = torch.LongTensor(bert_tokens)
       doc_embeddings = fix_embedding_length(bert_tokens.unsqueeze(-1), self.max_token_num).squeeze(-1)
+    elif self.bert_model == 'uniter':
+      doc_embeddings = self.docs_embeddings[self.doc_ids[idx]][:doc_len]
     else:
       for k in self.docs_embeddings:
         if '_'.join(k.split('_')[:-1]) == '_'.join(self.feat_keys[idx].split('_')[:-1]):
