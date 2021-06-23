@@ -254,6 +254,7 @@ def train(text_model,
                                                        video_score)
         text_score = text_coref_model(mention_output[idx, first_text_idx],
                                       mention_output[idx, second_text_idx])
+
         argument_output_3d = argument_output[idx, :span_num[idx]*n_args[idx]]\
                              .view(span_num[idx], n_args[idx], -1)
         
@@ -435,6 +436,8 @@ def test(text_model,
             second_text_idx = second_text_idx.squeeze(0)
             pairwise_text_labels = pairwise_text_labels.squeeze(0)
             n_pairs = first_text_idx.shape[0]
+            text_score = text_coref_model(mention_output[idx, first_text_idx],
+                                          mention_output[idx, second_text_idx])
 
             visual_scores = visual_coref_model(crossmedia_mention_output[idx, first_grounding_idx],
                                                video_output[idx, second_grounding_idx])

@@ -327,6 +327,8 @@ class TextVideoEventDataset(Dataset):
       doc_embeddings = fix_embedding_length(bert_tokens.unsqueeze(-1), self.max_token_num).squeeze(-1)
     elif self.bert_model == 'uniter':
       doc_embeddings = self.docs_embeddings[self.doc_ids[idx]][:doc_len]
+      doc_embeddings = torch.FloatTensor(doc_embeddings)
+      doc_embeddings = fix_embedding_length(doc_embeddings, self.max_token_num)
     else:
       for k in self.docs_embeddings:
         if '_'.join(k.split('_')[:-1]) == '_'.join(self.feat_keys[idx].split('_')[:-1]):
