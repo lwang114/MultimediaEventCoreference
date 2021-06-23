@@ -6,7 +6,8 @@ import json
 import time
 import allennlp.nn.util as util 
 from itertools import combinations
-from IPOT.ipot import ipot_WD  
+from transformers import AutoModel
+from IPOT.ipot import ipot_WD 
 
 def init_weights(m):
     if isinstance(m, nn.Linear) or isinstance(m, nn.Bilinear):
@@ -94,7 +95,107 @@ class CharCNN(nn.Module):
     x = x.squeeze(2)
     x = torch.transpose(x, -2, -1)
     return x 
+
+class BERTSpanEmbedder(nn.Module):
+    def __init__(self, config, device):
+        super(BERTSpanEmbedder, self).__init__()
+        self.bert_model = AutoModel.from_pretrained(config.bert_model)
+        self.bert_hidden_size = config.bert_hidden_size 
+        self.with_width_embedding = config.with_mention_width
+        self.use_head_attention = config.with_head_attention
+        self.device = device
+        self.dropout = config.dropout
+        self.self_attention_layer = nn.Sequential(
+            nn.Dropout(config.dropout),
+            nn.Linear(self.bert_hidden_size, config.hidden_layer),
+            # nn.Dropout(config['dropout']),
+            nn.ReLU(),
+            nn.Linear(config.hidden_layer, 1)
+        )
+        self.self_attention_layer.apply(init_weights)
+        self.width_feature = nn.Embedding(5, config.embedding_dimension)
+        self.linguistic_feature_types = config.linguistic_feature_types
+    
+    def pad_continuous_embeddings(self, continuous_embeddings, width):
+        if isinstance(continuous_embeddings, list):
+          max_length = max(len(v) for v in continuous_embeddings)
+          padded_tokens_embeddings = torch.stack(
+            [torch.cat((emb, self.padded_vector.repeat(max_length - len(emb), 1)))
+             for emb in continuous_embeddings]
+          )
+          masks = torch.stack(
+            [torch.cat(
+                (torch.ones(len(emb), device=self.device),
+                 torch.zeros(max_length - len(emb), device=self.device)))
+             for emb in continuous_embeddings]
+          )
+        else:
+          span_num = width.size(0)
+          max_length = continuous_embeddings.size(1)
+          if (max_length - width.max()) < 0:
+            print('max width {} is shorter than max width {} in the batch!'.format(max_length, width.max()))
+          padded_tokens_embeddings = continuous_embeddings
+          masks = torch.stack(
+            [torch.cat(
+                (torch.ones(max(width[idx].item(), 1), device=self.device),
+                 torch.zeros(max_length - max(width[idx].item(), 1), device=self.device)))
+             for idx in range(span_num)]
+          )
+
+        return padded_tokens_embeddings, masks
+  
+    def forward(self, input_ids,
+                start_mappings,
+                end_mappings,
+                continuous_mappings,
+                width,
+                linguistic_labels=None,
+                attention_mask=None):
+        doc_embeddings = self.bert_model(input_ids=input_ids,
+                                         attention_mask=attention_mask)
+        start_embeddings = torch.matmul(start_mappings, doc_embeddings)
+        end_embeddings = torch.matmul(end_mappings, doc_embeddings)
+        start_end = torch.cat([start_embeddings, end_embeddings], dim=-1)
+        continuous_embeddings = torch.matmul(continuous_mappings, doc_embeddings.unsqueeze(1))
         
+        if self.with_start_end_embedding:
+          vector = start_end
+        else:
+          vector = start_embeddings
+        
+        B, S, M = None, None, None
+        if not isinstance(continuous_embeddings, list):
+          B = continuous_embeddings.size(0)
+          S = continuous_embeddings.size(1)
+          M = continuous_embeddings.size(2)
+          continuous_embeddings = continuous_embeddings.view(B*S, M, -1)
+          width = width.view(B*S)
+          vector = vector.view(B*S, -1)
+          linguistic_labels = linguistic_labels.view(B*S, -1)
+
+        if self.use_head_attention:
+            padded_tokens_embeddings, masks = self.pad_continous_embeddings(continuous_embeddings, width)
+            attention_scores = self.self_attention_layer(padded_tokens_embeddings).squeeze(-1)
+            attention_scores *= masks
+            attention_scores = torch.where(attention_scores != 0, attention_scores,
+                                           torch.tensor(-9e9, device=self.device))
+            attention_scores = F.softmax(attention_scores, dim=1)
+            weighted_sum = (attention_scores.unsqueeze(-1) * padded_tokens_embeddings).sum(dim=1)
+            vector = torch.cat((vector, weighted_sum), dim=1)
+
+        for feat_idx, feat_type in enumerate(self.linguistic_feature_types):
+            vector = torch.cat((vector, linguistic_labels[:, feat_idx:feat_idx+1]), dim=1)  
+
+        if self.with_width_embedding:
+            width = torch.clamp(width, max=4)
+            width_embedding = self.width_feature(width)
+            vector = torch.cat((vector, width_embedding), dim=1)
+
+        if not isinstance(continuous_embeddings, list):
+          vector = vector.view(B, S, -1)
+        return vector
+
+
 class SpanEmbedder(nn.Module):
     def __init__(self, config, device):
         super(SpanEmbedder, self).__init__()
@@ -150,7 +251,8 @@ class SpanEmbedder(nn.Module):
                 end_mappings, 
                 continuous_mappings, 
                 width,
-                linguistic_labels=None):
+                linguistic_labels=None,
+                attention_mask=None):
         start_embeddings = torch.matmul(start_mappings, doc_embeddings)
         end_embeddings = torch.matmul(end_mappings, doc_embeddings)
         start_end = torch.cat([start_embeddings, end_embeddings], dim=-1)

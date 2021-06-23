@@ -13,7 +13,7 @@ import random
 import numpy as np
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
-from text_models import SpanEmbedder, BiLSTM, SimplePairWiseClassifier
+from text_models import BERTSpanEmbedder, SpanEmbedder, BiLSTM, SimplePairWiseClassifier
 from visual_models import BiLSTMVideoEncoder, CrossmediaPairWiseClassifier
 from corpus import TextVideoEventDataset
 from evaluator import Evaluation, CoNLLEvaluation
@@ -209,13 +209,15 @@ def train(text_model,
                                      end_mappings,
                                      continuous_mappings, 
                                      width,
-                                     event_linguistic_labels)
+                                     event_linguistic_labels,
+                                     attention_mask=text_mask)
       argument_output = mention_model(doc_embeddings,
                                       start_arg_mappings,
                                       end_arg_mappings,
                                       continuous_arg_mappings,
                                       arg_width,
-                                      arg_linguistic_labels)
+                                      arg_linguistic_labels,
+                                      attention_mask=text_mask)
       crossmedia_mention_output = text_model(mention_output)
       text_scores = []
       video_scores = []
@@ -397,13 +399,15 @@ def test(text_model,
                                          end_mappings,
                                          continuous_mappings, 
                                          width,
-                                         event_linguistic_labels)
+                                         event_linguistic_labels,
+                                         attention_mask=text_mask)
           argument_output = mention_model(doc_embeddings,
                                           start_arg_mappings,
                                           end_arg_mappings,
                                           continuous_arg_mappings,
                                           arg_width,
-                                          arg_linguistic_labels)
+                                          arg_linguistic_labels,
+                                          attention_mask=text_mask)
           crossmedia_mention_output = text_model(mention_output)
 
           B = doc_embeddings.size(0) 
@@ -574,7 +578,10 @@ if __name__ == '__main__':
       test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
 
       # Initialize models
-      mention_model = SpanEmbedder(config, device)
+      if config.get('finetune_bert', False):
+        mention_model = BERTSpanEmbedder(config, device)
+      else:
+        mention_model = SpanEmbedder(config, device)
       text_coref_model = SimplePairWiseClassifier(config).to(device)
       text_model = BiLSTM(int(text_coref_model.input_layer // 3),
                           int(config.hidden_layer // 2))

@@ -72,6 +72,8 @@ class TextVideoEventDataset(Dataset):
     '''
     super(TextVideoEventDataset, self).__init__()
     self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    self.finetune_bert = config.get('finetune_bert', False)
+    print(f'Finetune BERT: {self.finetune_bert}')
     self.max_token_num = config.get('max_token_num', 512)
     self.max_span_num = config.get('max_span_num', 80)
     self.max_frame_num = config.get('max_frame_num', 100)
@@ -81,7 +83,6 @@ class TextVideoEventDataset(Dataset):
     feature_stoi['mention_type'] = {PROPER:0, NOMINAL:1, PRON:2}
     feature_stoi['number'] = {SINGULAR:0, PLURAL:1}
     self.feature_stoi = feature_stoi
-
 
     doc_json = os.path.join(config['data_folder'], f'{split}.json')
     event_mention_json = os.path.join(config['data_folder'],
@@ -311,13 +312,17 @@ class TextVideoEventDataset(Dataset):
     span_num = len(candidate_starts)
        
     # Extract the current doc embedding
-    doc_len = len(self.bert_tokens[idx])
-    for k in self.docs_embeddings:
-      if '_'.join(k.split('_')[:-1]) == '_'.join(self.feat_keys[idx].split('_')[:-1]):
-        doc_embeddings = self.docs_embeddings[k][:doc_len]
-        break
-    doc_embeddings = torch.FloatTensor(doc_embeddings)
-    doc_embeddings = fix_embedding_length(doc_embeddings, self.max_token_num)
+    bert_tokens = self.bert_tokens[idx]
+    doc_len = len(bert_tokens)
+    if self.finetune_bert = True:
+      doc_embeddings = fix_embedding_length(bert_tokens.unsqueeze(-1), self.max_token_num).squeeze(-1)
+    else:
+      for k in self.docs_embeddings:
+        if '_'.join(k.split('_')[:-1]) == '_'.join(self.feat_keys[idx].split('_')[:-1]):
+          doc_embeddings = self.docs_embeddings[k][:doc_len]
+          break
+      doc_embeddings = torch.FloatTensor(doc_embeddings)
+      doc_embeddings = fix_embedding_length(doc_embeddings, self.max_token_num)
  
     # Convert the original spans to the bert tokenized spans
     bert_start_ends = self.bert_start_ends[idx]
