@@ -466,11 +466,15 @@ def test(text_model,
                                                       text_labels[idx, :span_num[idx]])
             doc_id = test_loader.dataset.doc_ids[global_idx]
             tokens = [token[2] for token in test_loader.dataset.documents[doc_id]]
+            event_label_dict = test_loader.dataset.event_label_dict[doc_id]
+            arg_spans = test_loader.dataset.origin_argument_spans[global_idx]
+            arguments = {span: arg_span\
+                         for span, arg_span in zip(sorted(event_label_dict), arg_spans)}
             pred_clusters_str,\
             gold_clusters_str = conll_eval.make_output_readable(
                                   pred_clusters, 
-                                  gold_clusters, 
-                                  tokens
+                                  gold_clusters,
+                                  tokens, arguments=arguments
                                 )
             token_str = ' '.join(tokens).replace('\n', '')
             f_out.write(f"{doc_id}: {token_str}\n")

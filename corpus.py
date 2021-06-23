@@ -80,8 +80,8 @@ class TextVideoEventDataset(Dataset):
     self.max_mention_span = config.get('max_mention_span', 15)
     self.img_feat_type = config.get('video_feature', 'mmaction_feat')
     self.event_stoi = event_stoi
-    feature_stoi['mention_type'] = {PROPER:0, NOMINAL:1, PRON:2}
-    feature_stoi['number'] = {SINGULAR:0, PLURAL:1}
+    feature_stoi['mention_type'] = {NULL:0, PROPER:1, NOMINAL:2, PRON:3}
+    feature_stoi['number'] = {NULL:0, SINGULAR:1, PLURAL:2}
     self.feature_stoi = feature_stoi
 
     doc_json = os.path.join(config['data_folder'], f'{split}.json')
@@ -153,9 +153,10 @@ class TextVideoEventDataset(Dataset):
     self.candidate_start_ends = [np.asarray([[clean_start_end_dict[doc_id][start], clean_start_end_dict[doc_id][end]] for start, end in start_ends])
                                  for doc_id, start_ends in zip(self.doc_ids, self.origin_candidate_start_ends)]
 
-    self.argument_spans = [np.asarray(self.extract_argument(self.event_label_dict[doc_id][span])\
-                             for span in sorted(self.event_label_dict[doc_id])) for doc_id in self.doc_ids] 
-
+    self.origin_argument_spans = [np.asarray([self.extract_argument(self.event_label_dict[doc_id][span])
+                                              for span in sorted(self.event_label_dict[doc_id])]) for doc_id in self.doc_ids]
+    self.candidate_argument_spans = [np.asarray([[[clean_start_end_dict[doc_id][start], clean_start_end_dict[doc_id][end]] for start, end in arg_spans] for arg_spans in args_spans])
+                                     for doc_id, args_spans in zip(self.doc_ids, self.origin_argument_spans)]
 
   def tokenize(self, documents):
     '''
@@ -222,12 +223,13 @@ class TextVideoEventDataset(Dataset):
     found = False
     arg_spans = []
     for role in ['arg_0', 'arg_1']:
+      span = (-1, -1)
       for rel_idx, arg in enumerate(event['arguments']):
         cur_role = self.ie_to_srl_dict.get(arg['role'], '')
         if cur_role == role:
           span = (arg['start'], arg['end'])
-          arg_spans.append(span)
           break
+      arg_spans.append(span)
     return np.asarray(arg_spans)
 
   def create_text_dict_labels(self, text_mentions):
@@ -336,7 +338,7 @@ class TextVideoEventDataset(Dataset):
     width = torch.LongTensor([min(w, self.max_mention_span) for w in width])
 
     # Convert the argument spans to the bert tokenized spans
-    if not len(self.argument_spans[idx].shape):
+    if not len(self.origin_argument_spans[idx].shape):
       n_args = 2
       arg_starts = []
       arg_ends = []
@@ -347,9 +349,9 @@ class TextVideoEventDataset(Dataset):
                                             self.max_token_num)
       arg_width = torch.zeros(n_args*self.max_span_num)
     else:
-      n_args = self.argument_spans[idx].shape[1]
-      arg_starts = self.argument_spans[idx][:, :, 0].flatten()
-      arg_ends = self.argument_spans[idx][:, :, 1].flatten()
+      n_args = self.candidate_argument_spans[idx].shape[1]
+      arg_starts = self.candidate_argument_spans[idx][:, :, 0].flatten()
+      arg_ends = self.candidate_argument_spans[idx][:, :, 1].flatten()
       bert_arg_starts = bert_start_ends[arg_starts, 0]
       bert_arg_ends = bert_start_ends[arg_ends, 1] 
       start_arg_mappings, end_arg_mappings, continuous_arg_mappings, arg_width =\
@@ -396,9 +398,9 @@ class TextVideoEventDataset(Dataset):
  
     arg_linguistic_labels = {k:[] for k in self.linguistic_feat_types}
     for start, end in zip(arg_starts, arg_ends):
-      feat_dict = self.entity_feature_dict[self.doc_ids[idx]][(start, end)]
+      feat_dict = self.entity_feature_dict[self.doc_ids[idx]].get((start, end), dict())
       for k in self.linguistc_feat_types:
-        arg_linguistic_labels[k].append(self.feature_stoi[k][feat_dict[k]]) 
+        arg_linguistic_labels[k].append(self.feature_stoi[k][feat_dict.get(k, NULL)]) 
 
     for k in arg_linguistic_labels:  
       arg_linguistic_labels[k] = torch.LongTensor(arg_linguistic_labels[k])
