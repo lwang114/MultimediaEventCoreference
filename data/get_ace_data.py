@@ -46,6 +46,7 @@ def get_mention_doc(data_json, out_prefix):
   documents = {}
   entities = []
   events = []
+  entity_to_span = dict()
   sen_start = 0
   
   cluster_ids = {'###SINGLETON###': 0}
@@ -118,6 +119,7 @@ def get_mention_doc(data_json, out_prefix):
                   'singleton': False}
         # entity = get_entity_feature(entity, tokens, dep_head, dep_role, sen_start=sen_start) # TODO
         entity_event_mask[start:end] = 1.
+        entity_to_span[mention_id] = (sen_start+start, sen_start+end-1)
         entities.append(entity)
 
       for event_mention in event_mentions:
@@ -126,10 +128,17 @@ def get_mention_doc(data_json, out_prefix):
         cluster_id = cluster_ids[event_id]
         start = event_mention['trigger']['start']
         end = event_mention['trigger']['end']
-        
+        arguments = event_mention['arguments']
+        arg_dicts = []
+        for a in arguments:
+          arg_dicts.append({'m_id': a['entity_id'],
+                            'start': entity_to_span[a['entity_id']][0],
+                            'end': entity_to_span[a['entity_id']][1],
+                            'tokens': a['text'],
+                            'role': a['role']})
         event = {'doc_id': doc_id,
                  'm_id': mention_id,
-                 'arguments': event_mention['arguments'],
+                 'arguments': arg_dicts,
                  'sentence_id': sent_id,
                  'event_type': event_mention['event_type'],
                  'tokens_ids': list(range(sen_start+start, sen_start+end)),
@@ -416,7 +425,6 @@ if __name__ == '__main__':
       data_json = os.path.join(data_dir, '{}.oneie.json'.format(split))
       out_prefix = os.path.join(data_dir, 'mentions', split)
       get_mention_doc(data_json, out_prefix)
-      get_event_info(data_json, out_prefix)
   elif args.task == 1:
     out_prefix = os.path.join(data_dir, 'mentions', 'traintest')
     extract_synthetic_visual_event_embeddings(data_dir, out_prefix)

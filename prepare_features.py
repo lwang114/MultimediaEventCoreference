@@ -98,8 +98,8 @@ def extract_oneie_embeddings(embedding_file,
         label_dict_oneie[doc_id][span] = deepcopy(mention_info)
       start_sent += len(tokens)
   mentions = [label_dict_oneie[doc_id][span] for doc_id in sorted(label_dict_oneie) for span in sorted(label_dict_oneie[doc_id])]
-  json.dump(documents, open(f'{out_prefix}.json', 'w'), indent=2)
-  json.dump(mentions, open(f'{out_prefix}_events.json', 'w'), indent=2)
+  json.dump(documents, open(f'{out_prefix}_oneie.json', 'w'), indent=2)
+  json.dump(mentions, open(f'{out_prefix}_oneie_events.json', 'w'), indent=2)
 
   # Create a mapping from token id to ([desc id]_[desc idx], span_idx) 
   token_id_to_emb = dict()
@@ -122,8 +122,8 @@ def extract_oneie_embeddings(embedding_file,
         print(f'Token with id {token_id} is not a trigger')
         continue
 
-      if doc_id == 'G0Cvgqj6CCI':
-        print(token_id)
+      # if doc_id == 'G0Cvgqj6CCI':
+      #   print(token_id)
       feat_id, span_idx, token, event_type = token_id_to_emb[token_id]
       if not feat_id in embs:
         embs[feat_id] = []
@@ -135,8 +135,8 @@ def extract_oneie_embeddings(embedding_file,
       embs[feat_id][span_idx].append(emb)
       event_labels[feat_id][span_idx] = [token, event_type]
     embs = {feat_id:np.stack([np.asarray(e).mean(axis=0) for e in embs[feat_id]]) for feat_id in embs}
-  np.savez(f'{out_prefix}_events.npz', **embs)
-  json.dump(event_labels, open(f'{out_prefix}_events_labels.json', 'w'), indent=2)
+  np.savez(f'{out_prefix}_oneie_events.npz', **embs)
+  json.dump(event_labels, open(f'{out_prefix}_oneie_events_labels.json', 'w'), indent=2)
 
 def extract_glove_embeddings(config, split, glove_file, dimension=300, out_prefix='glove_embedding'):
     ''' Extract glove embeddings for a sentence
@@ -218,7 +218,7 @@ def extract_mention_glove_embeddings(config, split, glove_file, dimension=300, m
       if not m['head_lemma'] in vocab:
         vocab[m['head_lemma']] = len(vocab)
      
-      if mention_type == 'events': 
+      if (mention_type == 'events') and use_arguments: 
         for a in m['arguments']:
           if not a['head_lemma'] in vocab:
             vocab[a['head_lemma']] = len(vocab)
@@ -463,7 +463,7 @@ def extract_event_linguistic_features(config, split, out_prefix):
     return phrase[head_idx], head_idx
 
   dep_parser = Predictor.from_path("https://storage.googleapis.com/allennlp-public-models/biaffine-dependency-parser-ptb-2020.04.06.tar.gz")
-  # dep_parser._model = dep_parser._model.cuda()
+  dep_parser._model = dep_parser._model.cuda()
   lemmatizer = WordNetLemmatizer() 
 
   doc_json = os.path.join(config['data_folder'], split+'.json')
@@ -542,11 +542,13 @@ def extract_event_linguistic_features(config, split, out_prefix):
       
       # Extract argument head lemma and pos tag
       for a_idx, a in enumerate(new_mention['arguments']):
-        a_token = a['text'].split()
+        if 'tokens' in a:
+          a_token = a['tokens'].split()
+        else:
+          a_token = a['text'].split()
         a_head, a_head_idx = _head_word(a_token) 
         a_span = (a['start'], a['end'])
         new_mention['arguments'][a_idx]['head_lemma'] = lemmatizer.lemmatize(a_head.lower())
-
       new_event_mentions.append(new_mention)
   json.dump(new_event_mentions, open(out_prefix+'_events_with_linguistic_features.json', 'w'), indent=2)
 
@@ -584,33 +586,50 @@ def extract_entity_linguistic_features(config, split, out_prefix):
     postags = [t[1] for t in nltk.pos_tag(tokens)]
 
     spans = sorted(label_dict[doc_id])
+    new_mention_doc = []
     for span_idx, span in enumerate(spans):
       new_mention = deepcopy(label_dict[doc_id][span])
       span_tokens = label_dict[doc_id][span]['tokens'].split()
       span_tags = postags[span[0]:span[1]+1]
       # Extract lemmatized head (HL) 
-      # XXX head, head_idx = _head_word(span_tokens) 
-      # head_class = wordclasses[span[0]+head_idx]
-      # pos_abbrev = head_class[0].lower() if head_class in ['NOUN', 'VERB', 'ADJ'] else 'n'
-      # new_mention['head_lemma'] = lemmatizer.lemmatize(head.lower(), pos=pos_abbrev)
-      # new_mention['pos_tag'] = postags[span[0]+head_idx]
-      # new_mention['word_class'] = head_class if head_class in ['NOUN', 'VERB', 'ADJ'] else 'OTHER' 
-      
-      # Extract the left mention of the current mention
+      head, head_idx = _head_word(span_tokens) 
+      head_class = wordclasses[span[0]+head_idx]
+      pos_abbrev = head_class[0].lower() if head_class in ['NOUN', 'VERB', 'ADJ'] else 'n'
+      new_mention['head_lemma'] = lemmatizer.lemmatize(head.lower(), pos=pos_abbrev)
+      new_mention['pos_tag'] = postags[span[0]+head_idx]
+      new_mention['word_class'] = head_class if head_class in ['NOUN', 'VERB', 'ADJ'] else 'OTHER' 
+      new_mention_doc.append(new_mention)
+
+    for span_idx, new_mention in enumerate(new_mention_doc):
+      # Extract the left and right mentions of the current mention
       if span_idx > 0:
         left_span = spans[span_idx-1]
-        left_mention = label_dict[doc_id][left_span]
-        new_mention['left_mention'] = {'start': left_mention['start'],
-                                       'end': left_mention['end'],
+        left_mention = deepcopy(new_mention_doc[span_idx-1])
+        new_mention['left_mention'] = {'tokens': left_mention['tokens'],
+                                       'tokens_ids': left_mention['tokens_ids'],
                                        'head_lemma': left_mention['head_lemma'],
                                        'entity_type': left_mention['entity_type'],
                                        'pos_tag': left_mention['pos_tag']}
       else:
-        new_mention['left_mention'] = {'start': -1,
-                                       'end': -1,
+        new_mention['left_mention'] = {'tokens': NULL,
+                                       'tokens_ids': [-1],
                                        'head_lemma': NULL,
                                        'entity_type': '',
                                        'pos_tag': ''}
+      if span_idx < len(spans) - 1:
+        right_span = spans[span_idx+1]
+        right_mention = deepcopy(new_mention_doc[span_idx+1])
+        new_mention['right_mention'] = {'tokens': right_mention['tokens'],
+                                        'tokens_ids': right_mention['tokens_ids'],
+                                        'head_lemma': right_mention['head_lemma'],
+                                        'entity_type': right_mention['entity_type'],
+                                        'pos_tag': right_mention['pos_tag']}
+      else:
+        new_mention['right_mention'] = {'tokens': NULL,
+                                        'tokens_ids': [-1],
+                                        'head_lemma': NULL,
+                                        'entity_type': '',
+                                        'pos_tag': ''}
       new_entity_mentions.append(new_mention)
   json.dump(new_entity_mentions, open(out_prefix+'_entities_with_linguistic_features.json', 'w'), indent=2)
 
@@ -628,13 +647,15 @@ def reduce_dim(embed_files, reduced_dim=300):
   embed_npzs = [np.load(embed_file) for embed_file in embed_files]
   pca = PCA(n_components=reduced_dim)
   X = np.concatenate([embed_npz[feat_id] for embed_npz in embed_npzs for feat_id in sorted(embed_npz, key=lambda x:int(x.split('_')[-1]))]) 
+  if len(X.shape) > 2:
+    X = X.reshape(-1, X.shape[-1])
   pca.fit(X)
   print(f'Explained variance ratio: {sum(pca.explained_variance_ratio_)}')
   
   for embed_file, embed_npz in zip(embed_files, embed_npzs):
     embed_reduced = dict()
     for feat_id in sorted(embed_npz, key=lambda x:int(x.split('_')[-1])):
-      embed_reduced[feat_id] = pca.transform(embed_npz[feat_id])
+      embed_reduced[feat_id] = pca.transform(embed_npz[feat_id].reshape(-1, embed_npz[feat_id].shape[-1]))
     embed_prefix = embed_file.split('.')[0]
     np.savez(f'{embed_prefix}_pca{reduced_dim}dim.npz', **embed_reduced)
 
@@ -663,7 +684,8 @@ def main():
                                          'extract_mention_token_encodings',
                                          'extract_mention_glove_embeddings_with_arguments',
                                          'extract_visual_cluster_probabilities',
-                                         'extract_oneie_embeddings'})
+                                         'extract_oneie_embeddings',
+                                         'reduce_dim_obj_feat'})
   args = parser.parse_args()  
   config = pyhocon.ConfigFactory.parse_file(args.config) 
   if not os.path.isdir(config['log_path']):
@@ -734,7 +756,7 @@ def main():
                   'glove_file': glove_file, 
                   'mention_type': args.mention_type, 
                   'out_prefix': f'{dataset}_{args.mention_type}_with_arguments_glove_embeddings',
-                  'use_arguments': True}
+                  'use_arguments': False}
         extract_mention_glove_embeddings(**kwargs)
   elif args.task == 'extract_visual_cluster_probabilities':
     kwargs = {'embed_files': [os.path.join(config['data_folder'], f'{split}_mmaction_event_feat_average.npz')
@@ -749,7 +771,9 @@ def main():
       extract_oneie_embeddings(embedding_file,
                                oneie_dir,
                                mention_json,
-                               out_prefix=os.path.join(config['data_folder'], f'{split}_oneie'))
+                               out_prefix=os.path.join(config['data_folder'], f'{split}'))
+  elif args.task == 'reduce_dim_obj_feat': 
+    reduce_dim([os.path.join(config['data_folder'], f'../obj_feat_per_3_sec.npz')], reduced_dim=400)
 
 if __name__ == '__main__':
   main()

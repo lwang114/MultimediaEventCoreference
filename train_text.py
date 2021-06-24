@@ -160,14 +160,19 @@ def train(text_model,
       n_args = batch['n_args'].to(device)
       text_labels = batch['cluster_labels'].to(device)
       event_labels = batch['event_labels'].to(device)
-      event_linguistic_labels = torch.stack(
-                            [batch['linguistic_labels'][feat_type].to(device)\
-                             for feat_type in config.linguistic_feature_types],
-                            dim=2)
-      arg_linguistic_labels = torch.stack(
-                          [batch['arg_linguistic_labels'][feat_type].to(device)\
-                           for feat_type in config.linguistic_feature_types],
-                          dim=2) 
+      if len(batch['linguistic_labels']) > 0:
+        event_linguistic_labels = torch.stack(
+            [batch['linguistic_labels'][feat_type].to(device)\
+             for feat_type in config.linguistic_feature_types],
+            dim=2)
+        arg_linguistic_labels = torch.stack(
+            [batch['arg_linguistic_labels'][feat_type].to(device)\
+             for feat_type in config.linguistic_feature_types],
+            dim=2) 
+      else:
+        event_linguistic_labels = torch.zeros(arg_width.size()).to(device)
+        arg_linguistic_labels = torch.zeros(arg_width.size()).to(device)
+
       text_mask = batch['text_mask'].to(device)
       span_mask = batch['span_mask'].to(device)
       span_num = torch.where(span_mask.sum(-1) > 0, 
@@ -228,7 +233,7 @@ def train(text_model,
                                           argument_output_3d[second_text_idx]\
                                           .view(n_pairs*n_args[idx], -1))
         argument_score = argument_score.view(n_pairs, n_args[idx]).mean(-1, keepdim=True)
-        text_score = (text_score + argument_score) / 2.
+        # XXX text_score = (text_score + argument_score) / 2.
 
         text_scores.append(text_score)
         pairwise_text_labels.append(pairwise_text_label)
@@ -313,14 +318,19 @@ def test(text_model,
           n_args = batch['n_args'].to(device)
           text_labels = batch['cluster_labels'].to(device) 
           event_labels = batch['event_labels'].to(device)
-          event_linguistic_labels = torch.stack(
-                                [batch['linguistic_labels'][feat_type].to(device)\
-                                 for feat_type in config.linguistic_feature_types],
-                                dim=2)
-          arg_linguistic_labels = torch.stack(
-                                [batch['arg_linguistic_labels'][feat_type].to(device)\
-                                 for feat_type in config.linguistic_feature_types],
-                                dim=2) # TODO Check dim
+          if len(batch['linguistic_labels']) > 0:
+              event_linguistic_labels = torch.stack(
+                  [batch['linguistic_labels'][feat_type].to(device)\
+                   for feat_type in config.linguistic_feature_types],
+                  dim=2)
+              arg_linguistic_labels = torch.stack(
+                  [batch['arg_linguistic_labels'][feat_type].to(device)\
+                   for feat_type in config.linguistic_feature_types],
+                  dim=2) 
+          else:
+              event_linguistic_labels = torch.zeros(arg_width.size()).to(device)
+              arg_linguistic_labels = torch.zeros(arg_width.size()).to(device)
+
           text_mask = batch['text_mask'].to(device)
           span_mask = batch['span_mask'].to(device)
           
@@ -387,6 +397,7 @@ def test(text_model,
                                                argument_output_3d[second_text_idx]\
                                                    .view(n_pairs*n_args[idx], -1))
             argument_scores = argument_scores.view(n_pairs, n_args[idx]).mean(-1, keepdim=True)
+            # XXX text_scores = (text_scores + argument_scores) / 2.
             predicted_antecedents = text_coref_model.module.predict_cluster(
                                                text_scores, 
                                                first_text_idx,

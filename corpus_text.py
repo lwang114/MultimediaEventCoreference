@@ -51,7 +51,7 @@ def fix_embedding_length(emb, L):
     emb = emb[:L]
   return emb
 
-class TextVideoEventDataset(Dataset):
+class TextEventDataset(Dataset):
   def __init__(self, config, 
                event_stoi,
                feature_stoi,
@@ -72,11 +72,11 @@ class TextVideoEventDataset(Dataset):
          'cluster_desc': '',
          'singleton': boolean, whether the mention is a singleton}
     '''
-    super(TextVideoEventDataset, self).__init__()
+    super(TextEventDataset, self).__init__()
     self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     self.finetune_bert = config.get('finetune_bert', False)
-    print(f'Finetune BERT: {self.finetune_bert}')
     self.max_token_num = config.get('max_token_num', 512)
+    print(f'max token number: {self.max_token_num}')
     self.max_span_num = config.get('max_span_num', 80)
     self.max_frame_num = config.get('max_frame_num', 100)
     self.max_mention_span = config.get('max_mention_span', 15)
@@ -106,9 +106,10 @@ class TextVideoEventDataset(Dataset):
     self.entity_label_dict, self.entity_feature_dict = self.create_text_dict_labels(entity_mentions)
 
     ie_to_srl_json = os.path.join(config['data_folder'], '../ie_to_srl.json')    
-    self.ie_to_srl_dict = json.load(codecs.open(ie_to_srl_json)) # TODO
+    self.ie_to_srl_dict = json.load(codecs.open(ie_to_srl_json))
 
     # Extract doc/image ids
+    self.feat_keys = sorted(self.docs_embeddings)
     if config.debug:
       self.feat_keys = self.feat_keys[:20]
     self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in self.event_label_dict]
@@ -158,7 +159,7 @@ class TextVideoEventDataset(Dataset):
         clean_start_end = -1 * np.ones(len(tokens), dtype=np.int)
         bert_cursor = -1
         for i, token in enumerate(tokens):
-            sent_id, token_id, token_text, flag_sentence = token
+            sent_id, token_id, token_text, flag_sentence = token[:4]
             bert_token = self.tokenizer.encode(token_text, add_special_tokens=True)[1:-1]   
             if bert_token:
                 bert_start_index = bert_cursor + 1
@@ -210,7 +211,10 @@ class TextVideoEventDataset(Dataset):
       for rel_idx, arg in enumerate(event['arguments']):
         cur_role = self.ie_to_srl_dict.get(arg['role'], '')
         if cur_role == role:
-          span = (arg['start'], arg['end'])
+          if not 'start' in arg:
+              span = (min(arg['tokens_ids']), max(arg['tokens_ids']))
+          else:
+              span = (arg['start'], arg['end'])
           break
       arg_spans.append(span)
     return np.asarray(arg_spans)
