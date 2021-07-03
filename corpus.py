@@ -78,6 +78,7 @@ class TextVideoEventDataset(Dataset):
     print(f'Finetune BERT: {self.finetune_bert}')
     self.max_token_num = config.get('max_token_num', 512)
     self.max_span_num = config.get('max_span_num', 80)
+    self.max_action_num = config.get('max_action_num', 20)
     self.max_frame_num = config.get('max_frame_num', 100)
     self.max_mention_span = config.get('max_mention_span', 15)
     self.img_feat_type = config.get('video_feature', 'mmaction_feat')
@@ -85,7 +86,7 @@ class TextVideoEventDataset(Dataset):
     feature_stoi['mention_type'] = {NULL:0, PROPER:1, NOMINAL:2, PRON:3}
     feature_stoi['number'] = {NULL:0, SINGULAR:1, PLURAL:2}
     self.feature_stoi = feature_stoi
-
+    
     doc_json = os.path.join(config['data_folder'], f'{split}.json')
     event_mention_json = os.path.join(config['data_folder'],
                                       f'{split}_events.json')
@@ -103,7 +104,7 @@ class TextVideoEventDataset(Dataset):
     # Load document embeddings
     bert_embed_file = '{}_{}.npz'.format(doc_json.split('.')[0], config.bert_model)
     self.docs_embeddings = np.load(bert_embed_file)
-    
+        
     # Extract coreference cluster labels
     self.linguistic_feat_types = config.get('linguistic_feature_types', None)
     self.event_label_dict, self.event_feature_dict = self.create_text_dict_labels(event_mentions) 
@@ -142,7 +143,7 @@ class TextVideoEventDataset(Dataset):
     # Tokenize documents and extract token spans after bert tokenization
     self.bert_model = config['bert_model']
     if self.bert_model == 'uniter':
-      self.tokenizer = AutoTokenizer.from_pretrained('roberta-large')  
+      self.tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')  
     else:
       self.tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
     self.origin_tokens,\
@@ -225,6 +226,12 @@ class TextVideoEventDataset(Dataset):
     else:
       return SINGULAR
 
+  def extract_type(self, m):
+    if 'event_type' in m:
+        return m['event_type']
+    else:
+        return m['entity_type']
+  
   def extract_argument(self, event):
     found = False
     arg_spans = []
@@ -271,6 +278,8 @@ class TextVideoEventDataset(Dataset):
             ling_feature_dict[m['doc_id']][(start, end)][feat_type] = self.extract_mention_type(m['pos_tag'])
           elif feat_type == 'number':
             ling_feature_dict[m['doc_id']][(start, end)][feat_type] = self.extract_number(m['tokens'], m['pos_tag'])
+          elif feat_type == 'type':
+            ling_feature_dict[m['doc_id']][(start, end)][feat_type] = self.extract_type(m)
           else:
             ling_feature_dict[m['doc_id']][(start, end)][feat_type] = m[feat_type]
     return text_label_dict, ling_feature_dict
@@ -411,7 +420,7 @@ class TextVideoEventDataset(Dataset):
     for start, end in zip(arg_starts, arg_ends):
       feat_dict = self.entity_feature_dict[self.doc_ids[idx]].get((start, end), dict())
       for k in self.linguistic_feat_types:
-        arg_linguistic_labels[k].append(self.feature_stoi[k][feat_dict.get(k, NULL)]) 
+          arg_linguistic_labels[k].append(self.feature_stoi[k][feat_dict.get(k, NULL)]) 
 
     for k in arg_linguistic_labels:  
       arg_linguistic_labels[k] = torch.LongTensor(arg_linguistic_labels[k])
@@ -448,24 +457,27 @@ class TextVideoEventDataset(Dataset):
 
     if self.use_action_boundary:
       action_segment_embeddings = []
-      masks = [] 
+      masks = []
+      labels = -1 * np.ones(self.max_action_num) 
       for span_idx, span in enumerate(sorted(self.action_label_dict[doc_id])):
         seg = action_embeddings[span[0]:span[1]+1]
         action_segment_embeddings.append(fix_embedding_length(seg, 30))
         mask = torch.zeros(30, dtype=torch.float)
         mask[:span[1]-span[0]+1] = 1.
         masks.append(mask)
+        label = self.action_label_dict[doc_id][span]
+        if label in self.ontology_map:
+            labels[span_idx] = self.event_stoi[self.ontology_map[label]]
       masks = fix_embedding_length(torch.stack(masks), 20)
       action_segment_embeddings = fix_embedding_length(torch.stack(action_segment_embeddings), 20) 
     else:
       action_segment_embeddings = action_embeddings
       masks = torch.ones(100)
-
-    labels = -1 * np.ones(action_embeddings.size(0))
-    for span, label in self.action_label_dict[doc_id].items():
-      if label in self.ontology_map:
-        labels[span[0]:span[1]+1] = self.event_stoi[self.ontology_map[label]]
-    labels = torch.LongTensor(labels)
+      labels = -1 * np.ones(action_embeddings.size(0))
+      for span, label in self.action_label_dict[doc_id].items():
+          if label in self.ontology_map:
+              labels[span[0]:span[1]+1] = self.event_stoi[self.ontology_map[label]]
+      labels = torch.LongTensor(labels)
 
     return {'action_embeddings': action_segment_embeddings, 
             'action_labels': labels, 
