@@ -550,7 +550,9 @@ if __name__ == '__main__':
 
   # Initialize dataloaders
   splits = [os.path.join(config['data_folder'], 'train_events.json'),\
-            os.path.join(config['data_folder'], 'test_events.json')]
+            os.path.join(config['data_folder'], 'test_events.json'),\
+            os.path.join(config['data_folder'], 'train_entities.json'),\
+            os.path.join(config['data_folder'], 'test_entities.json')]
   
   event_stoi = create_type_stoi(splits) 
   feature_stoi = create_feature_stoi(splits, feature_types=config['linguistic_feature_types'])
@@ -595,7 +597,7 @@ if __name__ == '__main__':
       visual_model = BiLSTMVideoEncoder(400, int(config.hidden_layer // 2))
       visual_coref_model = CrossmediaPairWiseClassifier(config).to(device)
       
-      if config['training_method'] in ('pipeline', 'continue'):
+      if config['training_method'] in ('pipeline', 'continue') or args.evaluate_only:
           text_model.load_state_dict(torch.load(config['text_model_path'], map_location=device))
           for p in text_model.parameters():
               p.requires_grad = False
