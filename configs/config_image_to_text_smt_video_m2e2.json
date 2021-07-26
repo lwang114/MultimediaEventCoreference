@@ -1,0 +1,12 @@
+{
+  "data_folder": "/ws/ifp-53_2/hasegawa/lwang114/fall2020/MultimediaEventCoreference/data/video_m2e2/mentions",
+  "log_path": "models/coref_events_image_to_text_smt_roberta_video_m2e2_labeled_asr_sentence/", 
+  "Kt": 60,
+  "Ks": 451,
+  "var": 10,
+  "text_feature_type": "token",
+  "visual_feature_type": "event_average",
+  "model_path": "models/coref_events_image_to_text_smt_roberta_video_m2e2/",
+  "splits": {"train": ["train"],
+             "test": ["test"]} 
+}
