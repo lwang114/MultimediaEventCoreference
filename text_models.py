@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 import json
 import time
-import allennlp.nn.util as util 
+import allennlp.nn.util as util
 from itertools import combinations
 from transformers import AutoModel
 from IPOT.ipot import ipot_WD 
@@ -101,6 +101,7 @@ class BERTSpanEmbedder(nn.Module):
         super(BERTSpanEmbedder, self).__init__()
         self.bert_model = AutoModel.from_pretrained(config.bert_model)
         self.bert_hidden_size = config.bert_hidden_size 
+        self.with_start_end_embedding = config.with_start_end_embedding
         self.with_width_embedding = config.with_mention_width
         self.use_head_attention = config.with_head_attention
         self.device = device
@@ -115,7 +116,8 @@ class BERTSpanEmbedder(nn.Module):
         self.self_attention_layer.apply(init_weights)
         self.width_feature = nn.Embedding(5, config.embedding_dimension)
         self.linguistic_feature_types = config.linguistic_feature_types
-    
+        self.linguistic_feature = nn.Embedding(100, config.embedding_dimension)
+        
     def pad_continuous_embeddings(self, continuous_embeddings, width):
         if isinstance(continuous_embeddings, list):
           max_length = max(len(v) for v in continuous_embeddings)
@@ -151,8 +153,13 @@ class BERTSpanEmbedder(nn.Module):
                 width,
                 linguistic_labels=None,
                 attention_mask=None):
-        doc_embeddings = self.bert_model(input_ids=input_ids,
-                                         attention_mask=attention_mask)
+        doc_embeddings = []
+        start_idx = 0
+        while start_idx < input_ids.size(1):
+            doc_embeddings.append(self.bert_model(input_ids=input_ids[:, start_idx:start_idx+512],
+                                                  attention_mask=attention_mask[:, start_idx:start_idx+512])[0])
+            start_idx += 512
+        doc_embeddings = torch.cat(doc_embeddings, dim=1)
         start_embeddings = torch.matmul(start_mappings, doc_embeddings)
         end_embeddings = torch.matmul(end_mappings, doc_embeddings)
         start_end = torch.cat([start_embeddings, end_embeddings], dim=-1)
@@ -184,7 +191,9 @@ class BERTSpanEmbedder(nn.Module):
             vector = torch.cat((vector, weighted_sum), dim=1)
 
         for feat_idx, feat_type in enumerate(self.linguistic_feature_types):
-            vector = torch.cat((vector, linguistic_labels[:, feat_idx:feat_idx+1]), dim=1)  
+            linguistic_label = torch.clamp(linguistic_labels[:, feat_idx], max=99)
+            feat_embedding = self.linguistic_feature(linguistic_label)
+            vector = torch.cat((vector, feat_embedding), dim=1)  
 
         if self.with_width_embedding:
             width = torch.clamp(width, max=4)
@@ -216,6 +225,7 @@ class SpanEmbedder(nn.Module):
         self.self_attention_layer.apply(init_weights)
         self.width_feature = nn.Embedding(5, config.embedding_dimension)
         self.linguistic_feature_types = config.linguistic_feature_types
+        self.linguistic_feature = nn.Embedding(100, config.embedding_dimension)
 
     def pad_continous_embeddings(self, continuous_embeddings, width):
         if isinstance(continuous_embeddings, list):
@@ -284,7 +294,9 @@ class SpanEmbedder(nn.Module):
             vector = torch.cat((vector, weighted_sum), dim=1)
 
         for feat_idx, feat_type in enumerate(self.linguistic_feature_types):
-            vector = torch.cat((vector, linguistic_labels[:, feat_idx:feat_idx+1]), dim=1)  
+            linguistic_label = torch.clamp(linguistic_labels[:, feat_idx], max=99)
+            feat_embedding = self.linguistic_feature(linguistic_label)
+            vector = torch.cat((vector, feat_embedding), dim=1)  
 
         if self.with_width_embedding:
             width = torch.clamp(width, max=4)
@@ -293,6 +305,7 @@ class SpanEmbedder(nn.Module):
 
         if not isinstance(continuous_embeddings, list):
           vector = vector.view(B, S, -1)
+
         return vector
 
 class SpanScorer(nn.Module):
@@ -323,7 +336,7 @@ class SimplePairWiseClassifier(nn.Module):
         if config.with_head_attention:
           self.input_layer += config.bert_hidden_size 
         
-        self.input_layer += len(config.linguistic_feature_types)
+        self.input_layer += len(config.linguistic_feature_types)*config.embedding_dimension
 
         if config.with_mention_width:
           self.input_layer += config.embedding_dimension

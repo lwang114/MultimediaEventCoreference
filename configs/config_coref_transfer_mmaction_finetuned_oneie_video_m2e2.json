@@ -1,5 +1,6 @@
 {
   "gpu_num" : [0],
+  "debug": false,
   "use_action_boundary": true,
   "bert_model": "roberta-large",
   "video_feature": "mmaction_event_feat",
@@ -7,6 +8,7 @@
   "bert_hidden_size": 1824,
   "hidden_layer": 1824,
   "dropout": 0.3,
+  "linguistic_feature_types": [],
   "with_mention_width": false,
   "with_head_attention": false,
   "with_start_end_embedding": false,
@@ -35,13 +37,13 @@
   "neg_samp": false,
   "task": "both",
     
-  "log_path": "models/coref_events_transfer_mmaction_oneie_event_video_m2e2",
+  "log_path": "models/coref_events_transfer_mmaction_oneie_event_video_m2e2_newsplit",
   "image_dir": "",
   "data_folder": "data/video_m2e2/mentions",
   "is_one_indexed": false,
-  "crossmedia_text_model_path": "models/coref_crossmedia_events_video_m2e2/text_model.60.pth",
-  "crossmedia_visual_model_path": "models/coref_crossmedia_events_video_m2e2/visual_model.60.pth",
-  "visual_model_path": "models/coref_crossmedia_events_oneie_video_m2e2/visual_model.pth",
-  "coref_model_path": "models/coref_events_transfer_mmaction_event_video_m2e2/best_coref_model-0.pth",
-  "model_path": "models/coref_events_transfer_mmaction_oneie_event_video_m2e2" 
+  "crossmedia_text_model_path": "models/coref_crossmedia_events_video_m2e2_newsplit/text_model.pth",
+  "crossmedia_visual_model_path": "models/coref_crossmedia_events_video_m2e2_newsplit/visual_model.pth",
+  "visual_model_path": "models/coref_crossmedia_events_oneie_video_m2e2_newsplit/visual_model.pth",
+  "coref_model_path": "models/coref_events_transfer_mmaction_event_video_m2e2_newsplit/best_coref_model-0.pth",
+  "model_path": "models/coref_events_transfer_mmaction_oneie_event_video_m2e2_newsplit" 
 }

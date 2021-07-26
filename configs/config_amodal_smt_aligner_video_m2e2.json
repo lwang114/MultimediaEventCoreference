@@ -1,0 +1,11 @@
+{
+  "debug": false,
+  "seeds": [1234, 2341, 3412, 4123],
+  "splits": {"train": ["train"],
+             "test": ["test"]},
+  "data_folder": "/ws/ifp-53_2/hasegawa/lwang114/fall2020/MultimediaEventCoreference/data/video_m2e2/mentions",
+  "log_path": "models/coref_amodal_smt_marginal_decode_video_m2e2", 
+  "model_path": "models/coref_amodal_smt_marginal_decode_video_m2e2",
+  "Kv": 15,
+  "feature_types": ["doc_id", "sentence_id", "tokens", "tokens_ids", "head_lemma", "event_type", "word_class", "pos_tag", "arguments"]
+}

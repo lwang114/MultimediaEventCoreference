@@ -21,29 +21,42 @@ plt.rc('font', size=20)
 
 def visualize_image_features(embed_file,
                              label_file,
-                             ontology_file,
-                             freq_file,
+                             ontology_file=None,
+                             freq_file=None,
                              label_type='event',
                              out_prefix='image_tsne',
                              n_class=10):
   """ Visualize the embeddings with TSNE """
   if not os.path.exists(f'{out_prefix}.csv'):
-    ontology = json.load(open(ontology_file))
-    label_types = ontology[label_type]
-      
+    if label_file.split('.')[-1] == 'npz':
+      assert ontology_file is not None and freq_file is not None
+      ontology = json.load(open(ontology_file))
+      freq = json.load(open(freq_file))
+      label_types = ontology[label_type]
+      label_npz = np.load(label_file)
+      labels = [label_types[y] for k in sorted(label_npz, key=lambda x:int(x.split('_')[-1]))
+                for y in np.argmax(label_npz[k], axis=1)]
+      top_types = [label_types[int(k)] for k in sorted(freq, key=lambda x:freq[x], reverse=True)[:n_class]]
+    else:
+      label_dict = json.load(open(label_file))
+      labels = [y for k in sorted(label_dict) for y in label_dict[k]]
+      freq = dict()
+      for y in labels:
+        if not y in freq:
+          freq[y] = 1
+        else:
+          freq[y] += 1
+      top_types = sorted(freq, key=lambda x:freq[x], reverse=True)[:n_class]
+
     feat_npz = np.load(embed_file)
     feats = np.concatenate([feat_npz[k] for k in sorted(feat_npz, key=lambda x:int(x.split('_')[-1]))]) # XXX
-    label_npz = np.load(label_file)
-    labels = [label_types[y] for k in sorted(label_npz, key=lambda x:int(x.split('_')[-1]))
-              for y in np.argmax(label_npz[k], axis=1)]
-    freq = json.load(open(freq_file))
 
-    top_types = [label_types[int(k)] for k in sorted(freq, key=lambda x:freq[x], reverse=True)[:n_class]]
     X = TSNE(n_components=2).fit_transform(feats)
     select_idxs = [i for i, y in enumerate(labels) if str(y) in top_types]
 
     X = X[select_idxs]
     y = [labels[i] for i in select_idxs]
+    print(X.shape, len(y))
     df = pd.DataFrame({'t-SNE dim 0': X[:, 0], 
                        't-SNE dim 1': X[:, 1],
                        'Event type': y})
@@ -54,7 +67,7 @@ def visualize_image_features(embed_file,
   fig, ax = plt.subplots(figsize=(10, 10))
   sns.scatterplot(data=df, x='t-SNE dim 0', y='t-SNE dim 1', 
                   hue='Event type', style='Event type',
-                  palette=sns.color_palette('husl', 10))
+                  palette=sns.color_palette('husl', len(top_types)))
   plt.savefig(out_prefix+'.png')
   plt.close()
 
@@ -83,11 +96,11 @@ def visualize_text_features(embed_file,
   tokens = [tokens[i] for i in select_idxs]
   df = pd.DataFrame({'t-SNE dim 0': X[:, 0], 
                      't-SNE dim 1': X[:, 1],
-                     '{label_type} type': y})
+                     f'{label_type} type': y})
 
   fig, ax = plt.subplots(figsize=(10, 10))
   plt.axis([min(X[:, 0])-1, max(X[:, 0])+1, min(X[:, 1])-1, max(X[:, 1])+1])
-  palette = sns.color_palette('husl', 10)
+  palette = sns.color_palette('husl', len(top_types))
   for i in range(200):
     plt.text(X[i, 0], X[i, 1], 
              tokens[i], 
@@ -98,7 +111,7 @@ def visualize_text_features(embed_file,
 
   fig, ax = plt.subplots(figsize=(10, 10))
   sns.scatterplot(data=df, x='t-SNE dim 0', y='t-SNE dim 1', 
-                  hue='{label_type} type', style='{label_type} type',
+                  hue=f'{label_type} type', style=f'{label_type} type',
                   palette=palette)
   plt.savefig(f'{out_prefix}.png')
   plt.close()
@@ -121,11 +134,22 @@ if __name__ == '__main__':
   if args.task == 1:
     data_dir = 'data/video_m2e2/mentions/'
     label_type = 'Event' if args.mention_type == 'events' else 'Entity' 
-    out_prefix = os.path.join(data_dir, f'train_{args.mention_type}_glove_embeddings') # os.path.join(data_dir, f'train_{args.mention_type}_roberta-large')
+    out_prefix = os.path.join(data_dir, f'train_oneie_events')
     embed_file = f'{out_prefix}.npz'
     label_file = f'{out_prefix}_labels.json'
     visualize_text_features(embed_file,
                             label_file,
                             label_type=label_type,
                             out_prefix=f'{out_prefix}_tsne')
+  if args.task == 2:
+    data_dir = 'data/video_m2e2/mentions/'
+    # label_file = os.path.join(data_dir, 'test_mmaction_event_feat_labels_average.npz')
+    embed_file = 'models/coref_crossmedia_events_video_m2e2/action_output.npz'
+    label_file = 'models/coref_crossmedia_events_video_m2e2/action_class_labels.json'
+    ontology_file = os.path.join(data_dir, '../ontology.json')
+    freq_file =  os.path.join(data_dir, 'train_mmaction_event_feat_event_frequency.json')
 
+    visualize_image_features(embed_file,
+                             label_file,
+                             ontology_file,
+                             freq_file)

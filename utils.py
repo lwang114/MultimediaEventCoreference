@@ -14,10 +14,11 @@ import argparse
 import pyhocon
 from conll import write_output_file
 
+NULL = '###NULL###'
 def create_type_stoi(mention_jsons):
   n_entity_types = 0
   n_event_types = 0
-  type_to_idx = {'###NULL###':0}
+  type_to_idx = {NULL:0}
   for mention_json in mention_jsons:
     mention_dicts = json.load(open(mention_json))
     for mention_dict in mention_dicts:
@@ -46,7 +47,7 @@ def create_role_stoi(mention_jsons):
           if not role in roles:
             roles.add(role)
   roles = sorted(roles, key=lambda x:x.split('.')[0])
-  roles = ['###NULL###'] + roles
+  roles = [NULL] + roles
   role_to_idx = {r:i for i, r in enumerate(roles)}
   print('Num. of role types = {}'.format(len(role_to_idx)))
   return role_to_idx
@@ -61,15 +62,20 @@ def create_ontology(event_jsons, entity_jsons, out_prefix):
   json.dump(ontology, open(f'{out_prefix}.json', 'w'), indent=2)
   
 def create_feature_stoi(mention_jsons, feature_types):
-  stoi = dict()
+  stoi = {NULL:0}
   for mention_json in mention_jsons:
     mentions = json.load(open(mention_json))
     for feat_type in feature_types:
       if feat_type == 'mention_type' or feat_type == 'number':
         feat_type = 'pos_tag'
-      if not feat_type in stoi:
-        stoi[feat_type] = dict()
 
+      if not feat_type in stoi:
+        stoi[feat_type] = {NULL:0}
+
+      if feat_type == 'type':
+        stoi[feat_type].update(create_type_stoi([mention_json]))
+        continue
+        
       for m in mentions:
         if not m[feat_type] in stoi[feat_type]:
           if isinstance(m[feat_type], int) or isinstance(m[feat_type], float):

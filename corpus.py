@@ -471,8 +471,8 @@ class TextVideoEventDataset(Dataset):
       masks = fix_embedding_length(torch.stack(masks), 20)
       action_segment_embeddings = fix_embedding_length(torch.stack(action_segment_embeddings), 20) 
     else:
-      action_segment_embeddings = action_embeddings
-      masks = torch.ones(100)
+      action_segment_embeddings = action_embeddings.unsqueeze(-2)
+      masks = torch.ones(100, 1)
       labels = -1 * np.ones(action_embeddings.size(0))
       for span, label in self.action_label_dict[doc_id].items():
           if label in self.ontology_map:

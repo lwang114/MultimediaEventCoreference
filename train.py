@@ -102,10 +102,14 @@ def train(text_model,
           visual_model, 
           text_coref_model, 
           visual_coref_model,
-          train_loader, 
+          train_loader,
           test_loader, 
           args, random_seed=None):
   config = pyhocon.ConfigFactory.parse_file(args.config)
+  weight_trigger = config.get('weight_trigger', 1./3.)
+  weight_argument = config.get('weight_argument', 1./3.)
+  weight_action = config.get('weight_action', 1./3.)
+  
   if random_seed:
       config.random_seed = random_seed
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -263,7 +267,9 @@ def train(text_model,
                                           argument_output_3d[second_text_idx]\
                                           .view(n_pairs*n_args[idx], -1))
         argument_score = argument_score.view(n_pairs, n_args[idx]).mean(-1, keepdim=True)
-        text_score = (text_score + crossmedia_score + argument_score) / 3.
+        text_score = weight_trigger * text_score\
+                     + weight_argument * argument_score\
+                     + weight_action * crossmedia_score
 
         text_scores.append(text_score) 
         video_scores.append(video_score) 
@@ -280,7 +286,9 @@ def train(text_model,
 
       text_loss = criterion(text_scores, pairwise_text_labels)
       video_loss = criterion(video_scores, pairwise_grounding_labels)
-      loss = text_loss + video_loss
+      loss = text_loss
+      if weight_action > 0:
+        loss = loss + video_loss
 
       optimizer.zero_grad()
       loss.backward()
@@ -336,6 +344,9 @@ def test(text_model,
          args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     config = pyhocon.ConfigFactory.parse_file(args.config)
+    weight_trigger = config.get('weight_trigger', 1./3.)
+    weight_argument = config.get('weight_argument', 1./3.)
+    weight_action = config.get('weight_action', 1./3.)
     documents = test_loader.dataset.documents
     all_scores = []
     all_labels = []
@@ -391,7 +402,6 @@ def test(text_model,
                                               device=doc_embeddings.device), 
                                  torch.tensor(0, dtype=torch.int, 
                                               device=doc_embeddings.device)).sum(-1)
-
           
           # Extract span and video embeddings
           video_output = visual_model(videos, action_mask)
@@ -454,7 +464,10 @@ def test(text_model,
                                                argument_output_3d[second_text_idx]\
                                                    .view(n_pairs*n_args[idx], -1))
             argument_scores = argument_scores.view(n_pairs, n_args[idx]).mean(-1, keepdim=True)
-            text_scores = (text_scores + crossmedia_scores + argument_scores) / 3.
+            text_scores = weight_trigger * text_scores\
+                          + weight_argument * argument_scores\
+                          + weight_action * crossmedia_scores
+
             predicted_antecedents = text_coref_model.module.predict_cluster(
                                                text_scores, 
                                                first_text_idx,
@@ -502,6 +515,9 @@ def test(text_model,
         print('Pairwise - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
                                                                     eval.get_precision(), 
                                                                     eval.get_f1()))
+        logging.info('Pairwise - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
+                                                                    eval.get_precision(), 
+                                                                    eval.get_f1()))
         strict_preds = (all_grounding_scores > 0).to(torch.int)
         grounding_eval = Evaluation(strict_preds, all_grounding_labels.to(device))
         print('[Crossmedia Coreference Result]')
@@ -511,7 +527,10 @@ def test(text_model,
         print('Pairwise - Recall: {}, Precision: {}, F1: {}'.format(grounding_eval.get_recall(),
                                                                     grounding_eval.get_precision(), 
                                                                     grounding_eval.get_f1()))
-
+        logging.info('Crossmedia Pairwise - Recall: {}, Precision: {}, F1: {}'.format(grounding_eval.get_recall(),
+                                                                                      grounding_eval.get_precision(), 
+                                                                                      grounding_eval.get_f1()))
+        
         muc, b_cubed, ceafe, avg = conll_eval.get_metrics()
         results['pairwise'] = (eval.get_precision().item(), eval.get_recall().item(), eval.get_f1().item())
         results['muc'] = muc
@@ -523,6 +542,10 @@ def test(text_model,
               'Bcubed - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
               'CEAFe - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
               'CoNLL - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*conll_metrics)) 
+        logging.info('MUC - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
+                     'Bcubed - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
+                     'CEAFe - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
+                     'CoNLL - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*conll_metrics))
         return results
 
 
@@ -564,7 +587,7 @@ if __name__ == '__main__':
   test_set = TextVideoEventDataset(config, 
                                    event_stoi, 
                                    feature_stoi,
-                                   split='test')
+                                   split='test') # XXX
 
   pairwises  = []
   mucs = []

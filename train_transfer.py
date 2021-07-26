@@ -14,9 +14,11 @@ import numpy as np
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
 from text_models import NoOp, BiLSTM, SimplePairWiseClassifier
-from corpus import SupervisedGroundingFeatureDataset
+from corpus import TextVideoEventDataset
 from evaluator import Evaluation, CoNLLEvaluation
 from sklearn.metrics import average_precision_score
+from utils import create_type_stoi, create_feature_stoi
+
 
 def fix_seed(config):
     torch.manual_seed(config.random_seed)
@@ -79,7 +81,7 @@ def get_pairwise_text_labels(labels, is_training, device):
 
     return first_idxs, second_idxs, pairwise_labels_all    
 
-def train(text_model, visual_model, crossmedia_model, coref_model, train_loader, test_loader, args, random_seed=None):
+def train(text_model, visual_model, crossmedia_text_model, crossmedia_visual_model, coref_model, train_loader, test_loader, args, random_seed=None):
   config = pyhocon.ConfigFactory.parse_file(args.config)
   if random_seed:
       config.random_seed = random_seed
@@ -92,15 +94,19 @@ def train(text_model, visual_model, crossmedia_model, coref_model, train_loader,
   if not isinstance(visual_model, torch.nn.DataParallel):
     visual_model = nn.DataParallel(visual_model)
   
-  if not isinstance(crossmedia_model, torch.nn.DataParallel):
-    crossmedia_model = nn.DataParallel(crossmedia_model)
+  if not isinstance(crossmedia_text_model, torch.nn.DataParallel):
+    crossmedia_text_model = nn.DataParallel(crossmedia_text_model)
+
+  if not isinstance(crossmedia_visual_model, torch.nn.DataParallel):
+    crossmedia_visual_model = nn.DataParallel(crossmedia_visual_model)
 
   if not isinstance(coref_model, torch.nn.DataParallel):
     coref_model = nn.DataParallel(coref_model)
 
   text_model.to(device)
   visual_model.to(device)
-  crossmedia_model.to(device)
+  crossmedia_text_model.to(device)
+  crossmedia_visual_model.to(device)
   coref_model.to(device)
 
   # Define the training criterion
@@ -122,25 +128,24 @@ def train(text_model, visual_model, crossmedia_model, coref_model, train_loader,
   for epoch in range(config.epochs):
     text_model.train()
     visual_model.train()
-    crossmedia_model.train()
+    crossmedia_text_model.train()
+    crossmedia_visual_model.train()
     coref_model.train()
     for i, batch in enumerate(train_loader):
-      doc_embeddings, start_mappings, end_mappings, continuous_mappings,\
-      width, action_embeddings,\
-      text_labels, type_labels, img_labels,\
-      text_mask, span_mask, action_mask = batch   
+      doc_embeddings = batch['doc_embeddings'].to(device)
+      start_mappings = batch['start_mappings'].to(device)
+      end_mappings = batch['end_mappings'].to(device)
+      continuous_mappings = batch['continuous_mappings'].to(device)
+      width = batch['width'].to(device)
+      action_embeddings = batch['action_embeddings'].to(device)
+      text_labels = batch['cluster_labels'].to(device)
+      type_labels = batch['event_labels'].to(device) 
+      img_labels = batch['action_labels'].to(device)
+      text_mask = batch['text_mask'].to(device)
+      span_mask = batch['span_mask'].to(device)
+      action_mask = batch['action_mask'].to(device)
 
       B = doc_embeddings.size(0)     
-      doc_embeddings = doc_embeddings.to(device)
-      start_mappings = start_mappings.to(device)
-      end_mappings = end_mappings.to(device)
-
-      action_embeddings = action_embeddings.to(device)
-      text_labels = text_labels.to(device)
-      text_mask = text_mask.to(device)
-      span_mask = span_mask.to(device)
-      action_mask = action_mask.to(device)
-
       first_text_idx, second_text_idx, pairwise_text_labels = get_pairwise_text_labels(text_labels, is_training=False, device=device)      
       pairwise_text_labels = pairwise_text_labels.to(torch.float).flatten()
       optimizer.zero_grad()
@@ -154,8 +159,12 @@ def train(text_model, visual_model, crossmedia_model, coref_model, train_loader,
       mention_start_output = torch.matmul(start_mappings, text_output)
       mention_end_output = torch.matmul(end_mappings, text_output)
       mention_output = (mention_start_output + mention_end_output) / 2.  
-      crossmedia_output = crossmedia_model(mention_output)
-      align_output = align(crossmedia_output, action_output)
+      crossmedia_mention_output = crossmedia_text_model(mention_output)
+      crossmedia_action_output = crossmedia_visual_model(action_embeddings.view(B*20, 30, -1))
+      crossmedia_action_output = crossmedia_action_output.view(B, 20, 30, -1).sum(-2) / torch.max(action_len, torch.ones(1, device=action_len.device))
+      crossmedia_action_output = (action_mask.sum(-1).unsqueeze(-1) > 0).float() * crossmedia_action_output
+
+      align_output = align(crossmedia_mention_output, crossmedia_action_output, action_output)
       if not config.get('text_only', False):
         mention_output = torch.cat([mention_output, align_output], dim=-1)
 
@@ -185,9 +194,9 @@ def train(text_model, visual_model, crossmedia_model, coref_model, train_loader,
     torch.save(coref_model.module.state_dict(), '{}/coref_model-{}.pth'.format(config['model_path'], config['random_seed']))
  
     if epoch % 1 == 0:
-      res = test(text_model, visual_model, coref_model, test_loader, args)
-      if res['pairwise'][-1] >= best_text_f1:
-        best_text_f1 = res['pairwise'][-1]
+      res = test(text_model, visual_model, crossmedia_text_model, crossmedia_visual_model, coref_model, test_loader, args)
+      if res['pairwise'][-2] >= best_text_f1:
+        best_text_f1 = res['pairwise'][-2]
         results['pairwise'] = res['pairwise']
         results['muc'] = res['muc']
         results['ceafe'] = res['ceafe']
@@ -199,10 +208,10 @@ def train(text_model, visual_model, crossmedia_model, coref_model, train_loader,
         print('Best text coreference F1={}'.format(best_text_f1))
 
   if args.evaluate_only:
-    results = test(text_model, visual_model, coref_model, test_loader, args)
+    results = test(text_model, visual_model, crossmedia_text_model, crossmedia_visual_model, coref_model, test_loader, args)
   return results
       
-def test(text_model, visual_model, coref_model, test_loader, args): 
+def test(text_model, visual_model, crossmedia_text_model, crossmedia_visual_model, coref_model, test_loader, args): 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     config = pyhocon.ConfigFactory.parse_file(args.config)
     documents = test_loader.dataset.documents
@@ -220,13 +229,18 @@ def test(text_model, visual_model, coref_model, test_loader, args):
     results = {} 
     with torch.no_grad():     
         for i, batch in enumerate(test_loader):
-          doc_embeddings,\
-          start_mappings, end_mappings,\
-          continuous_mappings,\
-          width,\
-          action_embeddings,\
-          text_labels, type_labels, img_labels,\
-          text_mask, span_mask, action_mask = batch 
+          doc_embeddings = batch['doc_embeddings'].to(device)
+          start_mappings = batch['start_mappings'].to(device)
+          end_mappings = batch['end_mappings'].to(device)
+          continuous_mappings = batch['continuous_mappings'].to(device)
+          width = batch['width'].to(device)
+          action_embeddings = batch['action_embeddings'].to(device)
+          text_labels = batch['cluster_labels'].to(device)
+          type_labels = batch['event_labels'].to(device) 
+          img_labels = batch['action_labels'].to(device)
+          text_mask = batch['text_mask'].to(device)
+          span_mask = batch['span_mask'].to(device)
+          action_mask = batch['action_mask'].to(device)
 
           token_num = text_mask.sum(-1).long()
           span_num = torch.where(span_mask.sum(-1) > 0, 
@@ -235,18 +249,6 @@ def test(text_model, visual_model, coref_model, test_loader, args):
           
           B = doc_embeddings.size(0)
           region_num = action_mask.sum(-1).long()
-          doc_embeddings = doc_embeddings.to(device)
-          start_mappings = start_mappings.to(device)
-          end_mappings = end_mappings.to(device)
-          continuous_mappings = continuous_mappings.to(device)
-          width = width.to(device)
-          action_embeddings = action_embeddings.to(device)
-          text_labels = text_labels.to(device)
-          type_labels = type_labels.to(device)
-          img_labels = img_labels.to(device)
-          text_mask = text_mask.to(device)
-          span_mask = span_mask.to(device)
-          action_mask = action_mask.to(device)
 
           # Extract span and video embeddings
           action_output = visual_model(action_embeddings.view(B*20, 30, -1))
@@ -258,8 +260,12 @@ def test(text_model, visual_model, coref_model, test_loader, args):
           mention_start_output = torch.matmul(start_mappings, text_output)
           mention_end_output = torch.matmul(end_mappings, text_output)
           mention_output = (mention_start_output + mention_end_output) / 2.
-          crossmedia_output = crossmedia_model(mention_output)
-          align_output = align(crossmedia_output, action_output)
+          crossmedia_mention_output = crossmedia_text_model(mention_output)
+          crossmedia_action_output = crossmedia_visual_model(action_embeddings.view(B*20, 30, -1))
+          crossmedia_action_output = crossmedia_action_output.view(B, 20, 30, -1).sum(-2) / torch.max(action_len, torch.ones(1, device=action_len.device))
+          crossmedia_action_output = (action_mask.sum(-1).unsqueeze(-1) > 0).float() * crossmedia_action_output
+        
+          align_output = align(crossmedia_mention_output, crossmedia_action_output, action_output)
           if not config.get('text_only', False):
             mention_output = torch.cat([mention_output, align_output], dim=-1)
          
@@ -275,7 +281,12 @@ def test(text_model, visual_model, coref_model, test_loader, args):
             first_text_idx = first_text_idx.squeeze(0)
             second_text_idx = second_text_idx.squeeze(0)
             pairwise_text_labels = pairwise_text_labels.squeeze(0)
-            predicted_antecedents, text_scores = coref_model.module.predict_cluster(mention_output[idx, :span_num[idx]], first_text_idx, second_text_idx) 
+            text_scores = coref_model(mention_output[idx, first_text_idx],
+                                      mention_output[idx, second_text_idx])
+            predicted_antecedents = coref_model.module.predict_cluster(
+                                                         text_scores, 
+                                                         first_text_idx, 
+                                                         second_text_idx) 
             origin_candidate_start_ends = test_loader.dataset.origin_candidate_start_ends[global_idx]
             predicted_antecedents = torch.LongTensor(predicted_antecedents)
             origin_candidate_start_ends = torch.LongTensor(origin_candidate_start_ends)
@@ -306,8 +317,8 @@ def test(text_model, visual_model, coref_model, test_loader, args):
         strict_preds = (all_scores > 0).to(torch.int)
         eval = Evaluation(strict_preds, all_labels.to(device))
         class_pred_idxs = dict()
-        # TODO Compute coref scores by mention type class
-        for c, c_idx in test_loader.dataset.mention_stoi.items():
+        # Compute coref scores by event class
+        for c, c_idx in test_loader.dataset.event_stoi.items():
           if not c in class_pred_idxs:
             class_pred_idxs[c] = []
           for idx in range(all_coref_type_labels.size(0)):
@@ -316,8 +327,8 @@ def test(text_model, visual_model, coref_model, test_loader, args):
           
           if len(class_pred_idxs[c]) > 0: 
             eval_class = Evaluation(strict_preds[class_pred_idxs[c]].cpu(), all_labels[class_pred_idxs[c]])
-          logging.info('Class {}, number of predictions: {}/{}, number of positive pairs: {}/{}'.format(c, strict_preds[class_pred_idxs[c]].sum(), len(class_pred_idxs[c]), all_labels[class_pred_idxs[c]].sum(), len(class_pred_idxs[c])))
-          logging.info(f'Pairwise - Recall: {eval_class.get_recall()}, Precision: {eval_class.get_precision()}, F1: {eval_class.get_f1()}')
+            logging.info('Class {}, number of predictions: {}/{}, number of positive pairs: {}/{}'.format(c, strict_preds[class_pred_idxs[c]].sum(), len(class_pred_idxs[c]), all_labels[class_pred_idxs[c]].sum(), len(class_pred_idxs[c])))
+            logging.info(f'Pairwise - Recall: {eval_class.get_recall()}, Precision: {eval_class.get_precision()}, F1: {eval_class.get_f1()}')
            
 
         print('Number of predictions: {}/{}'.format(strict_preds.sum(), len(strict_preds)))
@@ -339,16 +350,16 @@ def test(text_model, visual_model, coref_model, test_loader, args):
               'CoNLL - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*conll_metrics)) 
         return results
 
-def align(crossmedia_output, action_output):
+def align(crossmedia_mention_output, crossmedia_action_output, action_output):
   """
   :param crossmedia_output: (batch size, num. of spans, embedding dim), mention embedding mapped to the multimedia space
   :param action_output: (batch size, num. of actions, embedding dim), action embedding 
   :returns aligned output: (batch size, num. of spans, embedding dim)
   """
-  batch_size = crossmedia_output.size(0)
-  num_spans = crossmedia_output.size(1)
+  batch_size = crossmedia_mention_output.size(0)
+  num_spans = crossmedia_mention_output.size(1)
   num_actions = action_output.size(1)
-  scores = torch.bmm(crossmedia_output, action_output.permute(0, 2, 1)).detach()
+  scores = torch.bmm(crossmedia_mention_output, crossmedia_action_output.permute(0, 2, 1)).detach()
 
   alignment_mask = (scores > 0).float()
   num_align = alignment_mask.sum(-1).unsqueeze(-1)
@@ -379,16 +390,20 @@ if __name__ == '__main__':
 
   # Initialize dataloaders
   splits = [os.path.join(config['data_folder'], 'train_mixed.json'),\
-            os.path.join(config['data_folder'], 'test_mixed.json')]
+            os.path.join(config['data_folder'], 'test_mixed.json')]  
+  event_stoi = create_type_stoi(splits) 
+
    
-  train_set = SupervisedGroundingFeatureDataset(os.path.join(config['data_folder'], 'train.json'), 
-                                                os.path.join(config['data_folder'], f'train_{config.mention_type}.json'), 
-                                                os.path.join(config['data_folder'], 'train_bboxes.json'),
-                                                config, split='train')
-  test_set = SupervisedGroundingFeatureDataset(os.path.join(config['data_folder'], 'test.json'),
-                                               os.path.join(config['data_folder'], f'test_{config.mention_type}.json'), 
-                                               os.path.join(config['data_folder'], 'test_bboxes.json'), 
-                                               config, split='test')
+  train_set = TextVideoEventDataset(config, 
+                                    event_stoi, 
+                                    dict(), 
+                                    split='train')
+  
+  test_set = TextVideoEventDataset(config,
+                                   event_stoi,
+                                   dict(),
+                                   split='test')
+  # test_set = train_set
 
   pairwises  = []
   mucs = []
@@ -411,16 +426,19 @@ if __name__ == '__main__':
       test_loader = torch.utils.data.DataLoader(test_set, batch_size=config['batch_size'], shuffle=False, num_workers=0, pin_memory=True)
 
       # Initialize models
-      crossmedia_model = nn.Sequential(
+      crossmedia_text_model = nn.Sequential(
                           nn.Linear(1024, 800),
                           nn.ReLU(),
                           nn.Linear(800, 800),
                           nn.ReLU(),
                           nn.Linear(800, 800),
                         )
-      crossmedia_model.load_state_dict(torch.load(config['crossmedia_model_path'], map_location=device))
-      visual_model = BiLSTM(400, 400, num_layers=3)
-      visual_model.load_state_dict(torch.load(config['visual_model_path'], map_location=device))
+      crossmedia_visual_model = BiLSTM(400, 400, num_layers=3)
+      visual_model = BiLSTM(400, 400, num_layers=3) # XXX
+      if not config.get('text_only', False):
+        crossmedia_text_model.load_state_dict(torch.load(config['crossmedia_text_model_path'], map_location=device))
+        crossmedia_visual_model.load_state_dict(torch.load(config['crossmedia_visual_model_path'], map_location=device))
+        visual_model.load_state_dict(torch.load(config['visual_model_path'], map_location=device))
       text_model = NoOp()
       coref_model = SimplePairWiseClassifier(config).to(device)
       
@@ -436,7 +454,7 @@ if __name__ == '__main__':
           n_params += p.numel()
 
       print('Number of parameters in coref classifier: {}'.format(n_params))
-      results = train(text_model, visual_model, crossmedia_model, coref_model, train_loader, test_loader, args, random_seed=seed)
+      results = train(text_model, visual_model, crossmedia_text_model, crossmedia_visual_model, coref_model, train_loader, test_loader, args, random_seed=seed)
       pairwises.append(results['pairwise'])
       mucs.append(results['muc'])
       bcubeds.append(results['bcubed'])

@@ -1,4 +1,12 @@
 {
+  "debug": false,
+  "seeds": [1234, 2341, 3412, 4123],
   "data_folder": "../data/video_m2e2/mentions",
-  "model_path": "models/coref_events_hdp_video_m2e2"
+  "model_path": "models/coref_events_hdp_video_m2e2",
+  "alpha0": 1,
+  "beta0": 1, 
+  "feature_types": ["head_lemma", 
+                    "event_type",
+                    "pos_tag",
+                    "word_class"]
 }
