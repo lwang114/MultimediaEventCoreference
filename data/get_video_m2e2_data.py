@@ -736,6 +736,43 @@ def extract_visual_embeddings_npy(npy_dirs, out_prefix, mapping_file=None, image
     video_feats['{}_{}'.format(doc_id, idx)] = video_feat
   np.savez(out_prefix, **video_feats)
 
+def make_action_anno_readable(action_json, ontology_json, metainfo_json, duration_jsons):
+  def _remove_punct(d):
+    for p in PUNCT:
+      d = d.replace(p, '')
+    return d
+
+  actions = json.load(open(action_json))
+  ontology = json.load(open(ontology_json))
+  metainfo = json.load(open(metainfo_json))
+  durations = dict()
+  for dur_json in duration_jsons:
+    durations.update(json.load(open(dur_json)))
+  desc_to_youtube_id = {_remove_punct(d):metainfo[d]['id'].split('v=')[-1] for d in metainfo}
+  event_types = ontology['event']
+  entity_types = ontology['entities']
+  role_types = ontology['arguments']
+
+  actions_readable = dict() 
+  for k in actions:    
+    actions_readable[k] = []
+    youtube_id = desc_to_youtube_id[k.split('.')[0]]
+    print(youtube_id)
+
+    for action in actions[k]:
+      action['Event_Type'] = event_types[action['Event_Type']]
+      for i, keyframe in enumerate(action['Key_Frames']):
+        for j, arg in enumerate(keyframe['Arguments']):
+          if 'ROLE_TYPE' in arg:
+            keyframe['Arguments'][j]['Role_Type'] = role_types[arg['ROLE_TYPE']]
+          if 'Entity_Type' in arg:
+            keyframe['Arguments'][j]['Entity_Type'] = entity_types[arg['Entity_Type']]
+        action['Key_Frames'][i] = keyframe
+      action['Total_Duration'] = durations[k.split('.')[0]]['duration_second']
+      action['youtube_id'] = youtube_id
+      actions_readable[k].append(action)
+  json.dump(actions_readable, open(action_json.split('.')[0]+'_readable.json', 'w'), indent=2)
+
 def train_test_split(feat_file, test_id_file, mapping_file, out_prefix): # TODO random split
   mapping_dict = json.load(open(mapping_file)) 
   id2desc = {v['id'].split('v=')[-1]:k for k, v in mapping_dict.items()}
@@ -910,4 +947,9 @@ if __name__ == '__main__':
     npy_dir = 'video_m2e2/original_vids/video_feats/3d'
     out_prefix = 'video_m2e2/original_vid_3d' 
     extract_visual_embeddings_npy([npy_dir], out_prefix, mapping_file=mapping_file)
-
+  elif args.task == 14:
+    action_json = 'video_m2e2/master.json'
+    ontology_json = 'video_m2e2/ontology.json'
+    metainfo_json = 'video_m2e2/video_m2e2.json'
+    dur_jsons = ['video_m2e2/anet_anno_train.json', 'video_m2e2/anet_anno_val.json']
+    make_action_anno_readable(action_json, ontology_json, metainfo_json, dur_jsons) 
