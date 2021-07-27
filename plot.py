@@ -116,6 +116,86 @@ def visualize_text_features(embed_file,
   plt.savefig(f'{out_prefix}.png')
   plt.close()
 
+def plot_nclusters_vs_performance(nclusters_vs_performance_csv):
+  fig, ax = plt.subplots(figsize=(20, 10))
+  df = pd.read_csv(nclusters_vs_performance_csv)
+  sns.lineplot(df, x='Number of Clusters', y='Score', hue='Evaluation Metric')
+  plt.xticks(df['Number of Clusters'], df['Number of Clusters Values'])
+  plt.savefig(nclusters_vs_performance_csv.split('.')[0]+'.png')
+  plt.close()
+
+def plot_attention(config_file, select_ids, 
+                   text_only=False,
+                   use_full_frame=False):
+  NULL = '##NULL##'
+  config = json.load(open(config_file))
+  data_path = config['data_folder']
+  model_path = config['model_path']
+  predictions = json.load(os.path.join(model_path, 'predictions.json'))
+  events = json.load(os.path.join(data_path, 'test_events.json'))
+  actions = json.load(os.path.join(data_path, 'master_readable.json'))
+  event_dict = {doc_id:dict() for doc_id in select_ids}
+  action_dict = {doc_id:dict() for doc_id in select_ids}
+  for e in events:
+    if e['doc_id'] in select_ids:
+      span = (min(e['tokens_ids']), max(e['tokens_ids']))
+      event_dict[e['doc_id']][span] = e['tokens']
+
+  for k, a_info in actions.items():
+    for a in a_info[k]:
+      if a['youtube_id'] in select_ids:
+        span = tuple(a['Temporal_Boundary']) # TODO Extract duration
+        action_dict[a['youtube_id']][span] = a['Event_Type'].split('.')[-1] 
+
+  for doc_id in select_ids:
+    pred = None
+    for pred in predictions:
+      if pred['doc_id'] == doc_id:
+        break
+    
+    fig, ax = plt.subplots(figsize=(7, 10))
+    if use_full_frame:
+      full_scores = np.asarray(prediction['score']).T
+      scores = []
+      for span in sorted(action_dict[doc_id]):
+        avg_score = full_scores[span[0]:span[1]+1].mean(0, keepdims=True)
+        scores.append(avg_score)
+      scores.append(full_scores[100:])
+      scores = np.concatenate(scores).T.tolist()
+    else:
+      scores = prediction['score']
+
+    e_tokens = [event_dict[doc_id][span] for span in sorted(event_dict[doc_id])]
+    v_labels = [action_dict[doc_id][span] for span in sorted(action_dict[doc_id])]
+
+    num_events = len(e_tokens)
+    num_actions = len(v_labels)
+
+    score_mat = []
+    for score in scores:
+      if text_only and (len(score) < num_events + num_actions + 1):
+        gap = num_events + num_actions + 1 - len(score)
+        score.extend([0]*gap)
+        score_mat.append(score)
+
+    score_mat = np.asarray(score_mat).T
+    score_mat /= np.maximum(score_mat.sum(0), EPS) 
+    si = np.arange(num_events+1)
+    ti = np.arange(num_events+num_actions+2)
+    S, T = np.meshgrid(si, ti)
+    plt.pcolormesh(S, T, score_mat)
+    for i in range(num_events):
+      for j in range(num_events+num_actions+1):
+        plt.text(i+0.5, j+0.5, round(score_mat[j, i], 2), color='orange')
+    ax.set_xticks(si[1:]-0.5)
+    ax.set_yticks(ti[1:]-0.5)
+    ax.set_xticklabels(e_tokens)
+    ax.set_yticklabels(v_labels+[NULL]+e_tokens) 
+    plt.xticks(rotation=45)
+    plt.colorbar()
+    plt.savefig(os.path.join(model_path, doc_id+'.png'))
+    plt.close()
+
 if __name__ == '__main__':
   import argparse
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -153,3 +233,12 @@ if __name__ == '__main__':
                              label_file,
                              ontology_file,
                              freq_file)
+  if args.task == 3: # TODO
+    select_ids = []
+    # ['92PLcoWtn0Q', '9tx72NIbwh8', 'AohILHV6i8Q', 'GLOGR0UsBtk', 
+    # 'LHIbc7koTUE', 'PaVqCYxGzp0', 'SvrpxITQ3Pk', 'dY_hkbVQA20', 
+    # 'eaW-mv9IKOs', 'f3plTR1Dcew', 'fDm7S-pjpOo', 'fsYMznJdCok']
+
+    if doc_id in select_ids:
+      plot_attention(predictions[doc_idx], event_feats_test[doc_idx], action_labels_test[doc_idx], out_prefix=os.path.join(config['model_path'], doc_id))
+
