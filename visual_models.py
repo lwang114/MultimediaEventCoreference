@@ -8,6 +8,45 @@ def init_weights(m):
         nn.init.xavier_uniform_(m.weight)
         nn.init.uniform_(m.bias)
 
+class ClassAttender(nn.Module):
+  def __init__(self,
+               input_dim,
+               hidden_dim,
+               n_class):
+    super(ClassAttender, self).__init__()
+    self.attention = nn.Linear(input_dim, n_class, bias=False)
+    self.classifier = nn.Sequential(
+                        nn.Linear(input_dim, hidden_dim),
+                        nn.ReLU(),
+                        nn.Linear(hidden_dim, 1)
+                      )
+
+  def forward(self, x, mask):
+    """
+    Args :
+      x : FloatTensor of size (batch size, seq length, input size)
+      mask : FloatTensor of size (batch size, seq length)
+    
+    Returns :
+      out : FloatTensor of size (batch size, n class)
+      class_logits = FloatTensor of size (batch size, seq len, n class)
+    """
+    class_logits = self.attention(x)
+    attn_weights = class_logits.permute(0, 2, 1)
+    attn_weights = attn_weights * mask.unsqueeze(-2)
+    attn_weights = torch.where(attn_weights != 0,
+                               attn_weights,
+                               torch.tensor(-1e10, device=x.device))
+    
+    # (batch size, n class, seq length)
+    attn_weights = F.softmax(attn_weights, dim=-1)
+    # (batch size, n class, input size)
+    attn_applied = torch.bmm(attn_weights, x)
+    # (batch size, n class)
+    out = self.classifier(attn_applied).squeeze(-1)
+    return out, class_logits
+
+
 class BiLSTMVideoEncoder(nn.Module):
   def __init__(self,
                input_dim,
