@@ -18,6 +18,7 @@ from evaluator import Evaluation, CoNLLEvaluation
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import pandas as pd
 
 NULL = '###NEW###'
 EPS = 1e-100
@@ -42,8 +43,16 @@ class AmodalSMTEventCoreferencer:
     :param action_features: list of array of shape (num. of actions, embedding dim.)
     '''
     self.config = config
-    self.text_modes = [MODE_S, MODE_D]
-    self.modes = [MODE_S, MODE_D, MODE_V]
+    self.text_modes = []
+    self.modes = []
+    if MODE_S in config.modes:
+      self.text_modes.append(MODE_S)
+      self.modes.append(MODE_S)
+    if MODE_D in config.modes:
+      self.text_modes.append(MODE_D)
+      self.modes.append(MODE_D)
+    if MODE_V in config.modes:
+      self.modes.append(MODE_V)  
 
     self.e_feats_train = event_features
     self.v_feats_train = action_features
@@ -80,18 +89,20 @@ class AmodalSMTEventCoreferencer:
     for e_feat in event_feats:
       modes_sent = []
       for e_idx, e in enumerate(e_feat):
-        mode = MODE_V # XXX
-        '''
+        if MODE_V in self.modes:
+          mode = MODE_V # XXX
+        else:
+          mode = MODE_S
         for a_idx, a in enumerate(e_feat[:e_idx]):
-          if self.is_match(a, e, MODE_S):
+          if self.is_match(a, e, MODE_S) and MODE_S in self.modes:
             mode = MODE_S
             break
-          elif self.is_match(a, e, MODE_D):
+          elif self.is_match(a, e, MODE_D) and MODE_D in self.modes:
             mode = MODE_D
             break
-        if mode == MODE_V and not e['is_visual']:
+        if mode == MODE_V and not e['is_visual'] and MODE_S in self.modes:
           mode = MODE_S
-        '''
+        
         modes_sent.append(mode)
       modes_sents.append(modes_sent)
     return modes_sents
@@ -108,7 +119,9 @@ class AmodalSMTEventCoreferencer:
     for mode in self.text_modes:
       for v in self.vocab[mode]:
         self.P_ee[mode][v] = {v2: 1. / (len(self.vocab[mode]) - 1) for v2 in self.vocab[mode] if v2 != NULL} 
-    self.P_ee[MODE_V][NULL] = {v: 1. / (len(self.vocab[MODE_V]) - 1) for v in self.vocab[MODE_V] if v != NULL}
+
+    if MODE_V in self.modes:
+      self.P_ee[MODE_V][NULL] = {v: 1. / (len(self.vocab[MODE_V]) - 1) for v in self.vocab[MODE_V] if v != NULL}
 
     # Initialize position probs
     for mode in self.modes:
@@ -128,8 +141,9 @@ class AmodalSMTEventCoreferencer:
         self.P_ij[mode][d] /= norm_factor
 
     # Initialize action-event translation probs
-    for k in range(self.Kv):
-      self.P_ve[k] = {v: 1. / (len(self.vocab[MODE_V]) - 1) for v in self.vocab[MODE_V] if v != NULL} 
+    if MODE_V in self.modes:
+      for k in range(self.Kv):
+        self.P_ve[k] = {v: 1. / (len(self.vocab[MODE_V]) - 1) for v in self.vocab[MODE_V] if v != NULL} 
 
     # Initialize action cluster centroids
     X = np.concatenate(self.v_feats_train)
@@ -199,8 +213,9 @@ class AmodalSMTEventCoreferencer:
 
   def is_match(self, e1, e2, mode):
     if e1['head_lemma'] != NULL:
-      if e1['event_type'] != e2['event_type']:
-        return False
+      if 'event_type' in e1:
+        if e1['event_type'] != e2['event_type']:
+          return False
     if mode == MODE_S:
       if e1['head_lemma'] == NULL:
         if e2['pos_tag'] in ['PRP', 'PRP$']:
@@ -593,8 +608,8 @@ def load_event_features(config, split, action_labels=None):
     event_label_dicts[m['doc_id']][span] = {'token_id': token,
                                             'cluster_id': m['cluster_id']}
 
-    for feat_type in event_feature_types:
-      event_label_dicts[m['doc_id']][span][feat_type] = m[feat_type]
+    # for feat_type in event_feature_types:
+    event_label_dicts[m['doc_id']][span] = deepcopy(m) # m[feat_type]
 
   for feat_idx, doc_id in enumerate(sorted(event_label_dicts)):
     event_doc_embs = event_docs_embs[doc_to_event_feat[doc_id]]
@@ -611,8 +626,8 @@ def load_event_features(config, split, action_labels=None):
         a_span = (a['start'], a['end'])
         event['arguments'][a_idx] = deepcopy(entity_label_dicts[doc_id][a_span]) 
 
-      if 'event_type' in event:
-        match_action_types = ontology_map.get(event['event_type'], [])
+      if 'event_type' in event_label_dict[span]:
+        match_action_types = ontology_map.get(event_label_dict[span]['event_type'], [])
          
         ''' XXX
         if action_labels is not None:
@@ -880,29 +895,41 @@ if __name__ == '__main__':
     ceafes.append(ceafe)
     avgs.append(avg)
 
-    logging.info('Seed: {}, MUC - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
-                 'Bcubed - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
-                 'CEAFe - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
-                 'CoNLL - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(seed, *conll_metrics))
-
+    logging.info('Seed: {}, MUC - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f},\n'
+                 'Bcubed - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f},\n'
+                 'CEAFe - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f},\n'
+                 'CoNLL - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}\n'.format(seed, *conll_metrics))
     
   mean_pairwise, std_pairwise = np.mean(np.asarray(pairwises), axis=0), np.std(np.asarray(pairwises), axis=0)
   mean_muc, std_muc = np.mean(np.asarray(mucs), axis=0), np.std(np.asarray(mucs), axis=0)
   mean_bcubed, std_bcubed = np.mean(np.asarray(b_cubeds), axis=0), np.std(np.asarray(b_cubeds), axis=0)
   mean_ceafe, std_ceafe = np.mean(np.asarray(ceafes), axis=0), np.std(np.asarray(ceafes), axis=0)
   mean_avg, std_avg = np.mean(np.asarray(avgs), axis=0), np.std(np.asarray(avgs), axis=0)
-  print(f'Pairwise: precision {mean_pairwise[0]} +/- {std_pairwise[0]}, '
-        f'recall {mean_pairwise[1]} +/- {std_pairwise[1]}, '
-        f'f1 {mean_pairwise[2]} +/- {std_pairwise[2]}')
-  print(f'MUC: precision {mean_muc[0]} +/- {std_muc[0]}, '
-        f'recall {mean_muc[1]} +/- {std_muc[1]}, '
-        f'f1 {mean_muc[2]} +/- {std_muc[2]}')
-  print(f'Bcubed: precision {mean_bcubed[0]} +/- {std_bcubed[0]}, '
-        f'recall {mean_bcubed[1]} +/- {std_bcubed[1]}, '
-        f'f1 {mean_bcubed[2]} +/- {std_bcubed[2]}')
-  print(f'CEAFe: precision {mean_ceafe[0]} +/- {std_ceafe[0]}, '
-        f'recall {mean_ceafe[1]} +/- {std_ceafe[1]}, '
-        f'f1 {mean_ceafe[2]} +/- {std_ceafe[2]}')
-  print(f'CoNLL: precision {mean_avg[0]} +/- {std_avg[0]}, '
-        f'recall {mean_avg[1]} +/- {std_avg[1]}, '
-        f'f1 {mean_avg[2]} +/- {std_avg[2]}')
+  info = f'Pairwise: precision {mean_pairwise[0]} +/- {std_pairwise[0]}, '\
+         f'recall {mean_pairwise[1]} +/- {std_pairwise[1]}, '\
+         f'f1 {mean_pairwise[2]} +/- {std_pairwise[2]}\n'\
+         f'MUC: precision {mean_muc[0]} +/- {std_muc[0]}, '\
+         f'recall {mean_muc[1]} +/- {std_muc[1]}, '\
+         f'f1 {mean_muc[2]} +/- {std_muc[2]}\n'\
+         f'Bcubed: precision {mean_bcubed[0]} +/- {std_bcubed[0]}, '\
+         f'recall {mean_bcubed[1]} +/- {std_bcubed[1]}, '\
+         f'f1 {mean_bcubed[2]} +/- {std_bcubed[2]}\n'\
+         f'CEAFe: precision {mean_ceafe[0]} +/- {std_ceafe[0]}, '\
+         f'recall {mean_ceafe[1]} +/- {std_ceafe[1]}, '\
+         f'f1 {mean_ceafe[2]} +/- {std_ceafe[2]}\n'\
+         f'CoNLL: precision {mean_avg[0]} +/- {std_avg[0]}, '\
+         f'recall {mean_avg[1]} +/- {std_avg[1]}, '\
+         f'f1 {mean_avg[2]} +/- {std_avg[2]}'
+  logging.info(info)
+  print(info)
+
+  df = {'Evaluation Metric': ['Pairwise']*4+['MUC']*4+[r'B^3']*4+['CEAFe']*4,
+        'Number of Visual Clusters': [config['Kv']]*16,
+        'Score': np.concatenate(
+          [np.asarray(pairwises),
+           np.asarray(mucs),
+           np.asarray(b_cubeds),
+           np.asarray(ceafes)])[:, 2]}
+  df = pd.DataFrame(df)
+  df.to_csv(os.path.join(config['model_path'], 'results.csv'))
+    
