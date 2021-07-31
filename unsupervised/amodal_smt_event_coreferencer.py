@@ -970,4 +970,25 @@ if __name__ == '__main__':
            np.asarray(ceafes)])[:, 2]}
   df = pd.DataFrame(df)
   df.to_csv(os.path.join(config['model_path'], 'results.csv'))
-    
+  
+  pairwise_dict = dict() 
+  for seed in config.seeds:
+    pairwise_by_type = json.load(open(os.path.join(config['model_path'], f'pairwise_scores_by_type_{seed}.json')))
+    for res in pairwise_by_type:
+      p, r, f1, event_type, count = res
+      if isinstance(p, list) or isinstance(r, list) or isinstance(f1, list):
+        p, r, f1 = 0., 0., 0.
+        
+      if not event_type in pairwise_dict:
+        pairwise_dict[event_type] = {'scores': [], 'count': count}
+      pairwise_dict[event_type]['scores'].append([p, r, f1])
+
+  for c in pairwise_dict:
+    scores = pairwise_dict[c]['scores']
+    mean_score = np.mean(np.asarray(scores), axis=0)
+    std_score = np.std(np.asarray(scores), axis=0)
+    pairwise_dict[c]['mean'] = mean_score.tolist()
+    pairwise_dict[c]['std'] = std_score.tolist()
+
+  pairwise_list = [pairwise_dict[c] for c in sorted(pairwise_dict, key=lambda x:pairwise_dict[x]['count'], reverse=True)]
+  json.dump(pairwise_list, open(os.path.join(config['model_path'], f'pairwise_scores_by_type.json'), 'w'), indent=2)
