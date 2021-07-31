@@ -802,6 +802,27 @@ def plot_attention(prediction, e_feats, v_labels, out_prefix):
   plt.savefig(out_prefix+'.png')
   plt.close()
 
+def separate_pairs_by_type(docs_feats):
+  pair_idxs_by_type = dict()
+  start_idx = 0
+  for doc_feats in docs_feats:
+    n = len(doc_feats)
+    first, second = zip(*list(itertools.combinations(range(n), 2)))
+    for pair_idx, (first_idx, second_idx) in enumerate(zip(first, second)):
+      first_type = doc_feats[first_idx]['event_type']
+      second_type = doc_feats[second_idx]['event_type']
+      
+      if not first_type in pair_idxs_by_type:
+        pair_idxs_by_type[first_type] = []
+      
+      if not second_type in pair_idxs_by_type:
+        pair_idxs_by_type[second_type] = []
+
+      pair_idxs_by_type[first_type].append(start_idx + pair_idx)
+      pair_idxs_by_type[second_type].append(start_idx + pair_idx)
+    start_idx += len(first)
+  return pair_idxs_by_type
+      
 if __name__ == '__main__':
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   parser.add_argument('--config', '-c', default='../configs/config_amodal_smt_video_m2e2.json')
@@ -862,7 +883,20 @@ if __name__ == '__main__':
     pairwise = [pairwise_eval.get_precision(), pairwise_eval.get_recall(), pairwise_eval.get_f1()]
     print(f'Pairwise - Precision: {pairwise[0]}, Recall: {pairwise[1]}, F1: {pairwise[2]}')
     logging.info(f'Pairwise precision: {pairwise[0]}, recall: {pairwise[1]}, F1: {pairwise[2]}')
-  
+
+    # Compute pairwise scores by event types
+    pairwise_by_type = dict()
+    pair_idxs_by_type = separate_pairs_by_type(event_feats_test)
+    for event_type in pair_idxs_by_type:
+      pred_labels_by_type = pred_labels[pair_idxs_by_type[event_type]]
+      gold_labels_by_type = gold_labels[pair_idxs_by_type[event_type]]
+      pairwise_eval_by_type = Evaluation(pred_labels_by_type, gold_labels_by_type)
+      pairwise_by_type[event_type] = [pairwise_eval_by_type.get_precision().numpy().tolist(), 
+                                      pairwise_eval_by_type.get_recall().numpy().tolist(),
+                                      pairwise_eval_by_type.get_f1().numpy().tolist()] 
+      logging.info(f'Pairwise for {event_type} - Precision: {pairwise_by_type[event_type][0]:.4f}, Recall: {pairwise_by_type[event_type][1]:.4f}, F1: {pairwise_by_type[event_type][2]:.4f}')
+    json.dump(pairwise_by_type, os.path.join(config['model_path'], 'pairwise_scores_by_type.json'), indent=2)
+
     # Compute CoNLL scores and save readable predictions
     conll_eval = CoNLLEvaluation()
     f_out = open(os.path.join(config['model_path'], 'prediction.readable'), 'w')
