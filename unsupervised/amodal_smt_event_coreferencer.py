@@ -207,8 +207,7 @@ class AmodalSMTEventCoreferencer:
             elif cosine_similarity(a1['entity_embedding'], a2['entity_embedding']) > 0.4:
               matched = True
           if not matched:
-            return False
-             
+            return False             
     return True
 
   def is_match(self, e1, e2, mode):
@@ -807,6 +806,8 @@ def separate_pairs_by_type(docs_feats):
   start_idx = 0
   for doc_feats in docs_feats:
     n = len(doc_feats)
+    if n <= 1:
+      continue
     first, second = zip(*list(itertools.combinations(range(n), 2)))
     for pair_idx, (first_idx, second_idx) in enumerate(zip(first, second)):
       first_type = doc_feats[first_idx]['event_type']
@@ -885,17 +886,20 @@ if __name__ == '__main__':
     logging.info(f'Pairwise precision: {pairwise[0]}, recall: {pairwise[1]}, F1: {pairwise[2]}')
 
     # Compute pairwise scores by event types
-    pairwise_by_type = dict()
+    pairwise_by_type = []
     pair_idxs_by_type = separate_pairs_by_type(event_feats_test)
     for event_type in pair_idxs_by_type:
       pred_labels_by_type = pred_labels[pair_idxs_by_type[event_type]]
       gold_labels_by_type = gold_labels[pair_idxs_by_type[event_type]]
       pairwise_eval_by_type = Evaluation(pred_labels_by_type, gold_labels_by_type)
-      pairwise_by_type[event_type] = [pairwise_eval_by_type.get_precision().numpy().tolist(), 
-                                      pairwise_eval_by_type.get_recall().numpy().tolist(),
-                                      pairwise_eval_by_type.get_f1().numpy().tolist()] 
-      logging.info(f'Pairwise for {event_type} - Precision: {pairwise_by_type[event_type][0]:.4f}, Recall: {pairwise_by_type[event_type][1]:.4f}, F1: {pairwise_by_type[event_type][2]:.4f}')
-    json.dump(pairwise_by_type, os.path.join(config['model_path'], 'pairwise_scores_by_type.json'), indent=2)
+      pairwise_by_type.append([pairwise_eval_by_type.get_precision().numpy().tolist(), 
+                               pairwise_eval_by_type.get_recall().numpy().tolist(),
+                               pairwise_eval_by_type.get_f1().numpy().tolist(),
+                               event_type,
+                               len(pred_labels_by_type)])
+      logging.info(f'Pairwise for {event_type} - Precision: {pairwise_by_type[-1][0]}, Recall: {pairwise_by_type[-1][1]}, F1: {pairwise_by_type[-1][2]}')
+    pairwise_by_type = sorted(pairwise_by_type, key=lambda x:x[-1], reverse=True)
+    json.dump(pairwise_by_type, open(os.path.join(config['model_path'], f'pairwise_scores_by_type_{seed}.json'), 'w'), indent=2)
 
     # Compute CoNLL scores and save readable predictions
     conll_eval = CoNLLEvaluation()
