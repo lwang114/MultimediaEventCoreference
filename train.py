@@ -173,7 +173,7 @@ def train(text_model,
       continuous_mappings = batch['continuous_mappings'].to(device)
       width = batch['width'].to(device)
 
-      videos = batch['action_embeddings'].to(device)
+      videos = batch['visual_embeddings'].to(device)
       text_labels = batch['cluster_labels'].to(device)
       event_labels = batch['event_labels'].to(device)
 
@@ -351,7 +351,7 @@ def test(text_model,
         continuous_mappings = batch['continuous_mappings'].to(device)
         width = batch['width'].to(device)
         
-        videos = batch['action_embeddings'].to(device)
+        videos = batch['visual_embeddings'].to(device)
         text_labels = batch['cluster_labels'].to(device) 
         event_labels = batch['event_labels'].to(device)
         text_mask = batch['text_mask'].to(device)
