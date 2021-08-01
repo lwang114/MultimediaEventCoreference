@@ -109,8 +109,8 @@ def train(text_model,
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
   torch.set_grad_enabled(True)
 
-  config = pyhocon.configfactory.parse_file(args.config)
-  weight_visual = config.weight_visual # TODO
+  config = pyhocon.ConfigFactory.parse_file(args.config)
+  weight_visual = config.weight_visual
   n_event_class = len(train_loader.dataset.event_stoi)
   if random_seed:
     config.random_seed = random_seed
@@ -140,15 +140,6 @@ def train(text_model,
   text_coref_model.to(device)
   visual_coref_model.to(device)
 
-  # Create/load exp
-  if args.start_epoch != 0:
-    text_model.load_state_dict(torch.load('{}/text_model-{}.pth'.format(config['model_path'], random_seed)))
-    mention_model.load_state_dict(torch.load('{}/mention_model-{}.pth'.format(config['model_path'], random_seed)))
-    visual_model.load_state_dict(torch.load('{}/visual_model.pth-{}'.format(config['model_path'], random_seed)))
-    attention_model.load_state_dict(torch.load('{}/attention_model-{}.pth'.format(config['model_path'], random_seed)))
-    text_coref_model.load_state_dict(torch.load('{}/text_coref_model-{}.pth'.format(config['model_path'], random_seed)))
-    visual_coref_model.load_state_dict(torch.load('{}/visual_coref_scorer-{}.pth'.format(config['model_path'], random_seed)))
-
   # Define the training criterion
   criterion = nn.BCEWithLogitsLoss()
   optimizer = get_optimizer(config, [text_model,
@@ -168,7 +159,7 @@ def train(text_model,
   if args.evaluate_only:
     config.epochs = 0
 
-  for epoch in range(args.start_epoch, config.epochs):
+  for epoch in range(config.epochs):
     mention_model.train()
     visual_model.train()
     attention_model.train()
@@ -185,38 +176,34 @@ def train(text_model,
       videos = batch['action_embeddings'].to(device)
       text_labels = batch['cluster_labels'].to(device)
       event_labels = batch['event_labels'].to(device)
+
       text_mask = batch['text_mask'].to(device)
       span_mask = batch['span_mask'].to(device)
-      span_num = torch.where(span_mask.sum(-1) > 0,
-                             torch.tensor(1, dtype=torch.int,
-                                          device=doc_embeddings.device),
-                             torch.tensor(0, dtype=torch.int,
-                                          device=doc_embeddings.device)).sum(-1)
-      action_num = torch.where(action_mask.sum(-1) > 0,
-                               torch.tensor(1, dtype=torch.int,
-                                            device=doc_embeddings.device), 
-                               torch.tensor(0, dtype=torch.int, 
-                                            device=doc_embeddings.device)).sum(-1)
-      binary_event_labels = (F.one_hot(event_labels, n_event_class) * span_mask.unsqueeze(-1)).sum(-2)
-
+      action_span_mask = batch['action_mask'].to(device)
+      span_num = (span_mask.sum(-1) > 0).long().sum(-1)
+      action_num = (action_span_mask.sum(-1) > 0).long().sum(-1)
+      action_mask = (action_span_mask.sum(-1) > 0).float()
+      mention_mask = (span_mask.sum(-1) > 0).float()
+      binary_event_labels = ((F.one_hot(event_labels, n_event_class) * mention_mask.unsqueeze(-1)).sum(-2) > 0).float()
+      
       # Compute mention embeddings
       mention_output = mention_model(doc_embeddings,
                                      start_mappings,
                                      end_mappings,
                                      continuous_mappings, 
                                      width, 
-                                     attention_mask=text_mask) # TODO Make sure all three types of embeddings are used for text mention
+                                     attention_mask=text_mask)
       
       # Compute textual event logits of size (batch size, span num, n event class)
       text_output = text_model(mention_output)
-      text_event_logit, text_event_logits = attention_model(text_output, span_mask) 
+      text_event_logit, text_event_logits = attention_model(text_output, mention_mask) 
       text_event_probs = F.softmax(text_event_logits, dim=-1)
 
       # Compute crossmedia event logits of size (batch size, batch size, n event class)
-      video_output = visual_model(videos, action_mask)
+      video_output = visual_model(videos, action_span_mask)
       # (batch size, action num, n event class)
       visual_event_logit, visual_event_logits = attention_model(video_output, action_mask)
-      crossmedia_event_logits = video_event_logit + text_event_logit
+      crossmedia_event_logits = text_event_logit # XXX visual_event_logit + text_event_logit
       crossmedia_event_probs = torch.sigmoid(crossmedia_event_logits)
 
       # Supervision levels:
@@ -226,12 +213,13 @@ def train(text_model,
       if config.supervision_level == 0:
         masked_text_event_probs = crossmedia_event_probs.unsqueeze(-2) * text_event_probs 
       elif config.supervision_level in [1, 2]:
-        masked_text_event_probs = binary_event_labels * text_event_probs
+        masked_text_event_probs = binary_event_labels.unsqueeze(-2) * text_event_probs
       else:
         raise ValueError(f'Invalid level of supervision: {config.supervision_level}') 
       
       # Compute coreference scores
       text_scores = []
+      pairwise_text_labels = []
       B = doc_embeddings.size(0)
       for idx in range(B):
         first_text_idx,\
@@ -240,15 +228,21 @@ def train(text_model,
                                 text_labels[idx, :span_num[idx]].unsqueeze(0),
                                 is_training=False,
                                 device=device)
+        if first_text_idx is None:
+            continue
         
         visual_score = visual_coref_model.module.crossmedia_score(first_text_idx,
                                                                   second_text_idx,
-                                                                  masked_text_event_probs) # TODO Weighted average instead of sum
+                                                                  masked_text_event_probs[idx])
+        first_text_idx = first_text_idx.squeeze(0)
+        second_text_idx = second_text_idx.squeeze(0)
+        pairwise_text_label = pairwise_text_label.squeeze(0)
         text_score = text_coref_model(mention_output[idx, first_text_idx],
                                       mention_output[idx, second_text_idx])
         text_score = weight_visual * visual_score + (1 - weight_visual) * text_score
         text_scores.append(text_score)
-      
+        pairwise_text_labels.append(pairwise_text_label)
+        
       if not len(text_scores):
         continue
 
@@ -258,8 +252,9 @@ def train(text_model,
       loss = criterion(text_scores, pairwise_text_labels)
       if config.supervision_level == 0:
         event_loss = criterion(crossmedia_event_logits, binary_event_labels)
-        loss = loss + event_loss
-      
+        # XXX loss = loss + event_loss
+        loss = event_loss
+        
       optimizer.zero_grad()
       loss.backward()
       optimizer.step()
@@ -274,6 +269,7 @@ def train(text_model,
     print(info)
     logging.info(info)
     torch.save(visual_model.module.state_dict(), '{}/visual_model-{}.pth'.format(config['model_path'], random_seed))
+    torch.save(text_model.module.state_dict(), '{}/text_model-{}.pth'.format(config['model_path'], random_seed))
     torch.save(mention_model.module.state_dict(), '{}/mention_model-{}.pth'.format(config['model_path'], random_seed))
     torch.save(attention_model.module.state_dict(), '{}/attention_model-{}.pth'.format(config['model_path'], random_seed))
 
@@ -284,6 +280,7 @@ def train(text_model,
       res = test(text_model,
                  mention_model,
                  visual_model,
+                 attention_model,
                  text_coref_model,
                  visual_coref_model,
                  test_loader, args)
@@ -295,15 +292,24 @@ def train(text_model,
         results['bcubed'] = res['bcubed']
         results['avg'] = res['avg']
         results['event'] = res['event']
-        torch.save(visual_model.module.state_dict(), '{}/best_visual_model-{}.pth'.format(config['model_path'], random_seed))
+        torch.save(text_model.module.state_dict(), '{}/best_text_model-{}.pth'.format(config['model_path'], random_seed))
         torch.save(mention_model.module.state_dict(), '{}/best_mention_model-{}.pth'.format(config['model_path'], random_seed))
+        torch.save(visual_model.module.state_dict(), '{}/best_visual_model-{}.pth'.format(config['model_path'], random_seed))
+        torch.save(attention_model.module.state_dict(), '{}/best_attention_model-{}.pth'.format(config['model_path'], random_seed))
         torch.save(text_coref_model.module.state_dict(), '{}/best_text_coref_model-{}.pth'.format(config['model_path'], random_seed))
         torch.save(visual_coref_model.module.state_dict(), '{}/best_visual_coref_model-{}.pth'.format(config['model_path'], random_seed))
         print('Best text coreference F1={}'.format(best_text_f1))
 
-    if args.evaluate_only:
-      results = test(text_model, mention_model, visual_model, text_coref_model, visual_coref_model, test_loader, args)
-    return results
+  if args.evaluate_only:
+    results = test(text_model,
+                   mention_model,
+                   visual_model,
+                   attention_model,
+                   text_coref_model,
+                   visual_coref_model,
+                   test_loader,
+                   args)
+  return results
 
 def test(text_model,
          mention_model,
@@ -323,10 +329,13 @@ def test(text_model,
     all_labels = []
     pred_event_labels = []
     gold_event_labels = []
-
+    pred_binary_event_labels = []
+    gold_binary_event_labels = []
+    
     text_model.eval()
     mention_model.eval()
     visual_model.eval()
+    attention_model.eval()
     text_coref_model.eval()
     visual_coref_model.eval()
 
@@ -347,17 +356,12 @@ def test(text_model,
         event_labels = batch['event_labels'].to(device)
         text_mask = batch['text_mask'].to(device)
         span_mask = batch['span_mask'].to(device)
-        span_num = torch.where(span_mask.sum(-1) > 0,
-                               torch.tensor(1, dtype=torch.int,
-                                            device=doc_embeddings.device),
-                               torch.tensor(0, dtype=torch.int,
-                                            device=doc_embeddings.device)).sum(-1)
-        action_num = torch.where(action_mask.sum(-1) > 0,
-                                 torch.tensor(1, dtype=torch.int,
-                                              device=doc_embeddings.device), 
-                                 torch.tensor(0, dtype=torch.int, 
-                                              device=doc_embeddings.device)).sum(-1)
-        binary_event_labels = (F.one_hot(event_labels, n_event_class) * span_mask.unsqueeze(-1)).sum(-2)
+        action_span_mask = batch['action_mask'].to(device)
+        span_num = (span_mask.sum(-1) > 0).long().sum(-1)
+        action_num = (action_span_mask.sum(-1) > 0).long().sum(-1)
+        action_mask = (action_span_mask.sum(-1) > 0).float()
+        mention_mask = (span_mask.sum(-1) > 0).float()
+        binary_event_labels = ((F.one_hot(event_labels, n_event_class) * mention_mask.unsqueeze(-1)).sum(-2) > 0).float()
   
         # Compute mention embeddings
         mention_output = mention_model(doc_embeddings,
@@ -365,29 +369,32 @@ def test(text_model,
                                        end_mappings,
                                        continuous_mappings, 
                                        width, 
-                                       attention_mask=text_mask) # TODO Make sure all three types of embeddings are used for text mention
+                                       attention_mask=text_mask)
         
         # Compute textual event logits of size (batch size, span num, n event class)
         text_output = text_model(mention_output)
-        text_event_logit, text_event_logits = attention_model(text_output, span_mask) 
+        text_event_logit, text_event_logits = attention_model(text_output, mention_mask) 
         text_event_probs = F.softmax(text_event_logits, dim=-1)
 
         # Compute crossmedia event logits of size (batch size, batch size, n event class)
-        video_output = visual_model(videos, action_mask)
+        video_output = visual_model(videos, action_span_mask)
         # (batch size, action num, n event class)
         visual_event_logit, visual_event_logits = attention_model(video_output, action_mask)
-        crossmedia_event_logits = video_event_logit + text_event_logit
+        crossmedia_event_logits = text_event_logit # XXX visual_event_logit + text_event_logit
         crossmedia_event_probs = torch.sigmoid(crossmedia_event_logits)    
         if config.supervision_level == 0:
           masked_text_event_probs = crossmedia_event_probs.unsqueeze(-2) * text_event_probs 
         elif config.supervision_level in [1, 2]:
-          masked_text_event_probs = binary_event_labels * text_event_probs
+          masked_text_event_probs = binary_event_labels.unsqueeze(-2) * text_event_probs
         else:
           raise ValueError(f'Invalid level of supervision: {config.supervision_level}')
-
+        pred_binary_event_labels.append((crossmedia_event_logits > 0).long().flatten().cpu().detach())
+        gold_binary_event_labels.append(binary_event_labels.long().flatten().cpu().detach())
+      
         # Compute coreference scores
         B = doc_embeddings.size(0)
         for idx in range(B):
+          global_idx = i * test_loader.batch_size + idx
           first_text_idx,\
           second_text_idx,\
           pairwise_text_label = get_pairwise_text_labels(
@@ -397,17 +404,23 @@ def test(text_model,
           if first_text_idx is None:
             continue
 
-          visual_coref_model.module.crossmedia_score(first_text_idx,
-                                                     second_text_idx,
-                                                     masked_text_event_probs) # TODO Weighted average instead of sum
+          first_text_idx = first_text_idx.squeeze(0)
+          second_text_idx = second_text_idx.squeeze(0)
+          pairwise_text_label = pairwise_text_label.squeeze(0)
+
+          visual_score = visual_coref_model.module.crossmedia_score(first_text_idx,
+                                                                    second_text_idx,
+                                                                    masked_text_event_probs[idx])
+          
           text_score = text_coref_model(mention_output[idx, first_text_idx],
                                         mention_output[idx, second_text_idx])
           text_score = weight_visual * visual_score + (1 - weight_visual) * text_score
           
           predicted_antecedents = text_coref_model.module.predict_cluster(
-                                             text_scores,
+                                             text_score,
                                              first_text_idx,
                                              second_text_idx)
+
           origin_candidate_start_ends = test_loader.dataset.origin_candidate_start_ends[global_idx]
           predicted_antecedents = torch.LongTensor(predicted_antecedents)
           origin_candidate_start_ends = torch.LongTensor(origin_candidate_start_ends)
@@ -430,14 +443,16 @@ def test(text_model,
                               )
           pred_event_label = masked_text_event_probs[idx, :span_num[idx]].max(-1)[1].cpu().detach()
           gold_event_label = event_labels[idx, :span_num[idx]].cpu().detach()
-          pred_event_str = [event_types[p] for p in pred_event_label.numpy()]
-          gold_event_str = [event_types[g] for g in gold_event_label.numpy()]
+          pred_event_str = ' '.join([event_types[p] for p in pred_event_label.numpy()])
+          gold_event_str = ' '.join([event_types[g] for g in gold_event_label.numpy()])
 
           token_str = ' '.join(tokens).replace('\n', '')
           f_out.write(f"{doc_id}: {token_str}\n")
           f_out.write(f'Pred: {pred_clusters_str}\n')
-          f_out.write(f'Gold: {gold_clusters_str}\n\n')
-
+          f_out.write(f'Gold: {gold_clusters_str}\n')
+          f_out.write(f'Pred Events: {pred_event_str}\n')
+          f_out.write(f'Gold Events: {gold_event_str}\n\n')          
+          
           all_scores.append(text_score.squeeze(1))
           all_labels.append(pairwise_text_label)
           pred_event_labels.append(pred_event_label)
@@ -447,18 +462,22 @@ def test(text_model,
       all_labels = torch.cat(all_labels)
       pred_event_labels = torch.cat(pred_event_labels)
       gold_event_labels = torch.cat(gold_event_labels)
-
+      pred_binary_event_labels = torch.cat(pred_binary_event_labels)
+      gold_binary_event_labels = torch.cat(gold_binary_event_labels)
+      
       average_precision = average_precision_score(all_labels.cpu().detach().numpy(),
                                                   torch.sigmoid(all_scores).cpu().detach().numpy())
+      
       strict_preds = (all_scores > 0).to(torch.int)
       eval = Evaluation(strict_preds, all_labels.to(device))
       print('[Text Coreference Result]')
       print('Number of predictions: {}/{}'.format(strict_preds.sum(), len(strict_preds)))
       print('Number of positive pairs: {}/{}'.format(len((all_labels == 1).nonzero()),
                                                        len(all_labels)))
-      info = 'Pairwise - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
-                                                                   eval.get_precision(), 
-                                                                   eval.get_f1()))
+      info = 'Pairwise - Recall: {}, Precision: {}, F1: {}, mAP: {}'.format(eval.get_recall(),
+                                                                            eval.get_precision(), 
+                                                                            eval.get_f1(),
+                                                                            average_precision)
       print(info)
       logging.info(info)
 
@@ -470,11 +489,14 @@ def test(text_model,
              'CoNLL - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*conll_metrics)
       print(info) 
       logging.info(info)
-      
+
+      binary_prec, binary_rec, binary_f1, _ = precision_recall_fscore_support(gold_binary_event_labels.numpy(),
+                                                                                   pred_binary_event_labels.numpy(), average='binary')
       event_prec, event_rec, event_f1, _ = precision_recall_fscore_support(gold_event_labels.numpy(),
                                                                                    pred_event_labels.numpy(), average='macro')
       print('[Event Classification Result]')
-      info = f'Event classification - Recall: {event_prec:.4f}, Precision: {event_rec:.4f}, F1: {event_f1:.4f}'
+      info = f'Event classification - Recall: {event_prec:.4f}, Precision: {event_rec:.4f}, F1: {event_f1:.4f}\n'\
+             f'Binary Recall: {binary_prec:.4f}, Precision: {binary_rec:.4f}, F1: {binary_f1:.4f}'
       print(info)
       logging.info(info)
 
@@ -492,7 +514,6 @@ if __name__ == '__main__':
   parser.add_argument('--config', type=str, default='configs/config_multimodal_coref_video_m2e2.json')
   parser.add_argument('--start_epoch', type=int, default=0)
   parser.add_argument('--evaluate_only', action='store_true')
-  parser.add_argument('--compute_confidence_bound', action='store_true')
   args = parser.parse_args()
   
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -508,14 +529,11 @@ if __name__ == '__main__':
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
 
   # Initialize dataloaders
-  splits = [os.path.join(config['data_folder'], 'train_events.json'),\
-            os.path.join(config['data_folder'], 'test_events.json'),\
-            os.path.join(config['data_folder'], 'train_entities.json'),\
-            os.path.join(config['data_folder'], 'test_entities.json')]
+  splits = [os.path.join(config['data_folder'], 'train_events.json'),
+            os.path.join(config['data_folder'], 'test_events.json')]
   
   event_stoi = create_type_stoi(splits) 
 
-  # TODO Remove linguistic field 
   train_set = TextVideoEventDataset(config, 
                                     event_stoi, 
                                     dict(),
@@ -530,12 +548,9 @@ if __name__ == '__main__':
   bcubeds = []
   ceafes = []
   avgs = []
-
-  if args.compute_confidence_bound:
-      seeds = [1111, 2222, 3333, 4444]
-  else:
-      seeds = [1111]
-      
+  event_metrics = []
+  
+  seeds = config.seeds
   for seed in seeds:
       config.random_seed = seed
       config['random_seed'] = seed
@@ -550,6 +565,8 @@ if __name__ == '__main__':
       text_coref_model = SimplePairWiseClassifier(config).to(device)
       text_model = nn.Sequential(
                      nn.Linear(int(text_coref_model.input_layer // 3), config.hidden_layer),
+                     nn.ReLU(),
+                     nn.Linear(config.hidden_layer, config.hidden_layer),
                      nn.ReLU(),
                      nn.Linear(config.hidden_layer, config.hidden_layer),
                      nn.ReLU())
@@ -574,7 +591,10 @@ if __name__ == '__main__':
 
       for p in text_coref_model.parameters():
           n_params += p.numel()
-
+    
+      for p in attention_model.parameters():
+          n_params += p.numel()
+          
       for p in visual_coref_model.parameters():
           n_params += p.numel()
 
@@ -582,6 +602,7 @@ if __name__ == '__main__':
       results = train(text_model,
                       mention_model,
                       visual_model,
+                      attention_model,                      
                       text_coref_model, 
                       visual_coref_model,
                       train_loader, 
