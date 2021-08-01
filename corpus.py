@@ -8,6 +8,7 @@ import json
 import cv2
 import os
 import PIL.Image as Image
+from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModel
 
 SINGLETON = '###SINGLETON###'
@@ -106,8 +107,15 @@ class TextVideoEventDataset(Dataset):
     # Load document embeddings
     bert_embed_file = '{}_{}.npz'.format(doc_json.split('.')[0], config.bert_model)
     self.docs_embeddings = np.load(bert_embed_file)
-    glove_embed_file = '{}_glove_embeddings.npz'.format(doc_json.split('.')[0])
+    if not os.path.exists(bert_embed_file):
+      self.extract_bert_embeddings(config['bert_model'], bert_embed_file)
+
+    glove_embed_file = '{}_glove_embeddings.npz'.format(doc_json.split('.')[0])    
     self.glove_embeddings = np.load(glove_embed_file)
+    if not os.path.exists(glove_embed_file):
+      self.extract_glove_embeddings(config.get('glove_file', 
+                                               'm2e2/data/glove/glove.840B.300d.txt'),
+                                    glove_embed_file)
     
     # Extract coreference cluster labels
     self.linguistic_feat_types = config.get('linguistic_feature_types', [])
@@ -202,8 +210,8 @@ class TextVideoEventDataset(Dataset):
 
                 clean_start_end[i] = len(original_tokens)
                 original_tokens.append([sent_id, token_id, token_text, flag_sentence])
-        if len(bert_tokens_ids) != self.docs_embeddings[self.feat_keys[doc_idx]].shape[0]:
-            print(len(bert_tokens_ids), self.docs_embeddings[self.feat_keys[doc_idx]].shape[0]) # XXX
+        if len(bert_tokens_ids) != self.docs_embeddings[doc_id].shape[0]:
+            print(len(bert_tokens_ids), self.docs_embeddings[doc_id].shape[0]) # XXX
         docs_bert_tokens.append(bert_tokens_ids)
         docs_origin_tokens.append(original_tokens)
         clean_start_end_dict[doc_id] = clean_start_end.tolist() 
@@ -322,24 +330,97 @@ class TextVideoEventDataset(Dataset):
 
     return label_dict
 
-  def warp_glove(self, glove_embs, bert_spans):
-    warped_glove_embs = np.zeros((bert_spans[-1][1], glove_embs.shape[-1]))
-    for i, (start, end) in enumerate(bert_spans):
-        warped_glove_embs[start:end+1] = glove_embs[i]
-    return warped_glove_embs
+  def extract_bert_embeddings(self, bert_type, out_file):
+    device = torch.device(f'cuda:{config.gpu_num[0]}')
+    bert_model = AutoModel.from_pretrained(config['bert_model']).to(device)
+    docs_embs = dict()
 
+    with torch.no_grad():
+      bert_tokens_segments = []
+      doc_ids_segments = []
+      for doc_id, tokens, origin_tokens in tqdm(zip(self.doc_ids, self.bert_tokens, self.origin_tokens)):
+        sentence_ids = [token[0] for token in origin_tokens]
+
+        # Segment the tokens to chunks of at most 512 tokens
+        segments = self.split_doc_into_segments(tokens, sentence_ids)
+        bert_segments, start_end_segment = [], [], []
+        delta = 0
+
+        # Extract spans for each segment
+        for start, end in zip(segments, segments[1:]):
+          bert_ids = bert_tokens_ids[start:end]
+          bert_segments.append(bert_ids)
+
+        bert_tokens_segments.extend(bert_segments)
+        doc_segment = [doc_id] * (len(segments) - 1)
+        doc_ids_segments.extend(doc_segment)
+   
+      bert_embeddings = dict()
+      total = len(doc_ids_segments)
+      n_batch = total // 8 + 1 if total % 8 != 0 else total // 8
+      for b in tqdm(range(n_batch)):
+        start_idx = b * 8
+        end_idx = min((b + 1) * 8, total)
+        batch_idxs = list(range(start_idx, end_idx))
+        doc_ids_batch = [doc_ids_segments[i] for i in batch_idxs] 
+        bert_tokens_batch = [bert_tokens_segments[i] for i in batch_idxs]
+        bert_embeddings_batch, docs_length = pad_and_read_bert(bert_tokens_batch, bert_model)
+        docs_length2 = [len(ts) for ts in bert_tokens_batch]
+
+        for idx, doc_id in enumerate(doc_ids_batch):
+          print(f'{doc_id}: {len(tokens)}')
+          bert_embedding = bert_embeddings_batch[idx][:docs_length[idx]].cpu().detach().numpy() 
+          print(f'Embedding size: {bert_embedding.size()}') 
+          bert_embeddings[doc_id] = bert_embedding
+      np.savez(out_file, **bert_embeddings) 
+
+  def extract_glove_embedding(self, glove_file, out_file):
+    vocab = {'$$$UNK$$$': 0}
+    # Compute vocab of the documents
+    for doc_id in sorted(self.documents):
+        tokens = self.documents[doc_id]
+        for token in tokens:
+            if not token[2].lower() in vocab:
+                vocab[token[2].lower()] = len(vocab)
+    print('Vocabulary size: {}'.format(len(vocab)))
+                
+    embed_matrix = [[0.0] * dimension] 
+    vocab_emb = {'$$$UNK$$$': 0} 
+    # Load the embeddings
+    with codecs.open(glove_file, 'r', 'utf-8') as f:
+        for line in f:
+            segments = line.strip().split()
+            if len(segments) == 0:
+                print('Empty line')
+                break
+            word = ' '.join(segments[:-300])
+            if word in vocab:
+                embed= [float(x) for x in segments[-300:]]
+                embed_matrix.append(embed)
+                vocab_emb[word] = len(vocab_emb)
+    print('Vocabulary size with embeddings: {}'.format(len(vocab_emb)))   
+
+    # Convert the documents into embedding sequence
+    doc_embeddings = {}
+    for idx, doc_id in enumerate(sorted(self.documents)):
+        tokens = self.documents[doc_id]
+        doc_embedding = []
+        for token in tokens:
+            token_id = vocab_emb.get(token[2].lower(), 0)
+            doc_embedding.append(embed_matrix[token_id])
+        print(np.asarray(doc_embedding).shape)
+        doc_embeddings[doc_id] = np.asarray(doc_embedding)
+    np.savez(out_file, **doc_embeddings)
+
+  def align_glove_with_bert(self, glove_embs, bert_spans):
+    aligned_glove_embs = np.zeros((bert_spans[-1][1], glove_embs.shape[-1]))
+    for i, (start, end) in enumerate(bert_spans):
+        aligned_glove_embs[start:end+1] = glove_embs[i]
+    return aligned_glove_embs
+ 
   def load_text(self, idx):
-    '''Load mention span embeddings for the document
-    :param idx: int, doc index
-    :return start_end_embeddings: FloatTensor of size (max num. spans, 2, span embed dim)
-    :return continuous_tokens_embeddings: FloatTensor of size (max num. spans, max mention span, span embed dim)
-    :return mask: FloatTensor of size (max num. spans,)
-    :return width: LongTensor of size (max num. spans,)
-    :return labels: LongTensor of size (max num. spans,) 
-    '''
     # Extract the original spans of the current doc
     doc_id = self.doc_ids[idx]
-    print(doc_id) # XXX
     origin_candidate_start_ends = self.origin_candidate_start_ends[idx]
     candidate_starts = self.candidate_start_ends[idx][:, 0]
     candidate_ends = self.candidate_start_ends[idx][:, 1]
@@ -352,15 +433,12 @@ class TextVideoEventDataset(Dataset):
       bert_tokens = torch.LongTensor(bert_tokens)
       doc_embeddings = fix_embedding_length(bert_tokens.unsqueeze(-1), self.max_token_num).squeeze(-1)
     else:
-      for k in self.docs_embeddings:
-        if '_'.join(k.split('_')[:-1]) == '_'.join(self.feat_keys[idx].split('_')[:-1]):
-          doc_embeddings = self.docs_embeddings[k][:doc_len]
-          break
+      doc_embeddings = self.docs_embeddings[doc_id][:doc_len]
       if self.add_glove:
         origin_doc_len = len(self.glove_embeddings[doc_id])
         clean_token_idxs = [self.clean_start_end_dict[doc_id][token_idx] for token_idx in range(origin_doc_len)]
         bert_token_spans = self.bert_start_ends[idx][clean_token_idxs] 
-        glove_embeddings = self.warp_glove(self.glove_embeddings[doc_id], bert_token_spans)
+        glove_embeddings = self.align_glove_with_bert(self.glove_embeddings[doc_id], bert_token_spans)
         doc_embeddings = np.concatenate([doc_embeddings, glove_embeddings], axis=-1)
         
       doc_embeddings = torch.FloatTensor(doc_embeddings)
@@ -499,9 +577,9 @@ class TextVideoEventDataset(Dataset):
               labels[span[0]:span[1]+1] = self.event_stoi[self.ontology_map[label]]
       labels = torch.LongTensor(labels)
 
-    return {'action_embeddings': action_segment_embeddings, 
-            'action_labels': labels, 
-            'action_mask': masks}
+    return {'visual_embeddings': action_segment_embeddings, 
+            'visual_labels': labels, 
+            'visual_mask': masks}
 
   def __getitem__(self, idx):
     inputs = self.load_video(idx)
