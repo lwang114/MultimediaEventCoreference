@@ -82,7 +82,9 @@ class TextVideoEventDataset(Dataset):
     self.max_frame_num = config.get('max_frame_num', 100)
     self.max_mention_span = config.get('max_mention_span', 15)
     self.img_feat_type = config.get('video_feature', 'mmaction_feat')
+    self.add_glove = config.get('add_glove', False) 
     self.event_stoi = event_stoi
+
     feature_stoi['mention_type'] = {NULL:0, PROPER:1, NOMINAL:2, PRON:3}
     feature_stoi['number'] = {NULL:0, SINGULAR:1, PLURAL:2}
     self.feature_stoi = feature_stoi
@@ -104,9 +106,11 @@ class TextVideoEventDataset(Dataset):
     # Load document embeddings
     bert_embed_file = '{}_{}.npz'.format(doc_json.split('.')[0], config.bert_model)
     self.docs_embeddings = np.load(bert_embed_file)
-        
+    glove_embed_file = '{}_glove_embeddings.npz'.format(doc_json.split('.')[0])
+    self.glove_embeddings = np.load(glove_embed_file)
+    
     # Extract coreference cluster labels
-    self.linguistic_feat_types = config.get('linguistic_feature_types', None)
+    self.linguistic_feat_types = config.get('linguistic_feature_types', [])
     self.event_label_dict, self.event_feature_dict = self.create_text_dict_labels(event_mentions) 
     self.entity_label_dict, self.entity_feature_dict = self.create_text_dict_labels(entity_mentions)
 
@@ -142,29 +146,32 @@ class TextVideoEventDataset(Dataset):
 
     # Tokenize documents and extract token spans after bert tokenization
     self.bert_model = config['bert_model']
-    if self.bert_model == 'uniter':
-      self.tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')  
-    else:
-      self.tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
+    self.tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
     self.origin_tokens,\
     self.bert_tokens,\
     self.bert_start_ends,\
-    clean_start_end_dict = self.tokenize(documents)
+    self.clean_start_end_dict = self.tokenize(documents)
 
     # Extract spans
     self.origin_candidate_start_ends = [np.asarray(sorted(self.event_label_dict[doc_id])) for doc_id in self.doc_ids]
     for doc_id, start_ends in zip(self.doc_ids, self.origin_candidate_start_ends):
       for start, end in start_ends:
-        if end >= len(clean_start_end_dict[doc_id]):
-          print(doc_id, start, end, len(clean_start_end_dict[doc_id])) 
-    self.candidate_start_ends = [np.asarray([[clean_start_end_dict[doc_id][start], clean_start_end_dict[doc_id][end]] for start, end in start_ends])
-                                 for doc_id, start_ends in zip(self.doc_ids, self.origin_candidate_start_ends)]
-
+        if end >= len(self.clean_start_end_dict[doc_id]):
+          print(doc_id, start, end, len(self.clean_start_end_dict[doc_id])) 
+    self.candidate_start_ends = [self.clean_start_ends(doc_idx, start_ends)
+                                 for doc_idx, start_ends in enumerate(self.origin_candidate_start_ends)]
     self.origin_argument_spans = [np.asarray([self.extract_argument(self.event_label_dict[doc_id][span])
                                               for span in sorted(self.event_label_dict[doc_id])]) for doc_id in self.doc_ids]
-    self.candidate_argument_spans = [np.asarray([[[clean_start_end_dict[doc_id][start], clean_start_end_dict[doc_id][end]] for start, end in arg_spans] for arg_spans in args_spans])
-                                     for doc_id, args_spans in zip(self.doc_ids, self.origin_argument_spans)]
+    self.candidate_argument_spans = [np.asarray([self.clean_start_ends(doc_idx, arg_spans) for arg_spans in args_spans])
+                                     for doc_idx, args_spans in enumerate(self.origin_argument_spans)]
 
+  def clean_start_ends(self, idx, start_ends):
+    doc_id = self.doc_ids[idx]
+    clean_start_ends = np.asarray([[self.clean_start_end_dict[doc_id][start],
+                                    self.clean_start_end_dict[doc_id][end]]
+                                   for start, end in start_ends])
+    return clean_start_ends
+    
   def tokenize(self, documents):
     '''
     Tokenize the sentences in BERT format. Adapted from https://github.com/ariecattan/coref
@@ -174,7 +181,7 @@ class TextVideoEventDataset(Dataset):
     docs_origin_tokens = []
     clean_start_end_dict = {}
 
-    for doc_id in sorted(documents):
+    for doc_idx, doc_id in enumerate(sorted(documents)):
         tokens = documents[doc_id]
         bert_tokens_ids = []
         start_bert_idx, end_bert_idx = [], []
@@ -195,6 +202,8 @@ class TextVideoEventDataset(Dataset):
 
                 clean_start_end[i] = len(original_tokens)
                 original_tokens.append([sent_id, token_id, token_text, flag_sentence])
+        if len(bert_tokens_ids) != self.docs_embeddings[self.feat_keys[doc_idx]].shape[0]:
+            print(len(bert_tokens_ids), self.docs_embeddings[self.feat_keys[doc_idx]].shape[0]) # XXX
         docs_bert_tokens.append(bert_tokens_ids)
         docs_origin_tokens.append(original_tokens)
         clean_start_end_dict[doc_id] = clean_start_end.tolist() 
@@ -312,7 +321,13 @@ class TextVideoEventDataset(Dataset):
         label_dict[doc_id][(start, end)] = action_class
 
     return label_dict
-  
+
+  def warp_glove(self, glove_embs, bert_spans):
+    warped_glove_embs = np.zeros((bert_spans[-1][1], glove_embs.shape[-1]))
+    for i, (start, end) in enumerate(bert_spans):
+        warped_glove_embs[start:end+1] = glove_embs[i]
+    return warped_glove_embs
+
   def load_text(self, idx):
     '''Load mention span embeddings for the document
     :param idx: int, doc index
@@ -323,6 +338,8 @@ class TextVideoEventDataset(Dataset):
     :return labels: LongTensor of size (max num. spans,) 
     '''
     # Extract the original spans of the current doc
+    doc_id = self.doc_ids[idx]
+    print(doc_id) # XXX
     origin_candidate_start_ends = self.origin_candidate_start_ends[idx]
     candidate_starts = self.candidate_start_ends[idx][:, 0]
     candidate_ends = self.candidate_start_ends[idx][:, 1]
@@ -334,18 +351,21 @@ class TextVideoEventDataset(Dataset):
     if self.finetune_bert:
       bert_tokens = torch.LongTensor(bert_tokens)
       doc_embeddings = fix_embedding_length(bert_tokens.unsqueeze(-1), self.max_token_num).squeeze(-1)
-    elif self.bert_model == 'uniter':
-      doc_embeddings = self.docs_embeddings[self.doc_ids[idx]][:doc_len]
-      doc_embeddings = torch.FloatTensor(doc_embeddings)
-      doc_embeddings = fix_embedding_length(doc_embeddings, self.max_token_num)
     else:
       for k in self.docs_embeddings:
         if '_'.join(k.split('_')[:-1]) == '_'.join(self.feat_keys[idx].split('_')[:-1]):
           doc_embeddings = self.docs_embeddings[k][:doc_len]
           break
+      if self.add_glove:
+        origin_doc_len = len(self.glove_embeddings[doc_id])
+        clean_token_idxs = [self.clean_start_end_dict[doc_id][token_idx] for token_idx in range(origin_doc_len)]
+        bert_token_spans = self.bert_start_ends[idx][clean_token_idxs] 
+        glove_embeddings = self.warp_glove(self.glove_embeddings[doc_id], bert_token_spans)
+        doc_embeddings = np.concatenate([doc_embeddings, glove_embeddings], axis=-1)
+        
       doc_embeddings = torch.FloatTensor(doc_embeddings)
       doc_embeddings = fix_embedding_length(doc_embeddings, self.max_token_num)
- 
+      
     # Convert the original spans to the bert tokenized spans
     bert_start_ends = self.bert_start_ends[idx]
     bert_candidate_starts = bert_start_ends[candidate_starts, 0]
