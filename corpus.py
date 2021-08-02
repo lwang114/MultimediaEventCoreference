@@ -386,7 +386,10 @@ class TextVideoEventDataset(Dataset):
 
         for idx, doc_id in enumerate(doc_ids_batch):
           bert_embedding = bert_embeddings_batch[idx][:docs_length[idx]].cpu().detach().numpy() 
-          bert_embeddings[doc_id] = bert_embedding
+          if not doc_id in bert_embeddings:
+            bert_embeddings[doc_id] = bert_embedding
+          else:
+            bert_embeddings[doc_id] = np.concatenate([bert_embeddings[doc_id], bert_embedding], axis=-2)
       np.savez(out_file, **bert_embeddings) 
 
   def extract_glove_embedding(self, glove_file, out_file):
@@ -452,7 +455,7 @@ class TextVideoEventDataset(Dataset):
     else:
       doc_embeddings = self.docs_embeddings[doc_id][:doc_len]
       if self.add_glove:
-        glove_embeddings = self.align_glove_with_bert(self.glove_embeddings[doc_id], alignment) # TODO 
+        glove_embeddings = self.align_glove_with_bert(self.glove_embeddings[doc_id], alignment)
         doc_embeddings = np.concatenate([doc_embeddings, glove_embeddings], axis=-1)
         
       doc_embeddings = torch.FloatTensor(doc_embeddings)

@@ -81,6 +81,23 @@ def get_pairwise_text_labels(labels, is_training, device):
 
     return first_idxs, second_idxs, pairwise_labels_all    
 
+def separate_pairs_by_type(first, second, type_labels, pair_idxs_by_type=dict(), start_idx=0):
+  for pair_idx, (first_idx, second_idx) in enumerate(zip(first, second)):
+    first_type = type_labels[first_idx]
+    second_type = type_labels[second_idx]
+
+    if not first_type in pair_idxs_by_type:
+      pair_idxs_by_type[first_type] = []
+
+    if not second_type in pair_idxs_by_type:
+      pair_idxs_by_type[second_type] = []
+
+    pair_idxs_by_type[first_type].append(start_idx + pair_idx)
+    pair_idxs_by_type[second_type].append(start_idx + pair_idx)
+  start_idx = start_idx + len(first)
+  return pair_idxs_by_type, start_idx
+
+
 def train(text_model, visual_model, crossmedia_text_model, crossmedia_visual_model, coref_model, train_loader, test_loader, args, random_seed=None):
   config = pyhocon.ConfigFactory.parse_file(args.config)
   if random_seed:
@@ -137,13 +154,13 @@ def train(text_model, visual_model, crossmedia_text_model, crossmedia_visual_mod
       end_mappings = batch['end_mappings'].to(device)
       continuous_mappings = batch['continuous_mappings'].to(device)
       width = batch['width'].to(device)
-      action_embeddings = batch['action_embeddings'].to(device)
+      action_embeddings = batch['visual_embeddings'].to(device)
       text_labels = batch['cluster_labels'].to(device)
       type_labels = batch['event_labels'].to(device) 
-      img_labels = batch['action_labels'].to(device)
+      img_labels = batch['visual_labels'].to(device)
       text_mask = batch['text_mask'].to(device)
       span_mask = batch['span_mask'].to(device)
-      action_mask = batch['action_mask'].to(device)
+      action_mask = batch['visual_mask'].to(device)
 
       B = doc_embeddings.size(0)     
       first_text_idx, second_text_idx, pairwise_text_labels = get_pairwise_text_labels(text_labels, is_training=False, device=device)      
@@ -215,8 +232,8 @@ def test(text_model, visual_model, crossmedia_text_model, crossmedia_visual_mode
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     config = pyhocon.ConfigFactory.parse_file(args.config)
     documents = test_loader.dataset.documents
+    types = sorted(test_loader.dataset.event_stoi, key=lambda x:test_loader.dataset.event_stoi[x])
     all_scores = []
-    all_coref_type_labels = []
     all_labels = []
 
     text_model.eval()
@@ -226,6 +243,8 @@ def test(text_model, visual_model, crossmedia_text_model, crossmedia_visual_mode
     conll_eval = CoNLLEvaluation()
     f_out = open(os.path.join(config['model_path'], 'prediction.readable'), 'w')
     best_f1 = 0.
+    pair_idxs_by_type = dict()
+    start_idx = 0
     results = {} 
     with torch.no_grad():     
         for i, batch in enumerate(test_loader):
@@ -234,13 +253,13 @@ def test(text_model, visual_model, crossmedia_text_model, crossmedia_visual_mode
           end_mappings = batch['end_mappings'].to(device)
           continuous_mappings = batch['continuous_mappings'].to(device)
           width = batch['width'].to(device)
-          action_embeddings = batch['action_embeddings'].to(device)
+          action_embeddings = batch['visual_embeddings'].to(device)
           text_labels = batch['cluster_labels'].to(device)
           type_labels = batch['event_labels'].to(device) 
-          img_labels = batch['action_labels'].to(device)
+          img_labels = batch['visual_labels'].to(device)
           text_mask = batch['text_mask'].to(device)
           span_mask = batch['span_mask'].to(device)
-          action_mask = batch['action_mask'].to(device)
+          action_mask = batch['visual_mask'].to(device)
 
           token_num = text_mask.sum(-1).long()
           span_num = torch.where(span_mask.sum(-1) > 0, 
@@ -274,8 +293,7 @@ def test(text_model, visual_model, crossmedia_text_model, crossmedia_visual_mode
             global_idx = i * test_loader.batch_size + idx
             first_text_idx, second_text_idx, pairwise_text_labels = get_pairwise_text_labels(text_labels[idx, :span_num[idx]].unsqueeze(0), 
                                                                                              is_training=False, device=device)
-            coref_type_labels = type_labels[idx, first_text_idx].squeeze(0)
-
+            
             if first_text_idx is None:
                 continue
             first_text_idx = first_text_idx.squeeze(0)
@@ -287,7 +305,7 @@ def test(text_model, visual_model, crossmedia_text_model, crossmedia_visual_mode
                                                          text_scores, 
                                                          first_text_idx, 
                                                          second_text_idx) 
-            origin_candidate_start_ends = test_loader.dataset.origin_candidate_start_ends[global_idx]
+            origin_candidate_start_ends = test_loader.dataset.candidate_start_ends[global_idx]
             predicted_antecedents = torch.LongTensor(predicted_antecedents)
             origin_candidate_start_ends = torch.LongTensor(origin_candidate_start_ends)
             
@@ -303,40 +321,46 @@ def test(text_model, visual_model, crossmedia_text_model, crossmedia_visual_mode
             f_out.write(f'Pred: {pred_clusters_str}\n')
             f_out.write(f'Gold: {gold_clusters_str}\n\n')
 
+            type_names = [types[y] for y in type_labels[idx, :span_num[idx]].detach().cpu().numpy()]
+            pair_idxs_by_type, start_idx = separate_pairs_by_type(first_text_idx,
+                                                                  second_text_idx,
+                                                                  type_names,
+                                                                  pair_idxs_by_type,
+                                                                  start_idx=start_idx)
+
+            
             all_scores.append(text_scores.squeeze(1))
             all_labels.append(pairwise_text_labels.to(torch.int).cpu())
-            all_coref_type_labels.append(coref_type_labels.to(torch.int).cpu())
+        
                         
         all_scores = torch.cat(all_scores)
         all_labels = torch.cat(all_labels)
-        all_coref_type_labels = torch.cat(all_coref_type_labels)
         # Compute mAP
         average_precision = average_precision_score(all_labels.cpu().detach().numpy(),
                                                     torch.sigmoid(all_scores).cpu().detach().numpy())
 
         strict_preds = (all_scores > 0).to(torch.int)
         eval = Evaluation(strict_preds, all_labels.to(device))
-        class_pred_idxs = dict()
-        # Compute coref scores by event class
-        for c, c_idx in test_loader.dataset.event_stoi.items():
-          if not c in class_pred_idxs:
-            class_pred_idxs[c] = []
-          for idx in range(all_coref_type_labels.size(0)):
-            if all_coref_type_labels[idx].cpu().numpy() == c_idx:
-              class_pred_idxs[c].append(idx)
-          
-          if len(class_pred_idxs[c]) > 0: 
-            eval_class = Evaluation(strict_preds[class_pred_idxs[c]].cpu(), all_labels[class_pred_idxs[c]])
-            logging.info('Class {}, number of predictions: {}/{}, number of positive pairs: {}/{}'.format(c, strict_preds[class_pred_idxs[c]].sum(), len(class_pred_idxs[c]), all_labels[class_pred_idxs[c]].sum(), len(class_pred_idxs[c])))
-            logging.info(f'Pairwise - Recall: {eval_class.get_recall()}, Precision: {eval_class.get_precision()}, F1: {eval_class.get_f1()}')
-           
-
         print('Number of predictions: {}/{}'.format(strict_preds.sum(), len(strict_preds)))
         print('Number of positive pairs: {}/{}'.format(len((all_labels == 1).nonzero()),
                                                      len(all_labels)))
         print('Pairwise - Recall: {}, Precision: {}, F1: {}, mAP: {}'.format(eval.get_recall(),
                                                                 eval.get_precision(), eval.get_f1(), average_precision))
-        
+
+        pairwise_by_type = []
+        for type_name in pair_idxs_by_type:
+            pred_labels_by_type = strict_preds[pair_idxs_by_type[type_name]] 
+            gold_labels_by_type = all_labels[pair_idxs_by_type[type_name]].to(device)                                
+            pairwise_eval_by_type = Evaluation(pred_labels_by_type, gold_labels_by_type)                    
+            pairwise_by_type.append([pairwise_eval_by_type.get_precision().cpu().numpy().tolist(),                
+                                     pairwise_eval_by_type.get_recall().cpu().numpy().tolist(),
+                                     pairwise_eval_by_type.get_f1().cpu().numpy().tolist(),
+                                     type_name,
+                                     len(pred_labels_by_type)])
+            logging.info(f'Pairwise for {type_name} - Precision: {pairwise_by_type[-1][0]}, Recall: {pairwise_by_type[-1][1]}, F1: {pairwise_by_type[-1][2]}')
+        pairwise_by_type = sorted(pairwise_by_type, key=lambda x:x[-1], reverse=True)
+        json.dump(pairwise_by_type, open(os.path.join(config['model_path'], f'pairwise_scores_by_type_{seed}.json'), 'w'), indent=2) 
+            
         muc, b_cubed, ceafe, avg = conll_eval.get_metrics()
         results['pairwise'] = (eval.get_precision().item(), eval.get_recall().item(), eval.get_f1().item(), average_precision)
         results['muc'] = muc
@@ -482,3 +506,27 @@ if __name__ == '__main__':
   print(f'CoNLL: precision {mean_avg[0]} +/- {std_avg[0]}, '
         f'recall {mean_avg[1]} +/- {std_avg[1]}, '
         f'f1 {mean_avg[2]} +/- {std_avg[2]}')
+
+  pairwise_dict = dict()
+  for seed in seeds:
+    pairwise_by_type = json.load(open(os.path.join(config['model_path'], f'pairwise_scores_by_type_{seed}.json')))
+    for res in pairwise_by_type:
+      p, r, f1, event_type, count = res
+      if isinstance(p, list) or isinstance(r, list) or isinstance(f1, list):
+        p, r, f1 = 0., 0., 0.
+        
+      if not event_type in pairwise_dict:
+        pairwise_dict[event_type] = {'scores': [], 'count': count}
+      pairwise_dict[event_type]['scores'].append([p, r, f1])
+
+  for c in pairwise_dict:
+    scores = pairwise_dict[c]['scores']
+    mean_score = np.mean(np.asarray(scores), axis=0)
+    std_score = np.std(np.asarray(scores), axis=0)
+    pairwise_dict[c]['event_type'] = c
+    pairwise_dict[c]['mean'] = mean_score.tolist()
+    pairwise_dict[c]['std'] = std_score.tolist()
+
+  pairwise_list = [pairwise_dict[c] for c in sorted(pairwise_dict, key=lambda x:pairwise_dict[x]['count'], reverse=True)]
+  json.dump(pairwise_list, open(os.path.join(config['model_path'], f'pairwise_scores_by_type.json'), 'w'), indent=2)
+ 
