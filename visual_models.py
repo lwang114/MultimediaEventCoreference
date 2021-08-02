@@ -15,11 +15,12 @@ class ClassAttender(nn.Module):
                n_class):
     super(ClassAttender, self).__init__()
     self.attention = nn.Linear(input_dim, n_class, bias=False)
-    self.classifier = nn.Sequential(
-                        nn.Linear(input_dim, hidden_dim),
-                        nn.ReLU(),
-                        nn.Linear(hidden_dim, 1)
-                      )
+    self.classifier = nn.Linear(input_dim, 1)
+    # XXX nn.Sequential(
+    #                    nn.Linear(input_dim, hidden_dim),
+    #                    nn.ReLU(),
+    #                    nn.Linear(hidden_dim, 1)
+    #                  )
 
   def forward(self, x, mask):
     """
@@ -125,5 +126,4 @@ class CrossmediaPairWiseClassifier(nn.Module):
     second_score = second_attention.max(-1)[0].unsqueeze(-1)
     pw_score = (first_attention * second_attention).max(-1)[0].unsqueeze(-1)
     return self.crossmedia_pairwise_mlp(
-              torch.cat((first_score, second_score, pw_score), dim=1)
-              ) 
+              torch.cat((first_score, second_score, pw_score), dim=1)) 
