@@ -52,6 +52,21 @@ def fix_embedding_length(emb, L):
     emb = emb[:L]
   return emb
 
+def pad_and_read_bert(bert_token_ids, bert_model):
+  length = np.array([len(d) for d in bert_token_ids])
+  max_length = max(length)
+
+  if max_length > 512:
+      raise ValueError('Error! Segment too long!')
+
+  device = bert_model.device
+  docs = torch.tensor([doc + [0] * (max_length - len(doc)) for doc in bert_token_ids], device=device)
+  attention_masks = torch.tensor([[1] * len(doc) + [0] * (max_length - len(doc)) for doc in bert_token_ids], device=device)
+  with torch.no_grad():
+      embeddings, _ = bert_model(docs, attention_masks)
+
+  return embeddings, length
+
 class TextVideoEventDataset(Dataset):
   def __init__(self, config, 
                event_stoi,
@@ -100,22 +115,6 @@ class TextVideoEventDataset(Dataset):
     self.documents = documents
     event_mentions = json.load(codecs.open(event_mention_json, 'r', 'utf-8'))
     entity_mentions = json.load(codecs.open(entity_mention_json, 'r', 'utf-8')) 
-
-    # Load action embeddings
-    self.action_embeddings = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_feat.npz'))
-       
-    # Load document embeddings
-    bert_embed_file = '{}_{}.npz'.format(doc_json.split('.')[0], config.bert_model)
-    self.docs_embeddings = np.load(bert_embed_file)
-    if not os.path.exists(bert_embed_file):
-      self.extract_bert_embeddings(config['bert_model'], bert_embed_file)
-
-    glove_embed_file = '{}_glove_embeddings.npz'.format(doc_json.split('.')[0])    
-    self.glove_embeddings = np.load(glove_embed_file)
-    if not os.path.exists(glove_embed_file):
-      self.extract_glove_embeddings(config.get('glove_file', 
-                                               'm2e2/data/glove/glove.840B.300d.txt'),
-                                    glove_embed_file)
     
     # Extract coreference cluster labels
     self.linguistic_feat_types = config.get('linguistic_feature_types', [])
@@ -142,6 +141,8 @@ class TextVideoEventDataset(Dataset):
     self.action_label_dict = self.create_action_dict_labels(id_mapping,\
                                                             action_anno_dict,\
                                                             action_dur_dict)
+    # Load action embeddings
+    self.action_embeddings = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_feat.npz'))
 
     # Extract doc/image ids
     self.feat_keys = sorted(self.action_embeddings, key=lambda x:int(x.split('_')[-1]))
@@ -158,27 +159,25 @@ class TextVideoEventDataset(Dataset):
     self.origin_tokens,\
     self.bert_tokens,\
     self.bert_start_ends,\
-    self.clean_start_end_dict = self.tokenize(documents)
+    self.alignments = self.tokenize(documents)
 
     # Extract spans
-    self.origin_candidate_start_ends = [np.asarray(sorted(self.event_label_dict[doc_id])) for doc_id in self.doc_ids]
-    for doc_id, start_ends in zip(self.doc_ids, self.origin_candidate_start_ends):
-      for start, end in start_ends:
-        if end >= len(self.clean_start_end_dict[doc_id]):
-          print(doc_id, start, end, len(self.clean_start_end_dict[doc_id])) 
-    self.candidate_start_ends = [self.clean_start_ends(doc_idx, start_ends)
-                                 for doc_idx, start_ends in enumerate(self.origin_candidate_start_ends)]
-    self.origin_argument_spans = [np.asarray([self.extract_argument(self.event_label_dict[doc_id][span])
-                                              for span in sorted(self.event_label_dict[doc_id])]) for doc_id in self.doc_ids]
-    self.candidate_argument_spans = [np.asarray([self.clean_start_ends(doc_idx, arg_spans) for arg_spans in args_spans])
-                                     for doc_idx, args_spans in enumerate(self.origin_argument_spans)]
+    self.candidate_start_ends = [np.asarray(sorted(self.event_label_dict[doc_id])) for doc_id in self.doc_ids]
+    self.candidate_argument_spans = [np.asarray([self.extract_argument(self.event_label_dict[doc_id][span])
+                                                 for span in sorted(self.event_label_dict[doc_id])]) for doc_id in self.doc_ids]
+    
+    # Load document embeddings
+    bert_embed_file = '{}_{}.npz'.format(doc_json.split('.')[0], config.bert_model)
+    glove_embed_file = '{}_glove_embeddings.npz'.format(doc_json.split('.')[0])    
+    if not os.path.exists(bert_embed_file):
+      self.extract_bert_embeddings(config['bert_model'], bert_embed_file)
 
-  def clean_start_ends(self, idx, start_ends):
-    doc_id = self.doc_ids[idx]
-    clean_start_ends = np.asarray([[self.clean_start_end_dict[doc_id][start],
-                                    self.clean_start_end_dict[doc_id][end]]
-                                   for start, end in start_ends])
-    return clean_start_ends
+    if not os.path.exists(glove_embed_file):
+      self.extract_glove_embeddings(config.get('glove_file', 
+                                               'm2e2/data/glove/glove.840B.300d.txt'),
+                                    glove_embed_file)  
+    self.docs_embeddings = np.load(bert_embed_file)
+    self.glove_embeddings = np.load(glove_embed_file)
     
   def tokenize(self, documents):
     '''
@@ -187,14 +186,15 @@ class TextVideoEventDataset(Dataset):
     docs_bert_tokens = []
     docs_start_end_bert = []
     docs_origin_tokens = []
-    clean_start_end_dict = {}
+    alignments = []
 
     for doc_idx, doc_id in enumerate(sorted(documents)):
         tokens = documents[doc_id]
         bert_tokens_ids = []
         start_bert_idx, end_bert_idx = [], []
         original_tokens = []
-        clean_start_end = -1 * np.ones(len(tokens), dtype=np.int)
+        alignment = []
+        # clean_start_end = -1 * np.ones(len(tokens), dtype=np.int)
         bert_cursor = -1
         for i, token in enumerate(tokens):
             sent_id, token_id, token_text, flag_sentence = token
@@ -204,21 +204,22 @@ class TextVideoEventDataset(Dataset):
                 bert_tokens_ids.extend(bert_token)
                 start_bert_idx.append(bert_start_index)
                 bert_cursor += len(bert_token)
-
                 bert_end_index = bert_cursor
                 end_bert_idx.append(bert_end_index)
+                alignment.extend([i]*len(bert_token))
+            else:
+                start_bert_idx.append(-1)
+                end_bert_idx.append(-1)
 
-                clean_start_end[i] = len(original_tokens)
-                original_tokens.append([sent_id, token_id, token_text, flag_sentence])
-        if len(bert_tokens_ids) != self.docs_embeddings[doc_id].shape[0]:
-            print(len(bert_tokens_ids), self.docs_embeddings[doc_id].shape[0]) # XXX
+            # clean_start_end[i] = len(original_tokens)
+            original_tokens.append(token)
         docs_bert_tokens.append(bert_tokens_ids)
         docs_origin_tokens.append(original_tokens)
-        clean_start_end_dict[doc_id] = clean_start_end.tolist() 
+        alignments.append(alignment)
+        # clean_start_end_dict[doc_id] = clean_start_end.tolist() 
         start_end = np.concatenate((np.expand_dims(start_bert_idx, 1), np.expand_dims(end_bert_idx, 1)), axis=1)
         docs_start_end_bert.append(start_end)
-
-    return docs_origin_tokens, docs_bert_tokens, docs_start_end_bert, clean_start_end_dict
+    return docs_origin_tokens, docs_bert_tokens, docs_start_end_bert, alignments #, clean_start_end_dict
 
   def extract_mention_type(self, pos_tag):
     if pos_tag in ['PRP', 'PRP$']:
@@ -263,10 +264,6 @@ class TextVideoEventDataset(Dataset):
     return np.asarray(arg_spans)
 
   def create_text_dict_labels(self, text_mentions):
-    '''
-    :return text_label_dict: a mapping from doc id to a dict of (start token, end token) -> cluster id 
-    :return image_label_dict: a mapping from image id to a dict of (bbox id, x min, y min, x max, y max) -> cluster id 
-    '''
     text_label_dict = dict()
     ling_feature_dict = dict()
     for m in text_mentions:
@@ -305,13 +302,6 @@ class TextVideoEventDataset(Dataset):
                                 id_map,
                                 anno_dict,
                                 dur_dict):
-    """
-    :param id2desc: {[youtube id]: [description id with puncts]} 
-    :param anno_dict: {[description id]: list of {'Temporal_Boundary': [float, float], 'Event_Type': int}}  
-    :param dur_dict: {[description id]: {'duration_second': float}}
-    :param ontology: list of mention classes
-    :returns image_label_dict: {[doc_id]: {[action span]: [action class]}}
-    """
     label_dict = dict()
     for desc_id, desc in id_map.items():
       doc_id = desc['id'].split('v=')[-1] 
@@ -330,25 +320,52 @@ class TextVideoEventDataset(Dataset):
 
     return label_dict
 
+  def split_doc_into_segments(self, bert_tokens, sentence_ids):
+    """
+    Args :
+        bert_tokens : list of ints,
+        sentence_ids : list of ints,
+    
+    Returns :
+        segments : list of ints, the start position of each segment of the document 
+    """
+    segments = [0]
+    current_token = 0
+    max_segment_length = 510 # 512-2 to account for special tokens
+    while current_token < len(bert_tokens):
+      end_token = min(len(bert_tokens) - 1, current_token + max_segment_length - 1)
+      sentence_end = sentence_ids[end_token]
+      if end_token != len(bert_tokens) - 1 and sentence_ids[end_token + 1] == sentence_end: # if end token is not at the end of the sentence, truncate at the end of previous sentence 
+        while end_token >= current_token and sentence_ids[end_token] == sentence_end:
+          end_token -= 1
+
+        if end_token < current_token:
+          raise ValueError(bert_tokens)
+
+      current_token = end_token + 1
+      segments.append(current_token)
+
+    return segments
+
   def extract_bert_embeddings(self, bert_type, out_file):
-    device = torch.device(f'cuda:{config.gpu_num[0]}')
-    bert_model = AutoModel.from_pretrained(config['bert_model']).to(device)
+    device = 'cuda' if torch.cuda.is_available() else 'cpu' 
+    bert_model = AutoModel.from_pretrained(bert_type).to(device)
     docs_embs = dict()
 
     with torch.no_grad():
       bert_tokens_segments = []
       doc_ids_segments = []
-      for doc_id, tokens, origin_tokens in tqdm(zip(self.doc_ids, self.bert_tokens, self.origin_tokens)):
-        sentence_ids = [token[0] for token in origin_tokens]
+      for doc_id, tokens, origin_tokens, alignment in tqdm(zip(self.doc_ids, self.bert_tokens, self.origin_tokens, self.alignments)):
+        sentence_ids = [origin_tokens[token_idx][0] for token_idx in alignment]
 
         # Segment the tokens to chunks of at most 512 tokens
         segments = self.split_doc_into_segments(tokens, sentence_ids)
-        bert_segments, start_end_segment = [], [], []
+        bert_segments, start_end_segment = [], []
         delta = 0
 
         # Extract spans for each segment
         for start, end in zip(segments, segments[1:]):
-          bert_ids = bert_tokens_ids[start:end]
+          bert_ids = tokens[start:end]
           bert_segments.append(bert_ids)
 
         bert_tokens_segments.extend(bert_segments)
@@ -368,9 +385,7 @@ class TextVideoEventDataset(Dataset):
         docs_length2 = [len(ts) for ts in bert_tokens_batch]
 
         for idx, doc_id in enumerate(doc_ids_batch):
-          print(f'{doc_id}: {len(tokens)}')
           bert_embedding = bert_embeddings_batch[idx][:docs_length[idx]].cpu().detach().numpy() 
-          print(f'Embedding size: {bert_embedding.size()}') 
           bert_embeddings[doc_id] = bert_embedding
       np.savez(out_file, **bert_embeddings) 
 
@@ -412,16 +427,18 @@ class TextVideoEventDataset(Dataset):
         doc_embeddings[doc_id] = np.asarray(doc_embedding)
     np.savez(out_file, **doc_embeddings)
 
-  def align_glove_with_bert(self, glove_embs, bert_spans):
-    aligned_glove_embs = np.zeros((bert_spans[-1][1], glove_embs.shape[-1]))
-    for i, (start, end) in enumerate(bert_spans):
-        aligned_glove_embs[start:end+1] = glove_embs[i]
+  def align_glove_with_bert(self, glove_embs, alignment):
+    token_num = len(alignment)
+    glove_dim = glove_embs.shape[-1]
+    aligned_glove_embs = np.zeros((token_num, glove_dim))
+    for i, token_idx in enumerate(alignment):
+        aligned_glove_embs[i] = glove_embs[token_idx]
     return aligned_glove_embs
  
   def load_text(self, idx):
     # Extract the original spans of the current doc
     doc_id = self.doc_ids[idx]
-    origin_candidate_start_ends = self.origin_candidate_start_ends[idx]
+    alignment = self.alignments[idx]
     candidate_starts = self.candidate_start_ends[idx][:, 0]
     candidate_ends = self.candidate_start_ends[idx][:, 1]
     span_num = len(candidate_starts)
@@ -435,10 +452,7 @@ class TextVideoEventDataset(Dataset):
     else:
       doc_embeddings = self.docs_embeddings[doc_id][:doc_len]
       if self.add_glove:
-        origin_doc_len = len(self.glove_embeddings[doc_id])
-        clean_token_idxs = [self.clean_start_end_dict[doc_id][token_idx] for token_idx in range(origin_doc_len)]
-        bert_token_spans = self.bert_start_ends[idx][clean_token_idxs] 
-        glove_embeddings = self.align_glove_with_bert(self.glove_embeddings[doc_id], bert_token_spans)
+        glove_embeddings = self.align_glove_with_bert(self.glove_embeddings[doc_id], alignment) # TODO 
         doc_embeddings = np.concatenate([doc_embeddings, glove_embeddings], axis=-1)
         
       doc_embeddings = torch.FloatTensor(doc_embeddings)
@@ -456,7 +470,7 @@ class TextVideoEventDataset(Dataset):
     width = torch.LongTensor([min(w, self.max_mention_span) for w in width])
 
     # Convert the argument spans to the bert tokenized spans
-    if not len(self.origin_argument_spans[idx].shape):
+    if not len(self.candidate_argument_spans[idx].shape):
       n_args = 2
       arg_starts = []
       arg_ends = []
@@ -490,11 +504,11 @@ class TextVideoEventDataset(Dataset):
 
     # Extract coreference cluster labels
     labels = [int(self.event_label_dict[self.doc_ids[idx]][(start, end)]['cluster_id'])\
-              for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
+              for start, end in zip(candidate_starts, candidate_ends)]
     labels = torch.LongTensor(labels)
     labels = fix_embedding_length(labels.unsqueeze(1), self.max_span_num).squeeze(1)
     event_labels = [self.event_stoi[self.event_label_dict[self.doc_ids[idx]][(start, end)]['type']]\
-                    for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
+                    for start, end in zip(candidate_starts, candidate_ends)]
     event_labels = torch.LongTensor(event_labels)
     event_labels = fix_embedding_length(event_labels.unsqueeze(1), self.max_span_num).squeeze(1)
 
@@ -503,7 +517,7 @@ class TextVideoEventDataset(Dataset):
 
     # Extract linguistic feature labels
     linguistic_labels = {k:[] for k in self.linguistic_feat_types}
-    for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1]):
+    for start, end in zip(candidate_starts, candidate_ends):
       feat_dict = self.event_feature_dict[self.doc_ids[idx]][(start, end)]
       for k in self.linguistic_feat_types:
         linguistic_labels[k].append(self.feature_stoi[k][feat_dict[k]])

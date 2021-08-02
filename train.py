@@ -179,7 +179,7 @@ def train(text_model,
 
       text_mask = batch['text_mask'].to(device)
       span_mask = batch['span_mask'].to(device)
-      action_span_mask = batch['action_mask'].to(device)
+      action_span_mask = batch['visual_mask'].to(device)
       span_num = (span_mask.sum(-1) > 0).long().sum(-1)
       action_num = (action_span_mask.sum(-1) > 0).long().sum(-1)
       action_mask = (action_span_mask.sum(-1) > 0).float()
@@ -272,7 +272,6 @@ def train(text_model,
     torch.save(text_model.module.state_dict(), '{}/text_model-{}.pth'.format(config['model_path'], random_seed))
     torch.save(mention_model.module.state_dict(), '{}/mention_model-{}.pth'.format(config['model_path'], random_seed))
     torch.save(attention_model.module.state_dict(), '{}/attention_model-{}.pth'.format(config['model_path'], random_seed))
-
     torch.save(text_coref_model.module.state_dict(), '{}/text_coref_model-{}.pth'.format(config['model_path'], random_seed))
     torch.save(visual_coref_model.module.state_dict(), '{}/visual_coref_model-{}.pth'.format(config['model_path'], random_seed))
     
@@ -356,7 +355,7 @@ def test(text_model,
         event_labels = batch['event_labels'].to(device)
         text_mask = batch['text_mask'].to(device)
         span_mask = batch['span_mask'].to(device)
-        action_span_mask = batch['action_mask'].to(device)
+        action_span_mask = batch['visual_mask'].to(device)
         span_num = (span_mask.sum(-1) > 0).long().sum(-1)
         action_num = (action_span_mask.sum(-1) > 0).long().sum(-1)
         action_mask = (action_span_mask.sum(-1) > 0).float()
@@ -421,18 +420,18 @@ def test(text_model,
                                              first_text_idx,
                                              second_text_idx)
 
-          origin_candidate_start_ends = test_loader.dataset.origin_candidate_start_ends[global_idx]
+          candidate_start_ends = test_loader.dataset.candidate_start_ends[global_idx]
           predicted_antecedents = torch.LongTensor(predicted_antecedents)
-          origin_candidate_start_ends = torch.LongTensor(origin_candidate_start_ends)
+          candidate_start_ends = torch.LongTensor(candidate_start_ends)
 
-          pred_clusters, gold_clusters = conll_eval(origin_candidate_start_ends,
+          pred_clusters, gold_clusters = conll_eval(candidate_start_ends,
                                                     predicted_antecedents,
-                                                    origin_candidate_start_ends,
+                                                    candidate_start_ends,
                                                     text_labels[idx, :span_num[idx]])
           doc_id = test_loader.dataset.doc_ids[global_idx]
           tokens = [token[2] for token in test_loader.dataset.documents[doc_id]]
           event_label_dict = test_loader.dataset.event_label_dict[doc_id]
-          arg_spans = test_loader.dataset.origin_argument_spans[global_idx]
+          arg_spans = test_loader.dataset.candidate_argument_spans[global_idx]
           arguments = {span: arg_span\
                        for span, arg_span in zip(sorted(event_label_dict), arg_spans)}
           pred_clusters_str,\
