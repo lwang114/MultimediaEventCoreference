@@ -15,12 +15,11 @@ class ClassAttender(nn.Module):
                n_class):
     super(ClassAttender, self).__init__()
     self.attention = nn.Linear(input_dim, n_class, bias=False)
-    self.classifier = nn.Linear(input_dim, 1)
-    # XXX nn.Sequential(
-    #                    nn.Linear(input_dim, hidden_dim),
-    #                    nn.ReLU(),
-    #                    nn.Linear(hidden_dim, 1)
-    #                  )
+    self.classifier = nn.Sequential(
+                        nn.Linear(input_dim, hidden_dim),
+                        nn.ReLU(),
+                        nn.Linear(hidden_dim, 1)
+                      )
 
   def forward(self, x, mask):
     """
@@ -30,10 +29,9 @@ class ClassAttender(nn.Module):
     
     Returns :
       out : FloatTensor of size (batch size, n class)
-      class_logits = FloatTensor of size (batch size, seq len, n class)
+      attn_weights = FloatTensor of size (batch size, n class, seq len)
     """
-    class_logits = self.attention(x)
-    attn_weights = class_logits.permute(0, 2, 1)
+    attn_weights = self.attention(x).permute(0, 2, 1)
     attn_weights = attn_weights * mask.unsqueeze(-2)
     attn_weights = torch.where(attn_weights != 0,
                                attn_weights,
@@ -45,7 +43,7 @@ class ClassAttender(nn.Module):
     attn_applied = torch.bmm(attn_weights, x)
     # (batch size, n class)
     out = self.classifier(attn_applied).squeeze(-1)
-    return out, class_logits
+    return out, attn_weights
 
 
 class BiLSTMVideoEncoder(nn.Module):
