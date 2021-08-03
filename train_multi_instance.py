@@ -15,7 +15,7 @@ from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
 from sklearn.metrics import average_precision_score, precision_recall_fscore_support
 from text_models import BiLSTM, SpanEmbedder, SimplePairWiseClassifier
-from visual_models import BiLSTMVideoEncoder, CrossmediaPairWiseClassifier, ClassAttender
+from visual_models import BiLSTMVideoEncoder, CrossmediaPairWiseClassifier, ClassAttender, VisCorefAttender
 from corpus import TextVideoEventDataset
 from evaluator import Evaluation, CoNLLEvaluation
 from utils import create_type_stoi, create_feature_stoi
@@ -173,53 +173,34 @@ def train(text_model,
       continuous_mappings = batch['continuous_mappings'].to(device)
       width = batch['width'].to(device)
 
-      videos = batch['visual_embeddings'].to(device)
+      # videos = batch['visual_embeddings'].to(device)
       text_labels = batch['cluster_labels'].to(device)
-      event_labels = batch['event_labels'].to(device)
+      class_labels = batch['class_labels'].to(device)
 
       text_mask = batch['text_mask'].to(device)
       span_mask = batch['span_mask'].to(device)
-      action_span_mask = batch['visual_mask'].to(device)
+      mention_mask = batch['mention_mask'].to(device)
+      class_mask = batch['class_mask'].to(device) # TODO Change the definition of visual_mask and add visual span mask to video m2e2 dataloader
       span_num = (span_mask.sum(-1) > 0).long().sum(-1)
-      action_num = (action_span_mask.sum(-1) > 0).long().sum(-1)
-      action_mask = (action_span_mask.sum(-1) > 0).float()
+      class_num = (class_mask.sum(-1) > 0).long().sum(-1)
       mention_mask = (span_mask.sum(-1) > 0).float()
-      binary_event_labels = ((F.one_hot(event_labels, n_event_class) * mention_mask.unsqueeze(-1)).sum(-2) > 0).float()
+      binary_class_labels = F.one_hot(class_labels, n_class).float() * class_mask.unsqueeze(-1)
       
       # Compute mention embeddings
-      mention_output = mention_model(doc_embeddings,
-                                     start_mappings,
-                                     end_mappings,
-                                     continuous_mappings, 
-                                     width, 
-                                     attention_mask=text_mask)
+      mention_embedding = mention_model(doc_embeddings,
+                                        start_mappings,
+                                        end_mappings,
+                                        continuous_mappings, 
+                                        width, 
+                                        attention_mask=text_mask)
       
       # Compute textual event logits of size (batch size, span num, n event class)
-      text_output = text_model(mention_output)
-      text_event_logit, text_event_logits = attention_model(text_output, mention_mask) 
-      text_event_probs = F.softmax(text_event_logits, dim=-1)
-
-      # Compute crossmedia event logits of size (batch size, batch size, n event class)
-      video_output = visual_model(videos, action_span_mask)
-      # (batch size, action num, n event class)
-      visual_event_logit, visual_event_logits = attention_model(video_output, action_mask)
-
-      crossmedia_event_logits = text_event_logit # XXX visual_event_logit + text_event_logit
-      crossmedia_event_probs = torch.sigmoid(crossmedia_event_logits)
-
-      # Supervision levels:
-      #  0: bag of events during training
-      #  1: bag of events during training and testing
-      #  2: bag of events + crossmedia alignment during training and testing
-      """
-      if config.supervision_level == 0:
-        masked_text_event_probs = crossmedia_event_probs.unsqueeze(-2) * text_event_probs 
-      elif config.supervision_level in [1, 2]:
-        masked_text_event_probs = binary_event_labels.unsqueeze(-2) * text_event_probs
-      else:
-        raise ValueError(f'Invalid level of supervision: {config.supervision_level}') 
-      """
-
+      mention_output = text_model(mention_embedding)
+      attn_weights = attention_model(mention_output, 
+                                     binary_class_labels, 
+                                     mention_mask, 
+                                     class_mask)
+  
       # Compute coreference scores
       text_scores = []
       pairwise_text_labels = []
@@ -232,11 +213,12 @@ def train(text_model,
                                 is_training=False,
                                 device=device)
         if first_text_idx is None:
-            continue
+          continue
         
         visual_score = visual_coref_model.module.crossmedia_score(first_text_idx,
                                                                   second_text_idx,
-                                                                  text_event_probs[idx])
+                                                                  attn_weights[idx],
+                                                                  use_null=True)
         first_text_idx = first_text_idx.squeeze(0)
         second_text_idx = second_text_idx.squeeze(0)
         pairwise_text_label = pairwise_text_label.squeeze(0)
@@ -251,12 +233,7 @@ def train(text_model,
 
       text_scores = torch.cat(text_scores).squeeze(1)
       pairwise_text_labels = torch.cat(pairwise_text_labels).to(torch.float)
-
       loss = criterion(text_scores, pairwise_text_labels)
-      if config.supervision_level == 0:
-        event_loss = criterion(crossmedia_event_logits, binary_event_labels)
-        # XXX loss = loss + event_loss
-        loss = event_loss
         
       optimizer.zero_grad()
       loss.backward()
@@ -324,8 +301,8 @@ def test(text_model,
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     config = pyhocon.ConfigFactory.parse_file(args.config)
     weight_visual = config.weight_visual
-    n_event_class = len(test_loader.dataset.event_stoi)
-    event_types = sorted(test_loader.dataset.event_stoi, key=lambda x:test_loader.dataset.event_stoi[x])
+    n_class = len(test_loader.dataset.class_stoi) # TODO Change name for video m2e2
+    class_names = sorted(test_loader.dataset.class_stoi, key=lambda x:test_loader.dataset.class_stoi[x])
     
     all_scores = []
     all_labels = []
@@ -353,49 +330,37 @@ def test(text_model,
         continuous_mappings = batch['continuous_mappings'].to(device)
         width = batch['width'].to(device)
         
-        videos = batch['visual_embeddings'].to(device)
+        # videos = batch['visual_embeddings'].to(device)
         text_labels = batch['cluster_labels'].to(device) 
-        event_labels = batch['event_labels'].to(device)
+        class_labels = batch['class_labels'].to(device)
+        
         text_mask = batch['text_mask'].to(device)
         span_mask = batch['span_mask'].to(device)
-        action_span_mask = batch['visual_mask'].to(device)
+        mention_mask = batch['mention_mask'].to(device)
+        class_mask = batch['class_mask'].to(device)
         span_num = (span_mask.sum(-1) > 0).long().sum(-1)
-        action_num = (action_span_mask.sum(-1) > 0).long().sum(-1)
-        action_mask = (action_span_mask.sum(-1) > 0).float()
+        class_num = (class_mask.sum(-1) > 0).long().sum(-1)
         mention_mask = (span_mask.sum(-1) > 0).float()
-        binary_event_labels = ((F.one_hot(event_labels, n_event_class) * mention_mask.unsqueeze(-1)).sum(-2) > 0).float()
+        binary_event_labels = F.one_hot(class_labels, n_class).float() * mention_mask.unsqueeze(-1)
   
         # Compute mention embeddings
-        mention_output = mention_model(doc_embeddings,
-                                       start_mappings,
-                                       end_mappings,
-                                       continuous_mappings, 
-                                       width, 
-                                       attention_mask=text_mask)
+        mention_embedding = mention_model(doc_embeddings,
+                                          start_mappings,
+                                          end_mappings,
+                                          continuous_mappings, 
+                                          width,
+                                          attention_mask=text_mask)
         
         # Compute textual event logits of size (batch size, span num, n event class)
-        text_output = text_model(mention_output)
-        text_event_logit, text_event_logits = attention_model(text_output, mention_mask) 
-        text_event_probs = F.softmax(text_event_logits, dim=-1)
-
-        # Compute crossmedia event logits of size (batch size, batch size, n event class)
-        video_output = visual_model(videos, action_span_mask)
-        # (batch size, action num, n event class)
-        visual_event_logit, visual_event_logits = attention_model(video_output, action_mask)
-        crossmedia_event_logits = text_event_logit # XXX visual_event_logit + text_event_logit
-        crossmedia_event_probs = torch.sigmoid(crossmedia_event_logits)    
-        """
-        if config.supervision_level == 0:
-          masked_text_event_probs = crossmedia_event_probs.unsqueeze(-2) * text_event_probs 
-        elif config.supervision_level in [1, 2]:
-          masked_text_event_probs = binary_event_labels.unsqueeze(-2) * text_event_probs
-        else:
-          raise ValueError(f'Invalid level of supervision: {config.supervision_level}')
-        """
-        pred_binary_event_labels.append((crossmedia_event_logits > 0).long().flatten().cpu().detach())
-        gold_binary_event_labels.append(binary_event_labels.long().flatten().cpu().detach())
-      
+        mention_output = text_model(mention_embedding)
+        attn_weights = attention_model(mention_output, 
+                                       binary_class_labels,
+                                       mention_mask,
+                                       class_mask)
+        
         # Compute coreference scores
+        text_scores = []
+        pairwise_text_labels = []
         B = doc_embeddings.size(0)
         for idx in range(B):
           global_idx = i * test_loader.batch_size + idx
@@ -407,18 +372,20 @@ def test(text_model,
                                   device=device)
           if first_text_idx is None:
             continue
-
+          
+          visual_score = visual_coref_model.module.crossmedia_score(first_text_idx,
+                                                                  second_text_idx,
+                                                                  attn_weights[idx],
+                                                                  use_null=True)
           first_text_idx = first_text_idx.squeeze(0)
           second_text_idx = second_text_idx.squeeze(0)
           pairwise_text_label = pairwise_text_label.squeeze(0)
-
-          visual_score = visual_coref_model.module.crossmedia_score(first_text_idx,
-                                                                    second_text_idx,
-                                                                    text_event_probs[idx])
-          
           text_score = text_coref_model(mention_output[idx, first_text_idx],
                                         mention_output[idx, second_text_idx])
           text_score = weight_visual * visual_score + (1 - weight_visual) * text_score
+          text_scores.append(text_score)
+          pairwise_text_labels.append(pairwise_text_label)
+
           
           predicted_antecedents = text_coref_model.module.predict_cluster(
                                              text_score,
@@ -435,39 +402,22 @@ def test(text_model,
                                                     text_labels[idx, :span_num[idx]])
           doc_id = test_loader.dataset.doc_ids[global_idx]
           tokens = [token[2] for token in test_loader.dataset.documents[doc_id]]
-          event_label_dict = test_loader.dataset.event_label_dict[doc_id]
-          arg_spans = test_loader.dataset.candidate_argument_spans[global_idx]
-          arguments = {span: arg_span\
-                       for span, arg_span in zip(sorted(event_label_dict), arg_spans)}
+          mention_dict = test_loader.dataset.mention_dict[doc_id]
           pred_clusters_str,\
           gold_clusters_str = conll_eval.make_output_readable(
                                   pred_clusters, 
                                   gold_clusters,
-                                  tokens, arguments=arguments
-                              )
-          pred_event_label = text_event_probs[idx, :span_num[idx]].max(-1)[1].cpu().detach()
-          gold_event_label = event_labels[idx, :span_num[idx]].cpu().detach()
-          pred_event_str = ' '.join([event_types[p] for p in pred_event_label.numpy()])
-          gold_event_str = ' '.join([event_types[g] for g in gold_event_label.numpy()])
-
+                                  tokens)
           token_str = ' '.join(tokens).replace('\n', '')
           f_out.write(f"{doc_id}: {token_str}\n")
           f_out.write(f'Pred: {pred_clusters_str}\n')
           f_out.write(f'Gold: {gold_clusters_str}\n')
-          f_out.write(f'Pred Events: {pred_event_str}\n')
-          f_out.write(f'Gold Events: {gold_event_str}\n\n')          
           
           all_scores.append(text_score.squeeze(1))
           all_labels.append(pairwise_text_label)
-          pred_event_labels.append(pred_event_label)
-          gold_event_labels.append(gold_event_label)
       f_out.close()
       all_scores = torch.cat(all_scores)
       all_labels = torch.cat(all_labels)
-      pred_event_labels = torch.cat(pred_event_labels)
-      gold_event_labels = torch.cat(gold_event_labels)
-      pred_binary_event_labels = torch.cat(pred_binary_event_labels)
-      gold_binary_event_labels = torch.cat(gold_binary_event_labels)
       
       average_precision = average_precision_score(all_labels.cpu().detach().numpy(),
                                                   torch.sigmoid(all_scores).cpu().detach().numpy())
@@ -494,22 +444,11 @@ def test(text_model,
       print(info) 
       logging.info(info)
 
-      binary_prec, binary_rec, binary_f1, _ = precision_recall_fscore_support(gold_binary_event_labels.numpy(),
-                                                                                   pred_binary_event_labels.numpy(), average='binary')
-      event_prec, event_rec, event_f1, _ = precision_recall_fscore_support(gold_event_labels.numpy(),
-                                                                                   pred_event_labels.numpy(), average='macro')
-      print('[Event Classification Result]')
-      info = f'Event classification - Recall: {event_prec:.4f}, Precision: {event_rec:.4f}, F1: {event_f1:.4f}\n'\
-             f'Binary Recall: {binary_prec:.4f}, Precision: {binary_rec:.4f}, F1: {binary_f1:.4f}'
-      print(info)
-      logging.info(info)
-
       results['pairwise'] = (eval.get_precision().item(), eval.get_recall().item(), eval.get_f1().item(), average_precision)
       results['muc'] = muc
       results['bcubed'] = b_cubed
       results['ceafe'] = ceafe
       results['avg'] = avg
-      results['event'] = [event_prec, event_rec, event_f1]
       return results
 
 if __name__ == '__main__':
@@ -552,7 +491,6 @@ if __name__ == '__main__':
   bcubeds = []
   ceafes = []
   avgs = []
-  event_metrics = []
   
   seeds = config.seeds
   for seed in seeds:
@@ -574,7 +512,7 @@ if __name__ == '__main__':
                      nn.ReLU(),
                      nn.Linear(config.hidden_layer, config.hidden_layer),
                      nn.ReLU())
-      attention_model = ClassAttender(config.hidden_layer,
+      attention_model = VisCorefAttender(config.hidden_layer,
                                       config.hidden_layer,
                                       len(event_stoi))
       visual_model = BiLSTMVideoEncoder(400, int(config.hidden_layer // 2))
@@ -617,14 +555,12 @@ if __name__ == '__main__':
       bcubeds.append(results['bcubed'])
       ceafes.append(results['ceafe'])
       avgs.append(results['avg'])
-      event_metrics.append(results['event'])
 
   mean_pairwise, std_pairwise = np.mean(np.asarray(pairwises), axis=0), np.std(np.asarray(pairwises), axis=0)
   mean_muc, std_muc = np.mean(np.asarray(mucs), axis=0), np.std(np.asarray(mucs), axis=0)
   mean_bcubed, std_bcubed = np.mean(np.asarray(bcubeds), axis=0), np.std(np.asarray(bcubeds), axis=0)
   mean_ceafe, std_ceafe = np.mean(np.asarray(ceafes), axis=0), np.std(np.asarray(ceafes), axis=0)
   mean_avg, std_avg = np.mean(np.asarray(avgs), axis=0), np.std(np.asarray(avgs), axis=0)
-  mean_event_f1, std_event_f1 = np.mean(np.asarray(event_metrics), axis=0), np.std(np.asarray(event_metrics), axis=0)
   info = f'Pairwise: precision {mean_pairwise[0]} +/- {std_pairwise[0]}, '\
          f'recall {mean_pairwise[1]} +/- {std_pairwise[1]}, '\
          f'f1 {mean_pairwise[2]} +/- {std_pairwise[2]}\n'\

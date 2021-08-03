@@ -8,6 +8,53 @@ def init_weights(m):
         nn.init.xavier_uniform_(m.weight)
         nn.init.uniform_(m.bias)
 
+class VisCorefAttender(nn.Module):
+  def __init__(self,
+               input_dim,
+               hidden_dim,
+               n_class):
+    super(VisCorefAttender, self).__init__()
+    self.visual_embedder = nn.Sequential(
+                             nn.Linear(n_class, hidden_dim),
+                             nn.ReLU(),
+                             nn.Linear(hidden_dim, hidden_dim)
+                           )
+    self.mention_embedder = nn.Sequential(
+                              nn.Linear(input_dim, hidden_dim),
+                              nn.ReLU(),
+                              nn.Linear(hidden_dim, hidden_dim)
+                            )
+    self.attention = nn.Sequential(
+                       nn.Linear(2 * hidden_dim, hidden_dim),
+                       nn.ReLU(),
+                       nn.Linear(hidden_dim, 1)
+                     )
+
+  def forward(self, mention_embeddings, class_labels, 
+              mention_mask, class_mask):
+    """
+    Args :
+      mention_embeddings : FloatTensor of size (batch size, max mention num, input size)
+      class_labels : LongTensor of size (batch size, max class num, n class)
+      mention_mask : FloatTensor of size (batch size, max mention num) 
+      class_mask : FloatTensor of size (batch size, max class num)
+    
+    Returns : 
+      attn_weights : FloatTensor of size (batch size, max mention num, max class num)
+    """
+    device = mention_embeddings.device
+    visual_embeddings = self.visual_embedder(class_labels)
+    mention_embeddings = self.mention_embedder(mention_embeddings)
+    attn_weights = self.attention(visual_embeddings.unsqueeze(-3) 
+                                  * mention_embeddings.unsqueeze(-2))
+    attn_weights = attn_weights * mention_mask.unsqueeze(-1)\
+                   * class_mask.unsqueeze(-2)
+    attn_weights = torch.where(attn_weights != 0,
+                               attn_weights,
+                               torch.tensor(-1e10, device=device))
+    return attn_weights
+
+
 class ClassAttender(nn.Module):
   def __init__(self,
                input_dim,
@@ -89,7 +136,11 @@ class CrossmediaPairWiseClassifier(nn.Module):
     )
     self.pairwise_mlp.apply(init_weights)
 
-    self.crossmedia_pairwise_mlp = nn.Linear(3, 1) 
+    self.crossmedia_pairwise_mlp = nn.Sequential(
+                                      nn.Linear(4, 4),
+                                      nn.ReLU(),
+                                      nn.Linear(4, 1)
+                                   ) 
     self.crossmedia_pairwise_mlp.apply(init_weights)
 
   def forward(self, first, second):
@@ -104,7 +155,7 @@ class CrossmediaPairWiseClassifier(nn.Module):
     # XXX return self.pairwise_mlp(torch.cat((first, second, first * second), dim=1))   
     return torch.sum(first * second, dim=-1, keepdim=True) 
 
-  def crossmedia_score(self, first_idxs, second_idxs, attention_map):
+  def crossmedia_score(self, first_idxs, second_idxs, attention_map, use_null=False):
     """
     Compute similarity between mentions based on their crossmedia scores
     
@@ -120,8 +171,11 @@ class CrossmediaPairWiseClassifier(nn.Module):
     second_attention = attention_map[second_idxs]
     first_attention = F.softmax(first_attention, dim=-1)
     second_attention = F.softmax(second_attention, dim=-1)
+    if use_null:
+      first_attention = first_attention[:, 1:]
+      second_attention = second_attention[:, 1:] 
     first_score = first_attention.max(-1)[0].unsqueeze(-1)
     second_score = second_attention.max(-1)[0].unsqueeze(-1)
     pw_score = (first_attention * second_attention).max(-1)[0].unsqueeze(-1)
     return self.crossmedia_pairwise_mlp(
-              torch.cat((first_score, second_score, pw_score), dim=1)) 
+              torch.cat((first_score, second_score, first_score * second_score, pw_score), dim=1)) 
