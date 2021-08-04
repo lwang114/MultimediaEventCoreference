@@ -25,7 +25,7 @@ class VisCorefAttender(nn.Module):
                               nn.Linear(hidden_dim, hidden_dim)
                             )
     self.attention = nn.Sequential(
-                       nn.Linear(2 * hidden_dim, hidden_dim),
+                       nn.Linear(hidden_dim, hidden_dim),
                        nn.ReLU(),
                        nn.Linear(hidden_dim, 1)
                      )
@@ -46,7 +46,7 @@ class VisCorefAttender(nn.Module):
     visual_embeddings = self.visual_embedder(class_labels)
     mention_embeddings = self.mention_embedder(mention_embeddings)
     attn_weights = self.attention(visual_embeddings.unsqueeze(-3) 
-                                  * mention_embeddings.unsqueeze(-2))
+                                  * mention_embeddings.unsqueeze(-2)).squeeze(-1)
     attn_weights = attn_weights * mention_mask.unsqueeze(-1)\
                    * class_mask.unsqueeze(-2)
     attn_weights = torch.where(attn_weights != 0,

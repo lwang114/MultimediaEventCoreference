@@ -1,7 +1,12 @@
 import torch
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer, AutoModel
-
+import os
+import json
+import numpy as np
+from tqdm import tqdm
+import codecs
+import collections
 
 def get_all_token_mapping(start, end, max_token_num, max_mention_span):
     try:
@@ -64,7 +69,7 @@ class VisProDataset:
           "correct_NPs": list of [int, int]'s,
           "reference_type": int,
           "not_discussed": bool,
-      "sentence": list of list of strs,
+      "sentences": list of list of strs,
       "image_file": str, 
       "clusters": list of list of [int, int],
       "object_detection": list of ints, 
@@ -72,24 +77,29 @@ class VisProDataset:
       "speakers": ??
     """
     super(VisProDataset, self).__init__()
+    self.debug = config['debug']
     self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     self.max_token_num = config.get('max_token_num', 512)
     self.max_span_num = config.get('max_span_num', 80)
     self.max_object_num = config.get('max_object_num', 20)
     self.max_frame_num = config.get('max_frame_num', 100)
     self.max_mention_span = config.get('max_mention_span', 15)
-
+    self.add_glove = config.get('add_glove', False)
+    
     mention_json = os.path.join(config['data_folder'], f'{split}.vispro.1.1.jsonlines')
     self.tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
     self.mention_dict,\
     self.visual_dict,\
-    self.documents = self.extract_meta_info(mention_json)
+    self.documents,\
+    self.class_stoi = self.extract_meta_info(mention_json)
     self.doc_ids = sorted(self.documents)
-
+    print(f'Number of documents in {split}: {len(self.doc_ids)}')
+    
     self.origin_tokens,\
     self.bert_tokens,\
-    self.bert_start_ends = self.tokenize(documents)
-    self.candidate_start_ends = [np.asarray(sorted(self.event_label_dict[doc_id])) for doc_id in sorted(self.mention_dict)]
+    self.bert_start_ends,\
+    self.alignments = self.tokenize(self.documents)
+    self.candidate_start_ends = [np.asarray(sorted(self.mention_dict[doc_id])) for doc_id in sorted(self.mention_dict)]
   
     bert_embed_file = os.path.join(config['data_folder'], f'{split}_{config["bert_model"]}.npz')
     glove_embed_file = os.path.join(config['data_folder'], f'{split}_glove_embeddings.npz')
@@ -98,14 +108,18 @@ class VisProDataset:
       self.extract_bert_embeddings(config['bert_model'], bert_embed_file)
     if not os.path.exists(glove_embed_file):
       glove_file = config.get('glove_file', 'm2e2/data/glove/glove.840B.300d.txt')
-      extract_glove_embeddings(glove_file, glove_embed_file)
+      self.extract_glove_embeddings(glove_file, glove_embed_file)
 
     self.docs_embeddings = np.load(bert_embed_file)
     self.glove_embeddings = np.load(glove_embed_file)
-    
-    if not class_stoi: # TODO
-      self.class_stoi = {str(i):i for i in range(80)}
-  
+
+    if not class_stoi:
+      # class_itos = json.load(open(os.path.join(config['data_folder'], 'class_itos.json'), 'r')) #
+      # self.class_stoi = {s:i for i, s in enumerate(class_itos)}
+      self.class_stoi = {str(i):i for i in range(100)}
+    else:
+      self.class_stoi = class_stoi
+
   def extract_meta_info(self, mention_json):
     """
     Returns:
@@ -115,24 +129,37 @@ class VisProDataset:
     mention_dict = dict()
     visual_dict = dict()
     documents = dict()
+    class_stoi = dict()
     for line in open(mention_json, 'r'):
+      if self.debug:
+          if len(mention_dict) >= 20:
+              break
       doc_dict = json.loads(line)
       doc_id = f'{doc_dict["doc_key"]}_{doc_dict["image_file"]}' 
       clusters = doc_dict['clusters']
-      mention_dict[doc_id] = {tuple(span):c_idx+1 for c_idx, c in enumerate(clusters) for span in c}
+      if len(clusters):
+          mention_dict[doc_id] = {tuple(span):c_idx+1 for c_idx, c in enumerate(clusters) for span in c}
+      else:
+          mention_dict[doc_id] = {(-1, -1):0}
       visual_dict[doc_id] = doc_dict['object_detection']
-      documents[doc_id] = [[sent_id, 0, token, 0] for sent_id, sent in enumerate(doc_dict['sentence']) for token in sent]
-    return mention_dict, visual_dict, documents  
+      for c in doc_dict['object_detection']:
+          if not c in class_stoi:
+              class_stoi[c] = len(class_stoi)
+      documents[doc_id] = [[sent_id, 0, token, 0] for sent_id, sent in enumerate(doc_dict['sentences']) for token in sent]
+    return mention_dict, visual_dict, documents, class_stoi
   
   def tokenize(self, documents):
     bert_tokens_all = []
     bert_start_ends_all = []
     origin_tokens_all = []
+    alignments = []
     
     for doc_id in sorted(documents):
       tokens = documents[doc_id]
       bert_tokens = []
+      start_bert_idx, end_bert_idx = [], []
       origin_tokens = []
+      alignment = []
       bert_cursor = -1
       for i, token in enumerate(tokens):
         sent_id, token_id, token_text, flag_sentence = token
@@ -142,16 +169,20 @@ class VisProDataset:
           bert_tokens.extend(bert_token)
           start_bert_idx.append(bert_start_index)
           bert_cursor += len(bert_token)
-
           bert_end_index = bert_cursor
           end_bert_idx.append(bert_end_index)
-
-          origin_tokens.append(token)
+          alignment.extend([i]*len(bert_token))
+        else:
+          start_bert_idx.append(-1)
+          end_bert_idx.append(-1)
+          
+        origin_tokens.append(token)
       bert_tokens_all.append(bert_tokens)
       origin_tokens_all.append(origin_tokens)
-      start_end = np.concatenate((start_bert_idx[:, np.newaxis], end_bert_idx[:, np.newaxis]), axis=1)
+      alignments.append(alignment)
+      start_end = np.concatenate((np.expand_dims(start_bert_idx, 1), np.expand_dims(end_bert_idx, 1)), axis=1)
       bert_start_ends_all.append(start_end)
-    return origin_tokens_all, bert_tokens_all, bert_start_ends_all
+    return origin_tokens_all, bert_tokens_all, bert_start_ends_all, alignments
 
   def split_doc_into_segments(self, bert_tokens, sentence_ids):
     """
@@ -182,7 +213,7 @@ class VisProDataset:
         
   def extract_bert_embeddings(self, bert_type, out_file):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    bert_model = AutoModel.from_pretrained(config['bert_model']).to(device)
+    bert_model = AutoModel.from_pretrained(bert_type).to(device)
     docs_embs = dict()
 
     with torch.no_grad():
@@ -208,7 +239,7 @@ class VisProDataset:
       bert_embeddings = dict()
       total = len(doc_ids_segments)
       n_batch = total // 8 + 1 if total % 8 != 0 else total // 8
-      for b in range(n_batch):
+      for b in tqdm(range(n_batch)):
         start_idx = b * 8
         end_idx = min((b + 1) * 8, total)
         batch_idxs = list(range(start_idx, end_idx))
@@ -218,14 +249,16 @@ class VisProDataset:
         docs_length2 = [len(ts) for ts in bert_tokens_batch]
 
         for idx, doc_id in enumerate(doc_ids_batch):
-          print(f'{doc_id}: {len(tokens)}')
           bert_embedding = bert_embeddings_batch[idx][:docs_length[idx]].cpu().detach().numpy() 
-          print(f'Embedding size: {bert_embedding.shape}') 
-          bert_embeddings[doc_id] = bert_embedding
+          if not doc_id in bert_embeddings:
+              bert_embeddings[doc_id] = bert_embedding
+          else:
+              bert_embeddings[doc_id] = np.concatenate([bert_embeddings[doc_id], bert_embedding], axis=-2)
       np.savez(out_file, **bert_embeddings) 
 
-  def extract_glove_embedding(self, glove_file, out_file):
+  def extract_glove_embeddings(self, glove_file, out_file):
     vocab = {'$$$UNK$$$': 0}
+    dimension = 300
     # Compute vocab of the documents
     for doc_id in sorted(self.documents):
         tokens = self.documents[doc_id]
@@ -258,18 +291,20 @@ class VisProDataset:
         for token in tokens:
             token_id = vocab_emb.get(token[2].lower(), 0)
             doc_embedding.append(embed_matrix[token_id])
-        print(np.asarray(doc_embedding).shape)
         doc_embeddings[doc_id] = np.asarray(doc_embedding)
     np.savez(out_file, **doc_embeddings)
 
-  def align_glove_with_bert(self, glove_embs, bert_spans):
-    aligned_glove_embs = np.zeros((bert_spans[-1][1], glove_embs.shape[-1]))
-    for i, (start, end) in enumerate(bert_spans):
-        aligned_glove_embs[start:end+1] = glove_embs[i]
+  def align_glove_with_bert(self, glove_embs, alignment):
+    token_num = len(alignment)
+    glove_dim = glove_embs.shape[-1]
+    aligned_glove_embs = np.zeros((token_num, glove_dim))
+    for i, token_idx in enumerate(alignment):
+        aligned_glove_embs[i] = glove_embs[token_idx]
     return aligned_glove_embs
   
   def load_text(self, idx):
-    doc_id = self.doc_ids[idx] 
+    doc_id = self.doc_ids[idx]
+    alignment = self.alignments[idx]
     candidate_starts = self.candidate_start_ends[idx][:, 0]
     candidate_ends = self.candidate_start_ends[idx][:, 1]
     span_num = len(candidate_starts)
@@ -279,10 +314,7 @@ class VisProDataset:
     doc_len = len(bert_tokens)
     doc_embeddings = self.docs_embeddings[doc_id][:doc_len]
     if self.add_glove:
-      origin_doc_len = len(self.glove_embeddings[doc_id])
-      clean_token_idxs = [self.clean_start_end_dict[doc_id][token_idx] for token_idx in range(origin_doc_len)]
-      bert_token_spans = self.bert_start_ends[idx][clean_token_idxs] 
-      glove_embeddings = self.align_glove_with_bert(self.glove_embeddings[doc_id], bert_token_spans)
+      glove_embeddings = self.align_glove_with_bert(self.glove_embeddings[doc_id], alignment)
       doc_embeddings = np.concatenate([doc_embeddings, glove_embeddings], axis=-1)
     
     doc_embeddings = torch.FloatTensor(doc_embeddings)
@@ -306,10 +338,11 @@ class VisProDataset:
     width = fix_embedding_length(width.unsqueeze(1), self.max_span_num).squeeze(1)
 
     # Extract coreference cluster labels
-    labels = [int(self.event_label_dict[self.doc_ids[idx]][(start, end)]['cluster_id'])\
-              for start, end in zip(origin_candidate_start_ends[:, 0], origin_candidate_start_ends[:, 1])]
+    labels = [self.mention_dict[doc_id][(start, end)]\
+              for start, end in zip(candidate_starts, candidate_ends)]
     labels = torch.LongTensor(labels)
     labels = fix_embedding_length(labels.unsqueeze(1), self.max_span_num).squeeze(1)
+    
     text_mask = torch.FloatTensor([1. if j < doc_len else 0 for j in range(self.max_token_num)])
     span_mask = continuous_mappings.sum(dim=1)
     return {'doc_embeddings': doc_embeddings,
@@ -329,7 +362,7 @@ class VisProDataset:
     class_mask[:object_num] = 1.
     class_labels = fix_embedding_length(class_labels.unsqueeze(1), self.max_object_num).squeeze(1) 
     
-    return {'visual_embeddings': torch.zeros((object_num, 400)), # XXX to make it consistent with video m2e2
+    return {'visual_embeddings': torch.zeros((self.max_object_num, 400)), # XXX to make it consistent with video m2e2
             'class_labels': class_labels,
             'class_mask': class_mask}
 

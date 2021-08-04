@@ -592,11 +592,11 @@ if __name__ == '__main__':
   train_set = TextVideoEventDataset(config, 
                                     event_stoi, 
                                     feature_stoi,
-                                    split='train')
+                                    splits=['train'])
   test_set = TextVideoEventDataset(config, 
                                    event_stoi, 
                                    feature_stoi,
-                                   split='test')
+                                   splits=['test'])
 
   pairwises  = []
   mucs = []

@@ -28,7 +28,7 @@ def create_type_stoi(mention_jsons):
           type_to_idx[entity_type] = len(type_to_idx)
           n_entity_types += 1
       else:
-        event_type = mention_dict['event_type']
+        event_type = mention_dict['event_type'].split('.')[-1]
         if not event_type in type_to_idx:
           type_to_idx[event_type] = len(type_to_idx)
           n_event_types += 1

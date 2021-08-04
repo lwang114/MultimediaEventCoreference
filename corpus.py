@@ -71,7 +71,7 @@ class TextVideoEventDataset(Dataset):
   def __init__(self, config, 
                event_stoi,
                feature_stoi,
-               split='train'):
+               splits=['train']):
     '''
     :param doc_json: dict of 
         [doc_id]: list of [sent id, token id, token, is entity/event]
@@ -104,23 +104,25 @@ class TextVideoEventDataset(Dataset):
     feature_stoi['mention_type'] = {NULL:0, PROPER:1, NOMINAL:2, PRON:3}
     feature_stoi['number'] = {NULL:0, SINGULAR:1, PLURAL:2}
     self.feature_stoi = feature_stoi
-    
-    doc_json = os.path.join(config['data_folder'], f'{split}.json')
-    event_mention_json = os.path.join(config['data_folder'],
-                                      f'{split}_events.json')
-    entity_mention_json = os.path.join(config['data_folder'],
-                                       f'{split}_entities.json')
-
-    documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
-    self.documents = documents
-    event_mentions = json.load(codecs.open(event_mention_json, 'r', 'utf-8'))
-    entity_mentions = json.load(codecs.open(entity_mention_json, 'r', 'utf-8')) 
-    
-    # Extract coreference cluster labels
     self.linguistic_feat_types = config.get('linguistic_feature_types', [])
-    self.event_label_dict, self.event_feature_dict = self.create_text_dict_labels(event_mentions) 
-    self.entity_label_dict, self.entity_feature_dict = self.create_text_dict_labels(entity_mentions)
 
+    self.documents = dict()
+    self.doc_ids = []
+    self.event_label_dict = dict()
+    self.event_feature_dict = dict()
+    self.entity_label_dict = dict()
+    self.entity_feature_dict = dict()
+    self.action_embeddings = dict()
+    self.docs_embeddings = dict()
+    self.glove_embeddings = dict()
+    self.feat_keys = []
+    self.candidate_start_ends = []
+    self.candidate_argument_spans = []
+    self.origin_tokens = []
+    self.bert_tokens = []
+    self.bert_start_ends = []
+    self.alignments = []
+    
     self.use_action_boundary = config['use_action_boundary']
     id_mapping_json = os.path.join(config['data_folder'], '../video_m2e2.json')
     action_anno_json = os.path.join(config['data_folder'], '../master.json') # Contain event time stamps
@@ -141,44 +143,86 @@ class TextVideoEventDataset(Dataset):
     self.action_label_dict = self.create_action_dict_labels(id_mapping,\
                                                             action_anno_dict,\
                                                             action_dur_dict)
-    # Load action embeddings
-    self.action_embeddings = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_feat.npz'))
-
-    # Extract doc/image ids
-    self.feat_keys = sorted(self.action_embeddings, key=lambda x:int(x.split('_')[-1]))
-    if config.debug:
-      self.feat_keys = self.feat_keys[:20]
-    self.feat_keys = [k for k in self.feat_keys if '_'.join(k.split('_')[:-1]) in self.event_label_dict]
-    self.doc_ids = ['_'.join(k.split('_')[:-1]) for k in self.feat_keys]
-    documents = {doc_id:documents[doc_id] for doc_id in self.doc_ids}
-    print('Number of documents: ', len(self.doc_ids))
-
+    
     # Tokenize documents and extract token spans after bert tokenization
     self.bert_model = config['bert_model']
     self.tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
-    self.origin_tokens,\
-    self.bert_tokens,\
-    self.bert_start_ends,\
-    self.alignments = self.tokenize(documents)
-
-    # Extract spans
-    self.candidate_start_ends = [np.asarray(sorted(self.event_label_dict[doc_id])) for doc_id in self.doc_ids]
-    self.candidate_argument_spans = [np.asarray([self.extract_argument(self.event_label_dict[doc_id][span])
-                                                 for span in sorted(self.event_label_dict[doc_id])]) for doc_id in self.doc_ids]
     
-    # Load document embeddings
-    bert_embed_file = '{}_{}.npz'.format(doc_json.split('.')[0], config.bert_model)
-    glove_embed_file = '{}_glove_embeddings.npz'.format(doc_json.split('.')[0])    
-    if not os.path.exists(bert_embed_file):
-      self.extract_bert_embeddings(config['bert_model'], bert_embed_file)
+    for split in splits:
+        doc_json = os.path.join(config['data_folder'], f'{split}.json')
+        event_mention_json = os.path.join(config['data_folder'],
+                                          f'{split}_events.json')
+        entity_mention_json = os.path.join(config['data_folder'],
+                                           f'{split}_entities.json')
 
-    if not os.path.exists(glove_embed_file):
-      self.extract_glove_embeddings(config.get('glove_file', 
-                                               'm2e2/data/glove/glove.840B.300d.txt'),
-                                    glove_embed_file)  
-    self.docs_embeddings = np.load(bert_embed_file)
-    self.glove_embeddings = np.load(glove_embed_file)
+        documents = json.load(codecs.open(doc_json, 'r', 'utf-8'))
+        self.documents.update(documents)
+        event_mentions = json.load(codecs.open(event_mention_json, 'r', 'utf-8'))
+        entity_mentions = json.load(codecs.open(entity_mention_json, 'r', 'utf-8')) 
     
+        # Extract coreference cluster labels    
+        event_label_dict, event_feature_dict = self.create_text_dict_labels(event_mentions) 
+        entity_label_dict, entity_feature_dict = self.create_text_dict_labels(entity_mentions)
+
+        self.event_label_dict.update(event_label_dict)
+        self.event_feature_dict.update(event_feature_dict)
+        self.entity_label_dict.update(entity_label_dict)
+        self.entity_feature_dict.update(entity_feature_dict)
+
+        # Load action embeddings
+        action_embeddings = np.load(os.path.join(config['data_folder'], f'{split}_mmaction_feat.npz'))
+        for k in action_embeddings:
+            self.action_embeddings[k] = action_embeddings[k]
+
+        # Extract doc/image ids
+        feat_keys = sorted(action_embeddings, key=lambda x:'_'.join(x.split('_')[:-1]))
+        if config.debug:
+            feat_keys = feat_keys[:20]
+        feat_keys = [k for k in feat_keys if '_'.join(k.split('_')[:-1]) in event_label_dict]
+        self.feat_keys.extend(feat_keys)
+
+        doc_ids = ['_'.join(k.split('_')[:-1]) for k in feat_keys]
+        self.doc_ids.extend(doc_ids)
+        documents = {doc_id:documents[doc_id] for doc_id in doc_ids}
+        print(f'Number of documents in {split}: {len(doc_ids)}')
+
+        origin_tokens,\
+        bert_tokens,\
+        bert_start_ends,\
+        alignments = self.tokenize(documents)
+        self.origin_tokens.extend(origin_tokens)
+        self.bert_tokens.extend(bert_tokens)
+        self.bert_start_ends.extend(bert_start_ends)
+        self.alignments.extend(alignments)
+        
+        # Extract spans
+        self.candidate_start_ends.extend([np.asarray(sorted(event_label_dict[doc_id])) for doc_id in doc_ids])
+        self.candidate_argument_spans.extend([np.asarray([self.extract_argument(event_label_dict[doc_id][span])
+                                                          for span in sorted(event_label_dict[doc_id])]) for doc_id in doc_ids])
+    
+        # Load document embeddings
+        bert_embed_file = '{}_{}.npz'.format(doc_json.split('.')[0], config.bert_model)
+        glove_embed_file = '{}_glove_embeddings.npz'.format(doc_json.split('.')[0])    
+        if not os.path.exists(bert_embed_file):
+            self.extract_bert_embeddings(doc_ids,
+                                         bert_tokens,
+                                         origin_tokens,
+                                         alignments,
+                                         config['bert_model'],
+                                         bert_embed_file)
+
+        if not os.path.exists(glove_embed_file):
+            self.extract_glove_embeddings(documents,
+                                          config.get('glove_file', 
+                                                     'm2e2/data/glove/glove.840B.300d.txt'),
+                                          glove_embed_file)
+        docs_embeddings = np.load(bert_embed_file)
+        glove_embeddings = np.load(glove_embed_file)
+
+        for k in docs_embeddings:
+            self.docs_embeddings[k] = docs_embeddings[k]
+            self.glove_embeddings[k] = glove_embeddings[k]
+        
   def tokenize(self, documents):
     '''
     Tokenize the sentences in BERT format. Adapted from https://github.com/ariecattan/coref
@@ -255,7 +299,7 @@ class TextVideoEventDataset(Dataset):
     arg_spans = []
     for role in ['arg_0', 'arg_1']:
       span = (-1, -1)
-      for rel_idx, arg in enumerate(event['arguments']):
+      for rel_idx, arg in enumerate(event.get('arguments', [])):
         cur_role = self.ie_to_srl_dict.get(arg['role'], '')
         if cur_role == role:
           span = (arg['start'], arg['end'])
@@ -267,21 +311,25 @@ class TextVideoEventDataset(Dataset):
     text_label_dict = dict()
     ling_feature_dict = dict()
     for m in text_mentions:
-      if len(m['tokens_ids']) == 0:
-        text_label_dict[m['doc_id']][(-1, -1)] = {'cluster_id': 0,
-                                                  'type': 0}
-      else:
         start = min(m['tokens_ids'])
         end = max(m['tokens_ids'])
         if not m['doc_id'] in text_label_dict:
           text_label_dict[m['doc_id']] = dict()
           ling_feature_dict[m['doc_id']] = dict()
-        
-        if 'event_type' in m:
-          mention_class = m['event_type']
-        else:
-          mention_class = m['entity_type']
 
+        if 'event_type' in m:
+          mention_class = m['event_type'].split('.')[-1]
+          if not mention_class in self.event_stoi:
+              start, end = -1, -1
+              m['cluster_id'] = 0
+              mention_class = NULL
+        else:
+          mention_class = m['entity_type'].split('.')[-1]
+          if not mention_class in self.event_stoi:
+              start, end = -1, -1
+              m['cluster_id'] = 0
+              mention_class = NULL
+              
         text_label_dict[m['doc_id']][(start, end)] = {'cluster_id': m['cluster_id'],
                                                       'type': mention_class,
                                                       'arguments': m.get('arguments', [])}
@@ -296,6 +344,7 @@ class TextVideoEventDataset(Dataset):
             ling_feature_dict[m['doc_id']][(start, end)][feat_type] = self.extract_type(m)
           else:
             ling_feature_dict[m['doc_id']][(start, end)][feat_type] = m[feat_type]
+      
     return text_label_dict, ling_feature_dict
   
   def create_action_dict_labels(self, 
@@ -347,7 +396,12 @@ class TextVideoEventDataset(Dataset):
 
     return segments
 
-  def extract_bert_embeddings(self, bert_type, out_file):
+  def extract_bert_embeddings(self,
+                              doc_ids,
+                              bert_tokens,
+                              origin_tokens,
+                              alignments,
+                              bert_type, out_file):
     device = 'cuda' if torch.cuda.is_available() else 'cpu' 
     bert_model = AutoModel.from_pretrained(bert_type).to(device)
     docs_embs = dict()
@@ -355,7 +409,7 @@ class TextVideoEventDataset(Dataset):
     with torch.no_grad():
       bert_tokens_segments = []
       doc_ids_segments = []
-      for doc_id, tokens, origin_tokens, alignment in tqdm(zip(self.doc_ids, self.bert_tokens, self.origin_tokens, self.alignments)):
+      for doc_id, tokens, origin_tokens, alignment in tqdm(zip(doc_ids, bert_tokens, origin_tokens, alignments)):
         sentence_ids = [origin_tokens[token_idx][0] for token_idx in alignment]
 
         # Segment the tokens to chunks of at most 512 tokens
@@ -392,17 +446,21 @@ class TextVideoEventDataset(Dataset):
             bert_embeddings[doc_id] = np.concatenate([bert_embeddings[doc_id], bert_embedding], axis=-2)
       np.savez(out_file, **bert_embeddings) 
 
-  def extract_glove_embedding(self, glove_file, out_file):
+  def extract_glove_embeddings(self,
+                               documents,
+                               glove_file,
+                               out_file):
     vocab = {'$$$UNK$$$': 0}
     # Compute vocab of the documents
-    for doc_id in sorted(self.documents):
-        tokens = self.documents[doc_id]
+    for doc_id in sorted(documents):
+        tokens = documents[doc_id]
         for token in tokens:
             if not token[2].lower() in vocab:
                 vocab[token[2].lower()] = len(vocab)
     print('Vocabulary size: {}'.format(len(vocab)))
-                
-    embed_matrix = [[0.0] * dimension] 
+
+    dimension = 300
+    embed_matrix = [[0.0] * dimension]
     vocab_emb = {'$$$UNK$$$': 0} 
     # Load the embeddings
     with codecs.open(glove_file, 'r', 'utf-8') as f:
@@ -420,13 +478,12 @@ class TextVideoEventDataset(Dataset):
 
     # Convert the documents into embedding sequence
     doc_embeddings = {}
-    for idx, doc_id in enumerate(sorted(self.documents)):
-        tokens = self.documents[doc_id]
+    for idx, doc_id in enumerate(sorted(documents)):
+        tokens = documents[doc_id]
         doc_embedding = []
         for token in tokens:
             token_id = vocab_emb.get(token[2].lower(), 0)
             doc_embedding.append(embed_matrix[token_id])
-        print(np.asarray(doc_embedding).shape)
         doc_embeddings[doc_id] = np.asarray(doc_embedding)
     np.savez(out_file, **doc_embeddings)
 
@@ -471,7 +528,7 @@ class TextVideoEventDataset(Dataset):
                             self.max_token_num,
                             self.max_mention_span)
     width = torch.LongTensor([min(w, self.max_mention_span) for w in width])
-
+    
     # Convert the argument spans to the bert tokenized spans
     if not len(self.candidate_argument_spans[idx].shape):
       n_args = 2
@@ -532,8 +589,9 @@ class TextVideoEventDataset(Dataset):
                                self.max_span_num).squeeze(1)
  
     arg_linguistic_labels = {k:[] for k in self.linguistic_feat_types}
+    entity_feat_dict = self.entity_feature_dict.get(self.doc_ids[idx], dict())
     for start, end in zip(arg_starts, arg_ends):
-      feat_dict = self.entity_feature_dict[self.doc_ids[idx]].get((start, end), dict())
+      feat_dict = entity_feat_dict.get((start, end), dict())
       for k in self.linguistic_feat_types:
           arg_linguistic_labels[k].append(self.feature_stoi[k][feat_dict.get(k, NULL)]) 
 
@@ -589,9 +647,10 @@ class TextVideoEventDataset(Dataset):
       action_segment_embeddings = action_embeddings.unsqueeze(-2)
       masks = torch.ones(100, 1)
       labels = -1 * np.ones(action_embeddings.size(0))
-      for span, label in self.action_label_dict[doc_id].items():
-          if label in self.ontology_map:
-              labels[span[0]:span[1]+1] = self.event_stoi[self.ontology_map[label]]
+      if doc_id in self.action_label_dict:
+          for span, label in self.action_label_dict[doc_id].items():
+              if label in self.ontology_map:
+                  labels[span[0]:span[1]+1] = self.event_stoi[self.ontology_map[label]]
       labels = torch.LongTensor(labels)
 
     return {'visual_embeddings': action_segment_embeddings, 

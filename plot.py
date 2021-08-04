@@ -116,24 +116,28 @@ def visualize_text_features(embed_file,
   plt.savefig(f'{out_prefix}.png')
   plt.close()
 
-def plot_nclusters_vs_performance(nclusters_vs_performance_csv):
-  fig, ax = plt.subplots(figsize=(20, 10))
-  df = pd.read_csv(nclusters_vs_performance_csv)
-  sns.lineplot(df, x='Number of Clusters', y='Score', hue='Evaluation Metric')
-  plt.xticks(df['Number of Clusters'], df['Number of Clusters Values'])
-  plt.savefig(nclusters_vs_performance_csv.split('.')[0]+'.png')
+def plot_result_vs_nclusters(result_csv):
+  df = pd.read_csv(result_csv)
+  fig, ax = plt.subplots(figsize=(10, 7))
+  sns.lineplot(x='Number of Visual Clusters', y='Score', hue='Evaluation Metric', style='Evaluation Metric', data=df)
+  # ax.set(xscale='log')
+  ax.set_xticks(list(df['Number of Visual Clusters']))
+  ax.set_xticklabels([str(x) for x in df['Number of Visual Clusters']])
+  ax.yaxis.grid(True)
+  plt.savefig(result_csv.split('.')[0]+'.png')
   plt.close()
 
-def plot_attention(config_file, select_ids, 
+def plot_attention(config, select_ids, 
                    text_only=False,
                    use_full_frame=False):
+  EPS = 1e-10
   NULL = '##NULL##'
-  config = json.load(open(config_file))
+  root = config['root']
   data_path = config['data_folder']
   model_path = config['model_path']
-  predictions = json.load(os.path.join(model_path, 'predictions.json'))
-  events = json.load(os.path.join(data_path, 'test_events.json'))
-  actions = json.load(os.path.join(data_path, 'master_readable.json'))
+  predictions = json.load(open(os.path.join(root, model_path, 'predictions.json')))
+  events = json.load(open(os.path.join(root, data_path, 'test_events.json')))
+  actions = json.load(open(os.path.join(root, data_path, '../master_readable.json')))
   event_dict = {doc_id:dict() for doc_id in select_ids}
   action_dict = {doc_id:dict() for doc_id in select_ids}
   for e in events:
@@ -142,10 +146,13 @@ def plot_attention(config_file, select_ids,
       event_dict[e['doc_id']][span] = e['tokens']
 
   for k, a_info in actions.items():
-    for a in a_info[k]:
+    for a in a_info:
       if a['youtube_id'] in select_ids:
-        span = tuple(a['Temporal_Boundary']) # TODO Extract duration
-        action_dict[a['youtube_id']][span] = a['Event_Type'].split('.')[-1] 
+        span = a['Temporal_Boundary']
+        dur = a['Total_Duration']
+        span[0] = int(span[0] / dur * 100)
+        span[1] = int(span[1] / dur * 100)
+        action_dict[a['youtube_id']][tuple(span)] = a['Event_Type'].split('.')[-1] 
 
   for doc_id in select_ids:
     pred = None
@@ -153,17 +160,19 @@ def plot_attention(config_file, select_ids,
       if pred['doc_id'] == doc_id:
         break
     
-    fig, ax = plt.subplots(figsize=(7, 10))
+    fig, ax = plt.subplots(figsize=(10, 14))
     if use_full_frame:
-      full_scores = np.asarray(prediction['score']).T
+      full_scores = prediction['score']
       scores = []
-      for span in sorted(action_dict[doc_id]):
-        avg_score = full_scores[span[0]:span[1]+1].mean(0, keepdims=True)
-        scores.append(avg_score)
-      scores.append(full_scores[100:])
-      scores = np.concatenate(scores).T.tolist()
+      for full_score in full_scores:
+        score = []
+        for span in sorted(action_dict[doc_id]):
+          avg_score = full_score[span[0]:span[1]+1].mean(0, keepdims=True)
+          score.append(avg_score)
+        score.extend(full_score[100:])
+        scores.append(score)
     else:
-      scores = prediction['score']
+      scores = pred['score']
 
     e_tokens = [event_dict[doc_id][span] for span in sorted(event_dict[doc_id])]
     v_labels = [action_dict[doc_id][span] for span in sorted(action_dict[doc_id])]
@@ -173,33 +182,45 @@ def plot_attention(config_file, select_ids,
 
     score_mat = []
     for score in scores:
-      if text_only and (len(score) < num_events + num_actions + 1):
-        gap = num_events + num_actions + 1 - len(score)
+      # XXX if text_only:
+      #   pad = [0]*num_actions
+      #   score = pad + score
+      # if len(score) < num_events + num_actions + 1:
+      if len(score) < num_events + 1:
+        # XXX gap = num_events + num_actions + 1 - len(score)
+        gap = num_events + 1 - len(score)
         score.extend([0]*gap)
         score_mat.append(score)
 
     score_mat = np.asarray(score_mat).T
-    score_mat /= np.maximum(score_mat.sum(0), EPS) 
+    score_mat /= np.maximum(score_mat.sum(0), EPS)
     si = np.arange(num_events+1)
-    ti = np.arange(num_events+num_actions+2)
+    # XXX ti = np.arange(num_events+num_actions+2)
+    ti = np.arange(num_events+2)
     S, T = np.meshgrid(si, ti)
-    plt.pcolormesh(S, T, score_mat)
+    plt.pcolormesh(S, T, score_mat, cmap=plt.cm.Blues)
     for i in range(num_events):
-      for j in range(num_events+num_actions+1):
-        plt.text(i+0.5, j+0.5, round(score_mat[j, i], 2), color='orange')
+      # XXX for j in range(num_events+num_actions+1):
+      for j in range(num_events+1):
+        if score_mat[j, i]:
+          plt.text(i+0.5, j+0.5, round(score_mat[j, i], 2), ha='center', color='orange')
     ax.set_xticks(si[1:]-0.5)
     ax.set_yticks(ti[1:]-0.5)
     ax.set_xticklabels(e_tokens)
-    ax.set_yticklabels(v_labels+[NULL]+e_tokens) 
+    # XXX ax.set_yticklabels(v_labels+[NULL]+e_tokens)
+    ax.set_yticklabels([NULL]+e_tokens) 
     plt.xticks(rotation=45)
+    plt.yticks(rotation=45)
+    plt.gca().invert_yaxis()
     plt.colorbar()
-    plt.savefig(os.path.join(model_path, doc_id+'.png'))
+    plt.savefig(os.path.join(root, model_path, doc_id+'.png'))
     plt.close()
 
 if __name__ == '__main__':
   import argparse
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   parser.add_argument('--task', type=int)
+  parser.add_argument('--config', type=str)
   parser.add_argument('--mention_type', choices={'events', 'entities'}, default='events')
   args = parser.parse_args()
 
@@ -233,12 +254,17 @@ if __name__ == '__main__':
                              label_file,
                              ontology_file,
                              freq_file)
-  if args.task == 3: # TODO
-    select_ids = []
+  if args.task == 3:
+    config = json.load(open(args.config))
+    select_ids = ['21Dgp1Zn-7w', '3XqUPrMEQx0', '69MJOTL3Sh8',
+                  '6SQnvbd2AQc', 'FpMHb_-nrCQ', 'LHIbc7koTUE']
     # ['92PLcoWtn0Q', '9tx72NIbwh8', 'AohILHV6i8Q', 'GLOGR0UsBtk', 
     # 'LHIbc7koTUE', 'PaVqCYxGzp0', 'SvrpxITQ3Pk', 'dY_hkbVQA20', 
     # 'eaW-mv9IKOs', 'f3plTR1Dcew', 'fDm7S-pjpOo', 'fsYMznJdCok']
-
-    if doc_id in select_ids:
-      plot_attention(predictions[doc_idx], event_feats_test[doc_idx], action_labels_test[doc_idx], out_prefix=os.path.join(config['model_path'], doc_id))
-
+    if "visual" in config['modes']:
+      plot_attention(config, select_ids)
+    else:
+      plot_attention(config, select_ids, text_only=True)
+  if args.task == 4:
+    result_csv = 'unsupervised/models/result_vs_nclusters/results.csv'
+    plot_result_vs_nclusters(result_csv)
