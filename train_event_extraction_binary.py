@@ -188,23 +188,17 @@ def train(text_model,
       # Compute visual event logits of size (batch size, n event class)
       video_output = visual_model(videos, action_span_mask)
       # (batch size, action num, n event class)
-      visual_event_logits, _ = attention_model(video_output, action_mask)
+      visual_event_logit, _ = attention_model(video_output, action_mask)
       
       # Compute textual event logits of size (batch size, span num, n event class)
       text_output = text_model(mention_output)
-
-      # (batch size, span num, n event class) & (batch size, span num, event num)
-      text_event_logits, attn_weights = attention_model(text_output, mention_mask) 
-      text_event_logprobs = F.log_softmax(text_event_logits, dim=-1)
+      text_event_logit, _ = attention_model(text_output, mention_mask) 
 
       # text_event_logits = weight_visual * visual_event_logit.unsqueeze(-2) + (1 - weight_visual) * text_event_logits
-      
+      # loss = criterion(text_event_logits.view(-1, n_event_class), event_labels.flatten())
       binary_event_labels = ((F.one_hot(event_labels, n_event_class) * mention_mask.unsqueeze(-1)).sum(-2) > 0).float()
-      text_event_logprobs = torch.matmul(text_event_logprobs, binary_event_labels) 
-      text_event_logprobs = (text_event_logprobs * attn_weights).sum(-1)
-      
-      # weight_visual * visual_event_logit + (1 - weight_visual) * text_event_logit
-      loss = (text_event_logprobs * mention_mask).sum(-1).mean()
+      text_event_logit = weight_visual * visual_event_logit + (1 - weight_visual) * text_event_logit
+      loss = criterion(text_event_logit, binary_event_labels)
       
       optimizer.zero_grad()
       loss.backward()
@@ -312,16 +306,18 @@ def test(text_model,
         # Compute visual event logits of size (batch size, n event class)
         video_output = visual_model(videos, action_span_mask)
         # (batch size, action num, n event class)
-        visual_event_logits, _ = attention_model(video_output, action_mask)
+        visual_event_logit, _ = attention_model(video_output, action_mask)
         
         # Compute textual event logits of size (batch size, span num, n event class)
         text_output = text_model(mention_output)
-        text_event_logits, _ = attention_model(text_output, mention_mask) 
-
+        text_event_logit, _ = attention_model(text_output, mention_mask) 
+        
         # text_event_probs = F.softmax(text_event_logits, dim=-1)
-        # text_event_logits = weight_visual * visual_event_logit.unsqueeze(-2) + (1 - weight_visual) * text_event_logits 
-        # text_event_logit = weight_visual * visual_event_logit + (1 - weight_visual) * text_event_logit
+        # text_event_logits = weight_visual * visual_event_logit.unsqueeze(-2) + (1 - weight_visual) * text_event_logits
 
+        binary_event_labels = ((F.one_hot(event_labels, n_event_class) * mention_mask.unsqueeze(-1)).sum(-2) > 0).float()
+        text_event_logit = weight_visual * visual_event_logit + (1 - weight_visual) * text_event_logit
+        
         B = doc_embeddings.size(0)
         for idx in range(B):
           global_idx = i * test_loader.batch_size + idx
@@ -329,13 +325,17 @@ def test(text_model,
               continue
           doc_id = test_loader.dataset.doc_ids[global_idx]
           tokens = [token[2] for token in test_loader.dataset.documents[doc_id]]
-          pred_event_label = text_event_probs[idx, :span_num[idx]].max(-1)[1].cpu().detach()
-          gold_event_label = event_labels[idx, :span_num[idx]].cpu().detach()
+          # pred_event_label = text_event_probs[idx, :span_num[idx]].max(-1)[1].cpu().detach()
+          pred_event_label = (text_event_logit[idx] > 0).long().cpu().detach()
+          # gold_event_label = event_labels[idx, :span_num[idx]].cpu().detach()
+          gold_event_label = binary_event_labels[idx].long().cpu().detach()
           
           event_label_dict = test_loader.dataset.event_label_dict[doc_id]
           mention_str = ', '.join([' '.join(tokens[start:end+1]) for start, end in sorted(event_label_dict)])
-          pred_event_str = ', '.join([event_types[p] for p in pred_event_label.numpy()])
-          gold_event_str = ', '.join([event_types[g] for g in gold_event_label.numpy()])
+          # pred_event_str = ', '.join([event_types[p] for p in pred_event_label.numpy()])
+          # gold_event_str = ', '.join([event_types[g] for g in gold_event_label.numpy()])
+          pred_event_str = ', '.join([event_types[p] for p in range(n_event_class) if pred_event_label.numpy()[p] > 0])
+          gold_event_str = ', '.join([event_types[g] for g in range(n_event_class) if gold_event_label.numpy()[g] > 0])
           token_str = ' '.join(tokens).replace('\n', '')
           f_out.write(f"{doc_id}: {token_str}\n")
           f_out.write(f'Mentions: {mention_str}\n')
@@ -347,8 +347,10 @@ def test(text_model,
       f_out.close()
       pred_event_labels = torch.cat(pred_event_labels)
       gold_event_labels = torch.cat(gold_event_labels)
+      # event_prec, event_rec, event_f1, _ = precision_recall_fscore_support(gold_event_labels.numpy(),
+      #                                                                     pred_event_labels.numpy(), average='macro')
       event_prec, event_rec, event_f1, _ = precision_recall_fscore_support(gold_event_labels.numpy(),
-                                                                           pred_event_labels.numpy(), average='macro')
+                                                                           pred_event_labels.numpy(), average='binary')
       print('[Event Classification Result]')
       info = f'Event classification - Recall: {event_prec:.4f}, Precision: {event_rec:.4f}, F1: {event_f1:.4f}\n'
       print(info)
