@@ -238,7 +238,6 @@ class TextVideoEventDataset(Dataset):
         start_bert_idx, end_bert_idx = [], []
         original_tokens = []
         alignment = []
-        # clean_start_end = -1 * np.ones(len(tokens), dtype=np.int)
         bert_cursor = -1
         for i, token in enumerate(tokens):
             sent_id, token_id, token_text, flag_sentence = token
@@ -255,15 +254,13 @@ class TextVideoEventDataset(Dataset):
                 start_bert_idx.append(-1)
                 end_bert_idx.append(-1)
 
-            # clean_start_end[i] = len(original_tokens)
             original_tokens.append(token)
         docs_bert_tokens.append(bert_tokens_ids)
         docs_origin_tokens.append(original_tokens)
         alignments.append(alignment)
-        # clean_start_end_dict[doc_id] = clean_start_end.tolist() 
         start_end = np.concatenate((np.expand_dims(start_bert_idx, 1), np.expand_dims(end_bert_idx, 1)), axis=1)
         docs_start_end_bert.append(start_end)
-    return docs_origin_tokens, docs_bert_tokens, docs_start_end_bert, alignments #, clean_start_end_dict
+    return docs_origin_tokens, docs_bert_tokens, docs_start_end_bert, alignments
 
   def extract_mention_type(self, pos_tag):
     if pos_tag in ['PRP', 'PRP$']:
@@ -629,20 +626,28 @@ class TextVideoEventDataset(Dataset):
     action_embeddings = torch.FloatTensor(action_embeddings)
 
     if self.use_action_boundary:
-      action_segment_embeddings = []
-      masks = []
-      labels = -1 * np.ones(self.max_action_num) 
+      action_segment_dict = {NULL:[torch.zeros((30, 400), dtype=torch.float)]}
+      masks = [torch.zeros(30, dtype=torch.float)]
+      labels = torch.zeros(self.max_action_num, dtype=torch.long)      
       for span_idx, span in enumerate(sorted(self.action_label_dict[doc_id])):
         seg = action_embeddings[span[0]:span[1]+1]
-        action_segment_embeddings.append(fix_embedding_length(seg, 30))
-        mask = torch.zeros(30, dtype=torch.float)
-        mask[:span[1]-span[0]+1] = 1.
-        masks.append(mask)
         label = self.action_label_dict[doc_id][span]
+        if not label in action_segment_dict:
+            action_segment_dict[label] = []
+        action_segment_dict[label].append(seg)
+
+      action_segment_embeddings = []
+      for span_idx, label in enumerate(sorted(action_segment_dict)):
+        segment = torch.cat(action_segment_dict[label])  
+        action_segment_embeddings.append(fix_embedding_length(segment, 30))
+        mask = torch.zeros(30, dtype=torch.float)
+        mask[:segment.size(0)] = 1.
+        masks.append(mask)
+
         if label in self.ontology_map:
-            labels[span_idx] = self.event_stoi[self.ontology_map[label]]
-      masks = fix_embedding_length(torch.stack(masks), 20)
-      action_segment_embeddings = fix_embedding_length(torch.stack(action_segment_embeddings), 20) 
+            labels[span_idx+1] = self.event_stoi[self.ontology_map[label]]
+      masks = fix_embedding_length(torch.stack(masks), 10)
+      action_segment_embeddings = fix_embedding_length(torch.stack(action_segment_embeddings), 10) 
     else:
       action_segment_embeddings = action_embeddings.unsqueeze(-2)
       masks = torch.ones(100, 1)

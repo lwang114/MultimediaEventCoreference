@@ -356,7 +356,7 @@ class VisProDataset:
  
   def load_image(self, idx):
     doc_id = self.doc_ids[idx]
-    class_labels = torch.LongTensor(self.visual_dict[doc_id])
+    class_labels = torch.LongTensor([0]+self.visual_dict[doc_id])
     object_num = class_labels.size(0)
     class_mask = torch.zeros(self.max_object_num)
     class_mask[:object_num] = 1.
