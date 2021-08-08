@@ -81,6 +81,7 @@ class VisProDataset:
     self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     self.max_token_num = config.get('max_token_num', 512)
     self.max_span_num = config.get('max_span_num', 80)
+    self.max_pair_num = self.max_span_num * (self.max_span_num - 1) / 2
     self.max_object_num = config.get('max_object_num', 20)
     self.max_frame_num = config.get('max_frame_num', 100)
     self.max_mention_span = config.get('max_mention_span', 15)
@@ -138,9 +139,14 @@ class VisProDataset:
       doc_id = f'{doc_dict["doc_key"]}_{doc_dict["image_file"]}' 
       clusters = doc_dict['clusters']
       if len(clusters):
-          mention_dict[doc_id] = {tuple(span):c_idx+1 for c_idx, c in enumerate(clusters) for span in c}
+          mention_dict[doc_id] = {tuple(span):{'cluster_id':c_idx+1, 'candidate_NPs':[] for c_idx, c in enumerate(clusters) for span in c}
       else:
-          mention_dict[doc_id] = {(-1, -1):0}
+          mention_dict[doc_id] = {(-1, -1):{'cluster_id':0, 'candidate_NPs':[]}
+
+      for p in doc_dict['pronoun_info']:
+        span = (p['start'], p['end'])
+        mention_dict[doc_id][span]['candidate_NPs'] = p['candidate_NPs']
+
       visual_dict[doc_id] = doc_dict['object_detection']
       for c in doc_dict['object_detection']:
           if not c in class_stoi:
@@ -338,11 +344,19 @@ class VisProDataset:
     width = fix_embedding_length(width.unsqueeze(1), self.max_span_num).squeeze(1)
 
     # Extract coreference cluster labels
-    labels = [self.mention_dict[doc_id][(start, end)]\
+    labels = [self.mention_dict[doc_id][(start, end)]['cluster_ids']\
               for start, end in zip(candidate_starts, candidate_ends)]
     labels = torch.LongTensor(labels)
     labels = fix_embedding_length(labels.unsqueeze(1), self.max_span_num).squeeze(1)
     
+    first_idxs = [first_idx for first_idx, span in enumerate(sorted(self.mention_dict[doc_id]))\
+                  for _ in self.mention_dict[doc_id][span]['candidate_NPs']]
+    second_idxs = [second_idx for _, span in enumerate(sorted(self.mention_dict[doc_id]))\
+                   for second_idx in self.mention_dict[doc_id][span]['candidate_NPs']]
+    pairwise_labels = [((labels[first_idx] == labels[second_idx]) & (labels[first_idx] != 0)).long()
+                       for first_idx, second_idx in zip(first_idxs, second_idxs)]
+    pairwise_labels = fix_embedding_length(torch.cat(pairwise_labels).unsqueeze(1), self.max_pair_num).squeeze(1)
+
     text_mask = torch.FloatTensor([1. if j < doc_len else 0 for j in range(self.max_token_num)])
     span_mask = continuous_mappings.sum(dim=1)
     return {'doc_embeddings': doc_embeddings,
@@ -351,6 +365,9 @@ class VisProDataset:
             'continuous_mappings': continuous_mappings,
             'width': width,
             'cluster_labels': labels,
+            'first_idxs': first_idxs,
+            'second_idxs': second_idxs,
+            'pairwise_labels': pairwise_labels,
             'text_mask': text_mask,
             'span_mask': span_mask}
  
