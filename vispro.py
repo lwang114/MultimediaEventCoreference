@@ -83,7 +83,7 @@ class VisProDataset:
     self.debug = config['debug']
     self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     self.max_token_num = config.get('max_token_num', 512)
-    self.max_span_num = config.get('max_span_num', 80)
+    self.max_span_num = config.get('max_span_num', 100)
     self.max_pair_num = int(self.max_span_num * (self.max_span_num - 1) // 2)
     self.max_object_num = config.get('max_object_num', 20)
     self.max_frame_num = config.get('max_frame_num', 100)
@@ -94,8 +94,7 @@ class VisProDataset:
     self.tokenizer = AutoTokenizer.from_pretrained(config['bert_model'])
     self.mention_dict,\
     self.visual_dict,\
-    self.documents,\
-    self.class_stoi = self.extract_meta_info(mention_json)
+    self.documents = self.extract_meta_info(mention_json)
     self.doc_ids = sorted(self.documents)
     print(f'Number of documents in {split}: {len(self.doc_ids)}')
     
@@ -118,8 +117,6 @@ class VisProDataset:
     self.glove_embeddings = np.load(glove_embed_file)
 
     if not class_stoi:
-      # class_itos = json.load(open(os.path.join(config['data_folder'], 'class_itos.json'), 'r')) #
-      # self.class_stoi = {s:i for i, s in enumerate(class_itos)}
       self.class_stoi = {str(i):i for i in range(100)}
     else:
       self.class_stoi = class_stoi
@@ -139,33 +136,39 @@ class VisProDataset:
           if len(mention_dict) >= 20:
               break
       doc_dict = json.loads(line)
-      doc_id = f'{doc_dict["doc_key"]}_{doc_dict["image_file"]}' 
+      
+      doc_id = doc_dict['doc_key']
       clusters = doc_dict['clusters']
       if len(clusters):
           mention_dict[doc_id] = {tuple(span):{'cluster_id':c_idx+1,
-                                               'candidate_NPs':[]}
+                                               'candidate_NPs':[],
+                                               'class':0}
                                   for c_idx, c in enumerate(clusters) for span in c}
       else:
           mention_dict[doc_id] = {(-1, -1):{'cluster_id':0,
-                                            'candidate_NPs':[]}}
+                                            'candidate_NPs':[],
+                                            'class':0}}
 
       for p in doc_dict['pronoun_info']:
           span = tuple(p['current_pronoun'])
           if not span in mention_dict[doc_id]: # Ignore non-referential pronouns
               continue
+          mention_dict[doc_id][span]['class'] = p.get('class', 0)
           mention_dict[doc_id][span]['candidate_NPs'] = p['candidate_NPs']
+
           for m in p['candidate_NPs']:
               m = tuple(m)
               if not m in mention_dict[doc_id]: # Add singletons
                   mention_dict[doc_id][m] = {'cluster_id':0,
-                                                    'candidate_NPs':[]}
-          
-      visual_dict[doc_id] = doc_dict['object_detection']
+                                             'candidate_NPs':[],
+                                             'class':0}
+
+      visual_dict[doc_id] = [] 
       for c in doc_dict['object_detection']:
-          if not c in class_stoi:
-              class_stoi[c] = len(class_stoi)
+          visual_dict[doc_id].append(c)
+      
       documents[doc_id] = [[sent_id, 0, token, 0] for sent_id, sent in enumerate(doc_dict['sentences']) for token in sent]
-    return mention_dict, visual_dict, documents, class_stoi
+    return mention_dict, visual_dict, documents
   
   def tokenize(self, documents):
     bert_tokens_all = []
@@ -359,6 +362,8 @@ class VisProDataset:
     # Extract coreference cluster labels
     labels = [self.mention_dict[doc_id][(start, end)]['cluster_id']\
               for start, end in zip(candidate_starts, candidate_ends)]
+    type_labels = [self.mention_dict[doc_id][(start, end)]['class']\
+                   for start, end in zip(candidate_starts, candidate_ends)]
     span_map = {s:i for i, s in enumerate(sorted(self.mention_dict[doc_id]))}
     first_idxs = [first_idx for first_idx, span in enumerate(sorted(self.mention_dict[doc_id]))\
                   for _ in self.mention_dict[doc_id][span]['candidate_NPs']]
@@ -370,6 +375,9 @@ class VisProDataset:
     labels = torch.LongTensor(labels)
     labels = fix_embedding_length(labels.unsqueeze(1), self.max_span_num).squeeze(1)
 
+    type_labels = torch.LongTensor(type_labels)
+    type_labels = fix_embedding_length(type_labels.unsqueeze(1), self.max_span_num).squeeze(1)
+    
     first_idxs = torch.LongTensor(first_idxs)
     first_idxs = fix_embedding_length(first_idxs.unsqueeze(1),
                                       self.max_pair_num,
@@ -393,6 +401,7 @@ class VisProDataset:
             'first_idxs': first_idxs,
             'second_idxs': second_idxs,
             'pairwise_labels': pairwise_labels,
+            'type_labels': type_labels,
             'text_mask': text_mask,
             'span_mask': span_mask}
  

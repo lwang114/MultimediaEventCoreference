@@ -175,30 +175,35 @@ def train(text_model,
       width = batch['width'].to(device)
 
       # videos = batch['visual_embeddings'].to(device)
-      # text_labels = batch['cluster_labels'].to(device)
       class_labels = batch['class_labels'].to(device)
+      type_labels = batch['type_labels'].to(device)
       pairwise_labels = batch['pairwise_labels'].to(device)
       first_idxs = batch['first_idxs'].to(device) 
       second_idxs = batch['second_idxs'].to(device)
 
       text_mask = batch['text_mask'].to(device)
       span_mask = batch['span_mask'].to(device)
-      class_mask = batch['class_mask'].to(device) # TODO Change the definition of visual_mask and add visual span mask to video m2e2 dataloader
+      class_mask = batch['class_mask'].to(device)
       mention_mask = (span_mask.sum(-1) > 0).float()
 
-      # span_num = (span_mask.sum(-1) > 0).long().sum(-1)
       pair_num = (first_idxs > 0).long().sum(-1)
       class_num = (class_mask.sum(-1) > 0).long().sum(-1)
 
       binary_class_labels = F.one_hot(class_labels, n_class).float() * class_mask.unsqueeze(-1)
       
       # Compute mention embeddings
+      if 'type' in config.get('linguistic_feature_types', []):
+          linguistic_labels = type_labels.unsqueeze(-1)
+      else:
+          linguistic_labels = None
+          
       mention_embedding = mention_model(doc_embeddings,
                                         start_mappings,
                                         end_mappings,
                                         continuous_mappings, 
                                         width, 
-                                        attention_mask=text_mask)
+                                        attention_mask=text_mask,
+                                        linguistic_labels=linguistic_labels)
       
       # Compute textual event logits of size (batch size, span num, n event class)
       mention_output = text_model(mention_embedding)
@@ -326,9 +331,9 @@ def test(text_model,
         continuous_mappings = batch['continuous_mappings'].to(device)
         width = batch['width'].to(device)
         
-        # videos = batch['visual_embeddings'].to(device)
         text_labels = batch['cluster_labels'].to(device) 
         class_labels = batch['class_labels'].to(device)
+        type_labels = batch['type_labels'].to(device)
         pairwise_labels = batch['pairwise_labels'].to(device) 
         first_idxs = batch['first_idxs'].to(device)
         second_idxs = batch['second_idxs'].to(device)
@@ -345,12 +350,18 @@ def test(text_model,
         binary_class_labels = F.one_hot(class_labels, n_class).float() * class_mask.unsqueeze(-1)
   
         # Compute mention embeddings
+        if 'type' in config.get('linguistic_feature_types', []):
+            linguistic_labels = type_labels.unsqueeze(-1)
+        else:
+            linguistic_labels = None
+            
         mention_embedding = mention_model(doc_embeddings,
                                           start_mappings,
                                           end_mappings,
                                           continuous_mappings, 
                                           width,
-                                          attention_mask=text_mask)
+                                          attention_mask=text_mask,
+                                          linguistic_labels=linguistic_labels)
         
         # Compute textual event logits of size (batch size, span num, n event class)
         mention_output = text_model(mention_embedding)
@@ -449,10 +460,10 @@ def test(text_model,
       results['avg'] = avg
       """
       results['pairwise'] = (eval.get_precision().item(), eval.get_recall().item(), eval.get_f1().item(), average_precision)
-      results['muc'] = 0
-      results['bcubed'] = 0
-      results['ceafe'] = 0
-      results['avg'] = 0
+      results['muc'] = (0, 0, 0)
+      results['bcubed'] = (0, 0, 0)
+      results['ceafe'] = (0, 0, 0)
+      results['avg'] = (0, 0, 0)
 
       return results
 
@@ -528,10 +539,14 @@ if __name__ == '__main__':
       visual_coref_model = CrossmediaPairWiseClassifier(config).to(device)
       
       if config['training_method'] in ('pipeline', 'continue') or args.evaluate_only:
-        text_model.load_state_dict(torch.load(config['text_model_path'], map_location=device))
-        mention_model.load_state_dict(torch.load(config['mention_model_path']))
-        visual_coref_model.load_state_dict(torch.load(config['visual_coref_model_path'], map_location=device))
-        visual_coref_model.load_state_dict(torch.load(config['visual_coref_model_path'], map_location=device))
+        text_model.load_state_dict(torch.load(os.path.join(config['model_path'],
+                                                           f'best_text_model-{seed}.pth'), map_location=device))
+        mention_model.load_state_dict(torch.load(os.path.join(config['model_path'],
+                                                              f'best_mention_model-{seed}.pth')))
+        visual_coref_model.load_state_dict(torch.load(os.path.join(config['model_path'],
+                                                                   f'best_visual_coref_model-{seed}.pth'), map_location=device))
+        text_coref_model.load_state_dict(torch.load(os.path.join(config['model_path'],
+                                                                 f'best_text_coref_model-{seed}.pth'), map_location=device))
       
       n_params = 0
       for p in text_model.parameters():
