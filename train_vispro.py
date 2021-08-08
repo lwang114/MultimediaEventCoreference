@@ -215,16 +215,14 @@ def train(text_model,
         first_text_idx = first_idxs[idx, :pair_num[idx]].cpu().detach().numpy()
         second_text_idx = second_idxs[idx, :pair_num[idx]].cpu().detach().numpy()
 
-        if first_text_idx is None:
+        if not len(first_text_idx):
           continue
         pairwise_text_label = pairwise_labels[idx, :pair_num[idx]]
         visual_score = visual_coref_model.module.crossmedia_score(first_text_idx,
                                                                   second_text_idx,
                                                                   attn_weights[idx],
                                                                   use_null=True)
-        first_text_idx = first_text_idx.squeeze(0)
-        second_text_idx = second_text_idx.squeeze(0)
-        pairwise_text_label = pairwise_text_label.squeeze(0)
+
         text_score = text_coref_model(mention_embedding[idx, first_text_idx],
                                       mention_embedding[idx, second_text_idx])
         text_score = weight_visual * visual_score + (1 - weight_visual) * text_score
@@ -339,6 +337,8 @@ def test(text_model,
         span_mask = batch['span_mask'].to(device)
         class_mask = batch['class_mask'].to(device)
         span_num = (span_mask.sum(-1) > 0).long().sum(-1)
+
+        pair_num = (first_idxs > 0).long().sum(-1)
         class_num = (class_mask.sum(-1) > 0).long().sum(-1)
         mention_mask = (span_mask.sum(-1) > 0).float()
 
@@ -368,16 +368,15 @@ def test(text_model,
           first_text_idx = first_idxs[idx, :pair_num[idx]].cpu().detach().numpy()
           second_text_idx = second_idxs[idx, :pair_num[idx]].cpu().detach().numpy()
           pairwise_text_label = pairwise_labels[idx, :pair_num[idx]]
-          if first_text_idx is None:
+
+          if not len(first_text_idx):
             continue
 
           visual_score = visual_coref_model.module.crossmedia_score(first_text_idx,
                                                                     second_text_idx,
                                                                     attn_weights[idx],
                                                                     use_null=True)
-          first_text_idx = first_text_idx.squeeze(0)
-          second_text_idx = second_text_idx.squeeze(0)
-          pairwise_text_label = pairwise_text_label.squeeze(0)
+
           text_score = text_coref_model(mention_embedding[idx, first_text_idx],
                                         mention_embedding[idx, second_text_idx])
           text_score = weight_visual * visual_score + (1 - weight_visual) * text_score
@@ -449,6 +448,7 @@ def test(text_model,
       results['ceafe'] = ceafe
       results['avg'] = avg
       """
+      results['pairwise'] = (eval.get_precision().item(), eval.get_recall().item(), eval.get_f1().item(), average_precision)
       results['muc'] = 0
       results['bcubed'] = 0
       results['ceafe'] = 0

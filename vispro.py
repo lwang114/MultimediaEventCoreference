@@ -30,11 +30,14 @@ def get_all_token_mapping(start, end, max_token_num, max_mention_span):
     length = torch.LongTensor(length)
     return start_mappings, end_mappings, span_mappings, length
 
-def fix_embedding_length(emb, L):
+def fix_embedding_length(emb, L, padding=0):
   size = emb.size()[1:]
   if emb.size(0) < L:
-    pad = [torch.zeros(size, dtype=emb.dtype).unsqueeze(0) for _ in range(L-emb.size(0))]
-    emb = torch.cat([emb]+pad, dim=0)
+    if padding == 0:
+        pad = torch.zeros((L-emb.size(0), *size), dtype=emb.dtype)
+    else:
+        pad = padding * torch.ones((L-emb.size(0), *size), dtype=emb.dtype)
+    emb = torch.cat([emb, pad], dim=0)
   else:
     emb = emb[:L]
   return emb
@@ -81,7 +84,7 @@ class VisProDataset:
     self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     self.max_token_num = config.get('max_token_num', 512)
     self.max_span_num = config.get('max_span_num', 80)
-    self.max_pair_num = self.max_span_num * (self.max_span_num - 1) / 2
+    self.max_pair_num = int(self.max_span_num * (self.max_span_num - 1) // 2)
     self.max_object_num = config.get('max_object_num', 20)
     self.max_frame_num = config.get('max_frame_num', 100)
     self.max_mention_span = config.get('max_mention_span', 15)
@@ -126,7 +129,7 @@ class VisProDataset:
     Returns:
       mention_dict: mapping from "doc_id" (concatenation of doc_key and image_file) to
         a mapping from span (int, int) to int cluster id
-    """ 
+    """
     mention_dict = dict()
     visual_dict = dict()
     documents = dict()
@@ -139,14 +142,24 @@ class VisProDataset:
       doc_id = f'{doc_dict["doc_key"]}_{doc_dict["image_file"]}' 
       clusters = doc_dict['clusters']
       if len(clusters):
-          mention_dict[doc_id] = {tuple(span):{'cluster_id':c_idx+1, 'candidate_NPs':[] for c_idx, c in enumerate(clusters) for span in c}
+          mention_dict[doc_id] = {tuple(span):{'cluster_id':c_idx+1,
+                                               'candidate_NPs':[]}
+                                  for c_idx, c in enumerate(clusters) for span in c}
       else:
-          mention_dict[doc_id] = {(-1, -1):{'cluster_id':0, 'candidate_NPs':[]}
+          mention_dict[doc_id] = {(-1, -1):{'cluster_id':0,
+                                            'candidate_NPs':[]}}
 
       for p in doc_dict['pronoun_info']:
-        span = (p['start'], p['end'])
-        mention_dict[doc_id][span]['candidate_NPs'] = p['candidate_NPs']
-
+          span = tuple(p['current_pronoun'])
+          if not span in mention_dict[doc_id]: # Ignore non-referential pronouns
+              continue
+          mention_dict[doc_id][span]['candidate_NPs'] = p['candidate_NPs']
+          for m in p['candidate_NPs']:
+              m = tuple(m)
+              if not m in mention_dict[doc_id]: # Add singletons
+                  mention_dict[doc_id][m] = {'cluster_id':0,
+                                                    'candidate_NPs':[]}
+          
       visual_dict[doc_id] = doc_dict['object_detection']
       for c in doc_dict['object_detection']:
           if not c in class_stoi:
@@ -344,21 +357,33 @@ class VisProDataset:
     width = fix_embedding_length(width.unsqueeze(1), self.max_span_num).squeeze(1)
 
     # Extract coreference cluster labels
-    labels = [self.mention_dict[doc_id][(start, end)]['cluster_ids']\
+    labels = [self.mention_dict[doc_id][(start, end)]['cluster_id']\
               for start, end in zip(candidate_starts, candidate_ends)]
-    labels = torch.LongTensor(labels)
-    labels = fix_embedding_length(labels.unsqueeze(1), self.max_span_num).squeeze(1)
-    
+    span_map = {s:i for i, s in enumerate(sorted(self.mention_dict[doc_id]))}
     first_idxs = [first_idx for first_idx, span in enumerate(sorted(self.mention_dict[doc_id]))\
                   for _ in self.mention_dict[doc_id][span]['candidate_NPs']]
-    second_idxs = [second_idx for _, span in enumerate(sorted(self.mention_dict[doc_id]))\
-                   for second_idx in self.mention_dict[doc_id][span]['candidate_NPs']]
-    pairwise_labels = [((labels[first_idx] == labels[second_idx]) & (labels[first_idx] != 0)).long()
+    second_idxs = [span_map[tuple(second_span)] for _, span in enumerate(sorted(self.mention_dict[doc_id]))\
+                   for second_span in self.mention_dict[doc_id][span]['candidate_NPs']]
+    pairwise_labels = [int((labels[first_idx] == labels[second_idx]) & (labels[first_idx] != 0) & (labels[second_idx] != 0))
                        for first_idx, second_idx in zip(first_idxs, second_idxs)]
-    pairwise_labels = fix_embedding_length(torch.cat(pairwise_labels).unsqueeze(1), self.max_pair_num).squeeze(1)
 
+    labels = torch.LongTensor(labels)
+    labels = fix_embedding_length(labels.unsqueeze(1), self.max_span_num).squeeze(1)
+
+    first_idxs = torch.LongTensor(first_idxs)
+    first_idxs = fix_embedding_length(first_idxs.unsqueeze(1),
+                                      self.max_pair_num,
+                                      padding=-1).squeeze(1)
+    second_idxs = torch.LongTensor(second_idxs)
+    second_idxs = fix_embedding_length(second_idxs.unsqueeze(1),
+                                       self.max_pair_num,
+                                       padding=-1).squeeze(1)
+    pairwise_labels = torch.LongTensor(pairwise_labels)
+    pairwise_labels = fix_embedding_length(pairwise_labels.unsqueeze(1), self.max_pair_num).squeeze(1)
+    
     text_mask = torch.FloatTensor([1. if j < doc_len else 0 for j in range(self.max_token_num)])
     span_mask = continuous_mappings.sum(dim=1)
+
     return {'doc_embeddings': doc_embeddings,
             'start_mappings': start_mappings,
             'end_mappings': end_mappings,
