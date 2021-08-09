@@ -8,20 +8,17 @@ class Evaluation:
         self.labels = labels
         self.tp = (predictions == 1) * (labels == 1)
 
-        self.tp_num = self.tp.sum().to(torch.float) # nonzero().squeeze().shape[0]
+        self.tp_num = self.tp.sum().to(torch.float)        
         self.tn = (predictions != 1) * (labels != 1)
-        self.tn_num = self.tn.sum().to(torch.float) # nonzero().squeeze().shape[0]
+        self.tn_num = self.tn.sum().to(torch.float)
         self.fp = (predictions == 1) * (labels != 1)
-        self.fp_num = self.fp.sum().to(torch.float) # nonzero().squeeze().shape[0]
+        self.fp_num = self.fp.sum().to(torch.float)
         self.fn = (predictions != 1) * (labels == 1)
-        self.fn_num = self.fn.sum().to(torch.float) # nonzero().squeeze().shape[0]
+        self.fn_num = self.fn.sum().to(torch.float)
         self.total = len(labels)
-
-
 
         self.precision = self.tp_num / (self.tp_num + self.fp_num) if self.tp_num + self.fp_num != 0 else torch.zeros(1, device=predictions.device)
         self.recall = self.tp_num / (self.tp_num + self.fn_num) if self.tp_num + self.fn_num != 0 else torch.zeros(1, device=predictions.device)
-
 
     def get_fp(self):
         return self.fp.nonzero().squeeze()
@@ -46,6 +43,46 @@ class Evaluation:
 
     def get_f1(self):
         return 2 * self.precision * self.recall / (self.precision + self.recall) if (self.precision + self.recall) > 0 else torch.zeros(1, device=self.precision.device)
+
+    @static
+    def make_output_readable(first_idxs, 
+                             second_idxs, 
+                             pred_labels, 
+                             gold_labels,
+                             spans,
+                             tokens):
+      pred_dict = dict()
+      for first_idx, second_idx in zip(first_idxs, second_idxs):
+        # Extract mention tokens       
+        first_span = spans[first_idx]
+        first_token = tokens[first_span[0]:first_span[1]+1] 
+
+        # Extract candidate tokens
+        if not first_span in pred_dict:
+          pred_dict[first_span] = {'current_mention': first_token,
+                                   'predict_antecedents': [],
+                                   'correct_antecedents': []}
+        
+        second_span = spans[second_idx]
+        second_token = tokens[second_span[0]:second_span[1]+1]
+        if pred_labels[first_idx, second_idx]:
+          pred_dict[first_span]['predict_antecedents'].append(second_token)
+
+        if gold_labels[first_idx, second_idx]:
+          pred_dict[first_span]['correct_antecedents'].append(second_token)
+
+      # Print prediction
+      pred_str = 'Prediction:'
+      for span in pred_dict:
+        cur_str = f'\n{span}, {pred_dict[span]["current_mention"]} -> {pred_dict[span]["predict_antecedents"]}'
+        pred_str = pred_str + cur_str 
+
+      gold_str = 'Correct:'
+      for span in pred_dict:
+        cur_str = f'\n{span}, {pred_dict[span]["current_mention"]} -> {pred_dict[span]["correct_antecedents"]}'
+        gold_str = gold_str + cur_str
+
+      return pred_str, gold_str
 
 class RetrievalEvaluation:
   def __init__(self, predictions, labels=None):

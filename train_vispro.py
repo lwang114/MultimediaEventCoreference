@@ -20,8 +20,12 @@ from corpus import TextVideoEventDataset
 from vispro import VisProDataset
 from evaluator import Evaluation, CoNLLEvaluation
 from utils import create_type_stoi, create_feature_stoi
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 
+NULL = '###NULL###'
 def fix_seed(config):
     torch.manual_seed(config.random_seed)
     random.seed(config.random_seed)
@@ -41,6 +45,31 @@ def get_optimizer(config, models):
         return AdamW(parameters, lr=config.learning_rate, weight_decay=config.weight_decay, eps=config.adam_epsilon)
     else:
         return optim.SGD(parameters, momentum=0.9, lr=config.learning_rate, weight_decay=config.weight_decay)
+
+def plot_attention(attention,
+                   spans,
+                   tokens,
+                   class_labels,
+                   class_names,
+                   out_file):
+    fig, ax = plt.subplots(figsize=(7, 10))
+    plt.pcolor(attention.T, vmin=0., vmax=1., cmap=plt.cmap.Blues)
+    span_strs = [tokens[span[0]:span[1]+1] for span in spans]
+    class_strs = [class_names[c] for c in class_labels]
+    num_spans = len(spans)
+    num_classes = len(class_labels)
+    for i in range(num_spans):
+      for j in range(num_classes):
+        plt.text(i, j, round(attention[i, j], 2), color='orange')
+
+    plt.set_xticks([i+0.5 for i in range(num_spans)])
+    plt.set_yticks([j+0.5 for j in range(num_classes)])
+    plt.set_xticklabels(span_strs)
+    plt.set_yticklabels(class_strs)
+    plt.xticks(rotation=45, fontsize=30)
+    plt.colorbar()
+    plt.savefig(out_file)
+    plt.close()
 
 def get_pairwise_labels(text_labels, 
                         action_labels, 
@@ -393,34 +422,28 @@ def test(text_model,
           text_score = weight_visual * visual_score + (1 - weight_visual) * text_score
           text_scores.append(text_score)
           pairwise_text_labels.append(pairwise_text_label)
-          """ 
-          predicted_antecedents = text_coref_model.module.predict_cluster(
-                                             text_score,
-                                             first_text_idx,
-                                             second_text_idx)
 
-          candidate_start_ends = test_loader.dataset.candidate_start_ends[global_idx]
-          predicted_antecedents = torch.LongTensor(predicted_antecedents)
-          candidate_start_ends = torch.LongTensor(candidate_start_ends)
-
-          pred_clusters, gold_clusters = conll_eval(candidate_start_ends,
-                                                    predicted_antecedents,
-                                                    candidate_start_ends,
-                                                    text_labels[idx, :span_num[idx]])
-          
-          doc_id = test_loader.dataset.doc_ids[global_idx]
-          tokens = [token[2] for token in test_loader.dataset.documents[doc_id]]
-          mention_dict = test_loader.dataset.mention_dict[doc_id]
-          pred_clusters_str,\
-          gold_clusters_str = conll_eval.make_output_readable(
-                                  pred_clusters, 
-                                  gold_clusters,
-                                  tokens)
-          token_str = ' '.join(tokens).replace('\n', '')
+          # Save readable predictions
+          pred_str, gold_str = Evaluation.make_output_readable(first_text_idx,
+                                                               second_text_idx,
+                                                               (text_score > 0).long().cpu().detach().numpy(),
+                                                               pairwise_text_label.cpu().detach().numpy(),
+                                                               candidate_start_ends,
+                                                               tokens)
           f_out.write(f"{doc_id}: {token_str}\n")
-          f_out.write(f'Pred: {pred_clusters_str}\n')
-          f_out.write(f'Gold: {gold_clusters_str}\n')
-          """
+          f_out.write(f"{pred_str}\n")
+          f_out.write(f"{gold_str}\n")
+
+          # Save crossmedia attention maps
+          attention = torch.softmax(attn_weights[idx, :span_num[idx], :class_num[idx]], dim=-1)
+          plot_attention(attention.cpu().detach().numpy(), 
+                         tokens, 
+                         candidate_start_ends,
+                         tokens,
+                         class_labels,
+                         class_names,
+                         os.path.join(attention_path, doc_id+'.png'))
+
           all_scores.append(text_score.squeeze(1))
           all_labels.append(pairwise_text_label)
       f_out.close()
@@ -488,23 +511,14 @@ if __name__ == '__main__':
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
 
   # Initialize dataloaders
-  """
-  splits = [os.path.join(config['data_folder'], 'train_events.json'),
-            os.path.join(config['data_folder'], 'test_events.json')]
-  
-  event_stoi = create_type_stoi(splits) 
+  ontology_map_file = os.path.join(config['data_folder'], '../ontology_map.json')
+  if os.path.exists(ontology_map_file):
+    t2v_map = json.load(open(ontology_map_file))
+    class_stoi = {t:i+1 for i, t in enumerate(sorted(t2v_map))} 
+    class_stoi[NULL] = 0
 
-  train_set = TextVideoEventDataset(config, 
-                                    event_stoi, 
-                                    dict(),
-                                    split='train')
-  test_set = TextVideoEventDataset(config, 
-                                   event_stoi, 
-                                   dict(),
-                                   split='test')
-  """
-  train_set = VisProDataset(config, split='train')
-  test_set = VisProDataset(config, split='test')
+  train_set = VisProDataset(config, split='train', class_stoi=class_stoi)
+  test_set = VisProDataset(config, split='test', class_stoi=class_stoi)
   
   pairwises  = []
   mucs = []
