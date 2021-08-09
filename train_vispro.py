@@ -60,13 +60,18 @@ def plot_attention(attention,
     num_classes = len(class_labels)
     for i in range(num_spans):
       for j in range(num_classes):
-        plt.text(i, j, round(attention[i, j], 2), color='orange')
+        plt.text(i, j, 
+                 round(attention[i, j], 2), 
+                 color='orange', 
+                 ha='center', 
+                 fontsize=12)
 
     plt.set_xticks([i+0.5 for i in range(num_spans)])
     plt.set_yticks([j+0.5 for j in range(num_classes)])
     plt.set_xticklabels(span_strs)
     plt.set_yticklabels(class_strs)
     plt.xticks(rotation=45, fontsize=30)
+    plt.yticks(fontsize=30)
     plt.colorbar()
     plt.savefig(out_file)
     plt.close()
