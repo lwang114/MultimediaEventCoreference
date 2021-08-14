@@ -106,6 +106,7 @@ class VisProDataset:
   
     bert_embed_file = os.path.join(config['data_folder'], f'{split}_{config["bert_model"]}.npz')
     glove_embed_file = os.path.join(config['data_folder'], f'{split}_glove_embeddings.npz')
+    elmo_embed_file = os.path.join(config['data_folder'], f'ELMo_Vispro.npz')
 
     if not os.path.exists(bert_embed_file):
       self.extract_bert_embeddings(config['bert_model'], bert_embed_file)
@@ -113,8 +114,13 @@ class VisProDataset:
       glove_file = config.get('glove_file', 'm2e2/data/glove/glove.840B.300d.txt')
       self.extract_glove_embeddings(glove_file, glove_embed_file)
 
+    self.embed_type = config['embed_type']
     self.docs_embeddings = np.load(bert_embed_file)
     self.glove_embeddings = np.load(glove_embed_file)
+    if not os.path.exists(elmo_embed_file):
+      self.elmo_embeddings = None
+    else:
+      self.elmo_embeddings = np.load(elmo_embed_file)
 
     if not class_stoi:
       self.class_stoi = {str(i):i for i in range(100)}
@@ -130,7 +136,6 @@ class VisProDataset:
     mention_dict = dict()
     visual_dict = dict()
     documents = dict()
-    class_stoi = dict()
     for line in open(mention_json, 'r'):
       if self.debug:
           if len(mention_dict) >= 20:
@@ -167,7 +172,9 @@ class VisProDataset:
       for c in doc_dict['object_detection']:
           visual_dict[doc_id].append(c)
       
-      documents[doc_id] = [[sent_id, 0, token, 0] for sent_id, sent in enumerate(doc_dict['sentences']) for token in sent]
+      documents[doc_id] = [[sent_id, 0, token, 0]\
+                            for sent_id, sent in enumerate(doc_dict['sentences'])\
+                              for token in sent]
     return mention_dict, visual_dict, documents
   
   def tokenize(self, documents):
@@ -323,8 +330,8 @@ class VisProDataset:
     for i, token_idx in enumerate(alignment):
         aligned_glove_embs[i] = glove_embs[token_idx]
     return aligned_glove_embs
-  
-  def load_text(self, idx):
+
+  def load_bert(self, idx):
     doc_id = self.doc_ids[idx]
     alignment = self.alignments[idx]
     candidate_starts = self.candidate_start_ends[idx][:, 0]
@@ -334,6 +341,7 @@ class VisProDataset:
     # Extract the current doc embedding
     bert_tokens = self.bert_tokens[idx]
     doc_len = len(bert_tokens)
+
     doc_embeddings = self.docs_embeddings[doc_id][:doc_len]
     if self.add_glove:
       glove_embeddings = self.align_glove_with_bert(self.glove_embeddings[doc_id], alignment)
@@ -352,7 +360,58 @@ class VisProDataset:
                           self.max_token_num,
                           self.max_mention_span)
     width = torch.LongTensor([min(w, self.max_mention_span) for w in width])
-     
+    return doc_embeddings,\
+           start_mappings,\
+           end_mappings,\
+           continuous_mappings,\
+           width
+
+  def load_elmo(self, idx):
+    doc_id = self.doc_ids[idx]
+    tokens = self.documents[doc_id]
+    caption = [t for t in tokens if t[0] == 0]
+    caption_len = len(caption)
+    caption_embs = torch.zeros((caption_len, 3072))
+
+    caption_mentions = [span for span in self.candidate_start_ends[idx] if tokens[span[0]][0] == 0]  
+    caption_mention_embs = self.elmo_embeddings[f'{doc_id}:cap'] 
+    mention_lens = self.elmo_embeddings[f'{doc_id}:cap:lengths'] # TODO confirm
+    print('len(caption_mentions), len(caption_mention_lens), expected equal: ', len(caption_mentions), len(caption_mention_lens)) # XXX
+    assert len(caption_mentions) == len(caption_mention_lens)
+    offset = 0
+    for m_idx, (start, end) in caption_mentions:
+      caption_embs[start:end+1] = caption_mention_embs[offset:offset+mention_lens[m_idx]].reshape(-1, 3072)
+      offset += len(mention_lens[m_idx])
+
+    dialogue_embs = self.elmo_embeddings[doc_id]
+    start_mappings, end_mappings, continuous_mappings, width =\
+      get_all_token_mapping(self.candidate_start_ends[idx, 0],
+                            self.candidate_start_ends[idx, 1],
+                            self.max_token_num,
+                            self.max_mention_span) 
+    width = torch.LongTensor([min(w, self.max_mention_span) for w in width])
+    
+    doc_embeddings = torch.cat([caption_embs, dialogue_embs], dim=0)
+    return doc_embeddings,
+           start_mappings,\
+           end_mappings,\
+           continuous_mappings,\
+           width
+
+  def load_text(self, idx):
+    if self.embed_type == 'bert':
+      doc_embeddings,\
+      start_mappings,\
+      end_mappings,\
+      continuous_mappings,\
+      width = self.load_bert(idx)
+    elif self.embed_type == 'elmo':
+      doc_embeddings,\
+      start_mappings,\
+      end_mappings,\
+      continuous_mappings,\
+      width = self.load_elmo(idx)
+
     # Pad/truncate the outputs to max num. of spans
     start_mappings = fix_embedding_length(start_mappings, self.max_span_num)
     end_mappings = fix_embedding_length(end_mappings, self.max_span_num)
