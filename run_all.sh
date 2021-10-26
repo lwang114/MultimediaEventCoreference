@@ -1,7 +1,9 @@
 #!/bin/bash
 
-start_stage=0
-stop_stage=100
+start_stage=4
+stop_stage=4
+
+data_dir="data/video_m2e2/mentions/"
 
 ## Weight fusion model
 if [ $start_stage -le 0 ] && [ $stop_stage -ge 0 ]; then
@@ -26,19 +28,19 @@ if [ $start_stage -le 3 ] && [ $stop_stage -ge 3 ]; then
   cd ${cwd}
 fi
 
-## Text SMT
+## V->T SMT
 if [ $start_stage -le 4 ] && [ $stop_stage -ge 4 ]; then
   cwd=$(pwd)
   cd unsupervised
-  python text_only_smt_event_coreferencer.py --config ../configs/config_amodal_smt_aligner_video_m2e2.json
+  python amodal_smt_event_coreferencer.py --config ../configs/config_image_to_text_smt_aligner_video_m2e2.json
   cd ${cwd}
 fi
 
-## V->T SMT
+## Text SMT
 if [ $start_stage -le 5 ] && [ $stop_stage -ge 5 ]; then
   cwd=$(pwd)
   cd unsupervised
-  python image_to_text_event_aligner.py --config ../configs/config_image_to_text_smt_video_m2e2.json
+  python amodal_smt_event_coreferencer.py --config ../configs/config_text_smt_aligner_video_m2e2.json
   cd ${cwd}
 fi
 

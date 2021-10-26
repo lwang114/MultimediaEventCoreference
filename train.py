@@ -11,12 +11,14 @@ import argparse
 import pyhocon 
 import random
 import numpy as np
+import shutil
 from itertools import combinations
 from transformers import AdamW, get_linear_schedule_with_warmup
 from text_models import SpanEmbedder, BiLSTM, SimplePairWiseClassifier
 from visual_models import BiLSTMVideoEncoder, CrossmediaPairWiseClassifier
 from corpus import TextVideoEventDataset
 from evaluator import Evaluation, CoNLLEvaluation
+from sklearn.metrics import average_precision_score
 from utils import make_prediction_readable, create_type_stoi, create_feature_stoi
 
 
@@ -45,15 +47,10 @@ def get_pairwise_labels(text_labels,
                         action_labels, 
                         is_training, 
                         device):
-    B = text_labels.size(0)
-    pairwise_labels = []
     first = [first_idx for first_idx in range(len(text_labels)) for second_idx in range(len(action_labels))]
     second = [second_idx for first_idx in range(len(text_labels)) for second_idx in range(len(action_labels))]
     pairwise_labels = (text_labels[first] == action_labels[second]).to(torch.long).to(device)      
-
-    if config['loss'] == 'hinge' and is_training:
-      pairwise_labels = torch.where(pairwise_labels == 1, pairwise_labels, torch.tensor(-1, device=device)) 
-
+    
     return first, second, pairwise_labels
 
 def get_pairwise_text_labels(labels, is_training, device):
@@ -175,6 +172,8 @@ def train(text_model,
   if args.evaluate_only:
     config.epochs = 0
 
+  if config.debug:
+      config.epochs = 1
   for epoch in range(args.start_epoch, config.epochs):
     text_model.train()
     mention_model.train()
@@ -207,7 +206,7 @@ def train(text_model,
       action_labels = batch['visual_labels'].to(device) 
       text_mask = batch['text_mask'].to(device)
       span_mask = batch['span_mask'].to(device)
-      action_mask = batch['action_mask'].to(device)
+      action_mask = batch['visual_mask'].to(device)
       span_num = torch.where(span_mask.sum(-1) > 0, 
                              torch.tensor(1, dtype=torch.int,
                                               device=doc_embeddings.device), 
@@ -261,7 +260,7 @@ def train(text_model,
         n_pairs = first_text_idx.shape[0]
 
         video_score = visual_coref_model(crossmedia_mention_output[idx, first_grounding_idx],
-                                         video_output[idx, second_grounding_idx]) 
+                                         video_output[idx, second_grounding_idx])
         crossmedia_score = visual_coref_model.module.crossmedia_score(
                                                        first_text_idx,
                                                        second_text_idx,
@@ -276,7 +275,9 @@ def train(text_model,
                                           argument_output_3d[second_text_idx]\
                                           .view(n_pairs*n_args[idx], -1))
         argument_score = argument_score.view(n_pairs, n_args[idx]).mean(-1, keepdim=True)
-        text_score = (text_score + crossmedia_score + argument_score) / 3.
+        text_score = config['weight_trigger'] * text_score\
+                     + config['weight_visual'] * crossmedia_score\
+                     + config['weight_argument'] * argument_score
 
         text_scores.append(text_score) 
         video_scores.append(video_score) 
@@ -293,7 +294,8 @@ def train(text_model,
 
       text_loss = criterion(text_scores, pairwise_text_labels)
       video_loss = criterion(video_scores, pairwise_grounding_labels)
-      loss = video_loss # XXX text_loss + video_loss
+      loss = (config['weight_trigger'] + config['weight_argument']) * text_loss\
+             + config['weight_visual'] * video_loss
 
       optimizer.zero_grad()
       loss.backward()
@@ -309,11 +311,11 @@ def train(text_model,
     print(info)
     logger.info(info)
 
-    torch.save(text_model.module.state_dict(), '{}/text_model-{}.pth'.format(config['model_path'], config['random_seed']))
-    torch.save(visual_model.module.state_dict(), '{}/visual_model-{}.pth'.format(config['model_path'], config['random_seed']))
-    torch.save(mention_model.module.state_dict(), '{}/mention_model-{}.pth'.format(config['model_path'], config['random_seed']))
-    torch.save(text_coref_model.module.state_dict(), '{}/text_coref_model-{}.pth'.format(config['model_path'], config['random_seed']))
-    torch.save(visual_coref_model.module.state_dict(), '{}/visual_coref_model-{}.pth'.format(config['model_path'], config['random_seed']))
+    torch.save(text_model.module.state_dict(), '{}/text_model-{}.pth'.format(config['model_path'], random_seed))
+    torch.save(visual_model.module.state_dict(), '{}/visual_model-{}.pth'.format(config['model_path'], random_seed))
+    torch.save(mention_model.module.state_dict(), '{}/mention_model-{}.pth'.format(config['model_path'], random_seed))
+    torch.save(text_coref_model.module.state_dict(), '{}/text_coref_model-{}.pth'.format(config['model_path'], random_seed))
+    torch.save(visual_coref_model.module.state_dict(), '{}/visual_coref_model-{}.pth'.format(config['model_path'], random_seed))
  
     if epoch % 1 == 0:
       res = test(text_model, 
@@ -321,23 +323,34 @@ def train(text_model,
                  visual_model, 
                  text_coref_model, 
                  visual_coref_model,
-                 test_loader, args)
-      if res['pairwise'][-1] >= best_text_f1:
-        best_text_f1 = res['pairwise'][-1]
+                 test_loader,
+                 args, random_seed=random_seed)
+      if res['pairwise'][2] >= best_text_f1:
+        best_text_f1 = res['pairwise'][2]
         results['pairwise'] = res['pairwise']
         results['muc'] = res['muc']
         results['ceafe'] = res['ceafe']
         results['bcubed'] = res['bcubed']
         results['avg'] = res['avg']
-        torch.save(text_model.module.state_dict(), '{}/best_text_model-{}.pth'.format(config['model_path'], config['random_seed']))
-        torch.save(visual_model.module.state_dict(), '{}/best_visual_model-{}.pth'.format(config['model_path'], config['random_seed']))
-        torch.save(mention_model.module.state_dict(), '{}/best_mention_model-{}.pth'.format(config['model_path'], config['random_seed']))
-        torch.save(text_coref_model.module.state_dict(), '{}/best_text_coref_model-{}.pth'.format(config['model_path'], config['random_seed']))
-        torch.save(visual_coref_model.module.state_dict(), '{}/best_visual_coref_model-{}.pth'.format(config['model_path'], config['random_seed']))
+        torch.save(text_model.module.state_dict(), '{}/best_text_model-{}.pth'.format(config['model_path'], random_seed))
+        torch.save(visual_model.module.state_dict(), '{}/best_visual_model-{}.pth'.format(config['model_path'], random_seed))
+        torch.save(mention_model.module.state_dict(), '{}/best_mention_model-{}.pth'.format(config['model_path'], random_seed))
+        torch.save(text_coref_model.module.state_dict(), '{}/best_text_coref_model-{}.pth'.format(config['model_path'], random_seed))
+        torch.save(visual_coref_model.module.state_dict(), '{}/best_visual_coref_model-{}.pth'.format(config['model_path'], random_seed))
+        shutil.copyfile(os.path.join(config['model_path'], f'prediction-{random_seed}.readable'),
+                        os.path.join(config['model_path'], f'best_prediction-{random_seed}.readable'))
+        shutil.copyfile(os.path.join(config['model_path'], f'pairwise_scores_by_type_{random_seed}.readable'),
+                        os.path.join(config['model_path'], f'best_pairwise_scores_by_type_{random_seed}.readable'))
         print('Best text coreference F1={}'.format(best_text_f1))
 
   if args.evaluate_only:
-    results = test(text_model, mention_model, visual_model, text_coref_model, visual_coref_model, test_loader, args)
+    results = test(text_model,
+                   mention_model,
+                   visual_model,
+                   text_coref_model,
+                   visual_coref_model,
+                   test_loader,
+                   args, random_seed=random_seed)
   return results
       
 def test(text_model,
@@ -346,7 +359,7 @@ def test(text_model,
          text_coref_model,
          visual_coref_model,
          test_loader, 
-         args):
+         args, random_seed=None):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     config = pyhocon.ConfigFactory.parse_file(args.config)
     documents = test_loader.dataset.documents
@@ -362,7 +375,7 @@ def test(text_model,
     visual_coref_model.eval()
 
     conll_eval = CoNLLEvaluation()
-    f_out = open(os.path.join(config['model_path'], 'prediction.readable'), 'w')
+    f_out = open(os.path.join(config['model_path'], f'prediction-{random_seed}.readable'), 'w')
     best_f1 = 0.
     pair_idxs_by_type = dict()
     start_idx = 0
@@ -392,7 +405,7 @@ def test(text_model,
           action_labels = batch['visual_labels'].to(device)
           text_mask = batch['text_mask'].to(device)
           span_mask = batch['span_mask'].to(device)
-          action_mask = batch['action_mask'].to(device)
+          action_mask = batch['visual_mask'].to(device)
           
           token_num = text_mask.sum(-1).long()
           span_num = torch.where(span_mask.sum(-1) > 0, 
@@ -465,12 +478,14 @@ def test(text_model,
                                                argument_output_3d[second_text_idx]\
                                                    .view(n_pairs*n_args[idx], -1))
             argument_scores = argument_scores.view(n_pairs, n_args[idx]).mean(-1, keepdim=True)
-            text_scores = (text_scores + crossmedia_scores + argument_scores) / 3.
+            text_scores = config['weight_trigger'] * text_scores\
+                          + config['weight_visual'] * crossmedia_scores\
+                          + config['weight_argument'] * argument_scores
             predicted_antecedents = text_coref_model.module.predict_cluster(
                                                text_scores, 
                                                first_text_idx,
                                                second_text_idx) 
-            origin_candidate_start_ends = test_loader.dataset.origin_candidate_start_ends[global_idx]
+            origin_candidate_start_ends = test_loader.dataset.candidate_start_ends[global_idx]
             predicted_antecedents = torch.LongTensor(predicted_antecedents)
             origin_candidate_start_ends = torch.LongTensor(origin_candidate_start_ends)
             
@@ -481,7 +496,7 @@ def test(text_model,
             doc_id = test_loader.dataset.doc_ids[global_idx]
             tokens = [token[2] for token in test_loader.dataset.documents[doc_id]]
             event_label_dict = test_loader.dataset.event_label_dict[doc_id]
-            arg_spans = test_loader.dataset.origin_argument_spans[global_idx] # TODO
+            arg_spans = test_loader.dataset.candidate_argument_spans[global_idx]
             arguments = {span: arg_span\
                          for span, arg_span in zip(sorted(event_label_dict), arg_spans)}
             pred_clusters_str,\
@@ -509,6 +524,9 @@ def test(text_model,
             all_grounding_labels.append(pairwise_grounding_labels.to(torch.int)) 
         all_scores = torch.cat(all_scores)
         all_labels = torch.cat(all_labels)
+        average_precision = average_precision_score(all_labels.cpu().detach().numpy(),
+                                                    torch.sigmoid(all_scores).cpu().detach().numpy())
+
         all_grounding_scores = torch.cat(all_grounding_scores)
         all_grounding_labels = torch.cat(all_grounding_labels)
 
@@ -518,21 +536,23 @@ def test(text_model,
         print('Number of predictions: {}/{}'.format(strict_preds.sum(), len(strict_preds)))
         print('Number of positive pairs: {}/{}'.format(len((all_labels == 1).nonzero()),
                                                        len(all_labels)))
-        print('Pairwise - Recall: {}, Precision: {}, F1: {}'.format(eval.get_recall(),
-                                                                    eval.get_precision(), 
-                                                                    eval.get_f1()))
-
+        info = 'Pairwise - Recall: {}, Precision: {}, F1: {}, mAP: {}'.format(eval.get_recall(),
+                                                                              eval.get_precision(), 
+                                                                              eval.get_f1(),
+                                                                              average_precision)
+        print(info)
+        logging.info(info)
+        
         pairwise_by_type = []
         for event_type in pair_idxs_by_type:
-            pred_labels_by_type = strict_preds[pair_idxs_by_type[event_type]]                                
-            gold_labels_by_type = all_labels[pair_idxs_by_type[event_type]]                                
+            pred_labels_by_type = strict_preds[pair_idxs_by_type[event_type]]
+            gold_labels_by_type = all_labels[pair_idxs_by_type[event_type]].to(device)                              
             pairwise_eval_by_type = Evaluation(pred_labels_by_type, gold_labels_by_type)                    
-            pairwise_by_type.append([pairwise_eval_by_type.get_precision().numpy().tolist(),                
-                                     pairwise_eval_by_type.get_recall().numpy().tolist(),
-                                     pairwise_eval_by_type.get_f1().numpy().tolist(),
+            pairwise_by_type.append([pairwise_eval_by_type.get_precision().cpu().numpy().tolist(),
+                                     pairwise_eval_by_type.get_recall().cpu().numpy().tolist(),
+                                     pairwise_eval_by_type.get_f1().cpu().numpy().tolist(),
                                      event_type,
-                                     len(pred_labels_by_type)])                                             
-            logging.info(f'Pairwise for {event_type} - Precision: {pairwise_by_type[-1][0]}, Recall: {pairwise_by_type[-1][1]}, F1: {pairwise_by_type[-1][2]}')
+                                     len(pred_labels_by_type)])
         pairwise_by_type = sorted(pairwise_by_type, key=lambda x:x[-1], reverse=True)
         json.dump(pairwise_by_type, open(os.path.join(config['model_path'], f'pairwise_scores_by_type_{seed}.json'), 'w'), indent=2) 
 
@@ -547,16 +567,18 @@ def test(text_model,
                                                                     grounding_eval.get_f1()))
 
         muc, b_cubed, ceafe, avg = conll_eval.get_metrics()
-        results['pairwise'] = (eval.get_precision().item(), eval.get_recall().item(), eval.get_f1().item())
+        results['pairwise'] = (eval.get_precision().item(), eval.get_recall().item(), eval.get_f1().item(), average_precision)
         results['muc'] = muc
         results['bcubed'] = b_cubed
         results['ceafe'] = ceafe
         results['avg'] = avg
         conll_metrics = muc+b_cubed+ceafe+avg
-        print('MUC - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
-              'Bcubed - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
-              'CEAFe - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '
-              'CoNLL - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*conll_metrics)) 
+        info = 'MUC - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '\
+               'Bcubed - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '\
+               'CEAFe - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}, '\
+               'CoNLL - Precision: {:.4f}, Recall: {:.4f}, F1: {:.4f}'.format(*conll_metrics)
+        print(info)
+        logging.info(info)
         return results
 
 
@@ -583,8 +605,10 @@ if __name__ == '__main__':
                       format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO) 
 
   # Initialize dataloaders
-  splits = [os.path.join(config['data_folder'], 'train_events.json'),\
-            os.path.join(config['data_folder'], 'test_events.json')]
+  splits = [os.path.join(config['data_folder'], 'train_events.json'),
+            os.path.join(config['data_folder'], 'test_events.json'),
+            os.path.join(config['data_folder'], 'train_entities.json'),
+            os.path.join(config['data_folder'], 'test_entities.json')]
   
   event_stoi = create_type_stoi(splits) 
   feature_stoi = create_feature_stoi(splits, feature_types=config['linguistic_feature_types'])
@@ -636,19 +660,19 @@ if __name__ == '__main__':
       visual_coref_model = CrossmediaPairWiseClassifier(config).to(device)
       
       if config['training_method'] in ('pipeline', 'continue'):
-          text_model.load_state_dict(torch.load(config['text_model_path'], map_location=device))
+          text_model.load_state_dict(torch.load(os.path.join(config['model_path'], f'best_text_model-{seed}.pth'), map_location=device))
           for p in text_model.parameters():
               p.requires_grad = False
           
-          mention_model.load_state_dict(torch.load(config['mention_model_path']))
+          mention_model.load_state_dict(torch.load(os.path.join(config['model_path'], f'best_mention_model-{seed}.pth')))
           for p in mention_model.parameters():
               p.requires_grad = False
           
-          text_coref_model.load_state_dict(torch.load(config['text_coref_model_path'], map_location=device))
+          text_coref_model.load_state_dict(torch.load(os.path.join(config['model_path'], f'best_text_coref_model-{seed}.pth'), map_location=device))
           for p in text_coref_model.parameters():
               p.requires_grad = False
           
-          visual_coref_model.load_state_dict(torch.load(config['visual_coref_model_path'], map_location=device))
+          visual_coref_model.load_state_dict(torch.load(os.path.join(config['model_path'], f'best_visual_coref_model-{seed}.pth'), map_location=device))
           for p in visual_coref_model.parameters():
               p.requires_grad = True
 
@@ -688,7 +712,8 @@ if __name__ == '__main__':
   mean_avg, std_avg = np.mean(np.asarray(avgs), axis=0), np.std(np.asarray(avgs), axis=0)
   print(f'Pairwise: precision {mean_pairwise[0]} +/- {std_pairwise[0]}, '
         f'recall {mean_pairwise[1]} +/- {std_pairwise[1]}, '
-        f'f1 {mean_pairwise[2]} +/- {std_pairwise[2]}')
+        f'f1 {mean_pairwise[2]} +/- {std_pairwise[2]}, '
+        f'mAP {mean_pairwise[3]} +/- {std_pairwise[3]}')
   print(f'MUC: precision {mean_muc[0]} +/- {std_muc[0]}, '
         f'recall {mean_muc[1]} +/- {std_muc[1]}, '
         f'f1 {mean_muc[2]} +/- {std_muc[2]}')
@@ -701,9 +726,9 @@ if __name__ == '__main__':
   print(f'CoNLL: precision {mean_avg[0]} +/- {std_avg[0]}, '
         f'recall {mean_avg[1]} +/- {std_avg[1]}, '
         f'f1 {mean_avg[2]} +/- {std_avg[2]}')
-
+  
   pairwise_dict = dict() 
-  for seed in config.seeds:
+  for seed in seeds:
     pairwise_by_type = json.load(open(os.path.join(config['model_path'], f'pairwise_scores_by_type_{seed}.json')))
     for res in pairwise_by_type:
       p, r, f1, event_type, count = res
